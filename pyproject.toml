@@ -1,0 +1,21 @@
+[project]
+name = "pycodegraph"
+version = "0.1.0"
+description = "Semantic code knowledge graph builder using tree-sitter and SQLite"
+requires-python = ">=3.10"
+dependencies = [
+    "tree-sitter>=0.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pycodegraph"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
