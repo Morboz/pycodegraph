@@ -5,8 +5,15 @@ Install dependencies:
                 tree-sitter-javascript tree-sitter-go tree-sitter-rust \
                 tree-sitter-java tree-sitter-c tree-sitter-cpp
 
+    # For PostgreSQL (psycopg3):
+    pip install "psycopg[binary]>=3.0"
+
 Usage:
+    # SQLite (default)
     python -m pycodegraph.example /path/to/project
+
+    # PostgreSQL
+    python -m pycodegraph.example /path/to/project --db postgresql+psycopg://user:pass@localhost:5432/mydb
 """
 
 from __future__ import annotations
@@ -16,14 +23,25 @@ from pycodegraph import CodeGraph
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python -m pycodegraph.example <project_path>")
+    args = sys.argv[1:]
+    if not args:
+        print("Usage: python -m pycodegraph.example <project_path> [--db <db_url>]")
         sys.exit(1)
 
-    project_path = sys.argv[1]
+    project_path = args[0]
+
+    db_url = None
+    if "--db" in args:
+        idx = args.index("--db")
+        if idx + 1 >= len(args):
+            print("Error: --db requires a value")
+            sys.exit(1)
+        db_url = args[idx + 1]
+
+    config_overrides = {"db_url": db_url} if db_url else None
 
     # Initialize
-    cg = CodeGraph.init(project_path)
+    cg = CodeGraph.init(project_path, config_overrides=config_overrides)
 
     # Index all files
     def on_progress(phase, current, total, current_file=""):

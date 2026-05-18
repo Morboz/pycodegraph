@@ -109,10 +109,16 @@ class DatabaseConnection:
 
         with engine.begin() as conn:
             metadata.create_all(conn)
-            conn.execute(
-                schema_versions.insert(),
-                {"version": 1, "applied_at": _now_ms(), "description": "Initial schema"},
-            )
+            if engine.dialect.name == "sqlite":
+                conn.execute(text(
+                    "INSERT OR IGNORE INTO schema_versions (version, applied_at, description)"
+                    " VALUES (1, :ts, 'Initial schema')"
+                ), {"ts": _now_ms()})
+            else:
+                conn.execute(text(
+                    "INSERT INTO schema_versions (version, applied_at, description)"
+                    " VALUES (1, :ts, 'Initial schema') ON CONFLICT DO NOTHING"
+                ), {"ts": _now_ms()})
 
         if engine.dialect.name == "sqlite":
             _init_sqlite_fts(engine)

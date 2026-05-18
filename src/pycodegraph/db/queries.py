@@ -8,6 +8,7 @@ from typing import Optional
 
 from sqlalchemy import Connection, select, insert, delete, text, func, case
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..types import (
     Node, Edge, UnresolvedReference, FileRecord, Language,
@@ -108,7 +109,7 @@ class QueryBuilder:
                 index_elements=["id"],
             )
         else:
-            stmt = insert(nodes).on_conflict_do_nothing(
+            stmt = pg_insert(nodes).on_conflict_do_nothing(
                 index_elements=["id"],
             )
         self._conn.execute(stmt, rows)
@@ -199,7 +200,7 @@ class QueryBuilder:
                 set_=row,
             )
         else:
-            stmt = insert(files).values(**row).on_conflict_do_update(
+            stmt = pg_insert(files).values(**row).on_conflict_do_update(
                 index_elements=["path"],
                 set_=row,
             )

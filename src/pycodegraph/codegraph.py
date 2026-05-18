@@ -58,7 +58,12 @@ class CodeGraph:
         root = str(Path(project_root).resolve())
         codegraph_dir = Path(root) / CODEGRAPH_DIR
 
-        if codegraph_dir.exists() and (codegraph_dir / "codegraph.db").exists():
+        # For SQLite: check db file; for PG/other: skip (schema is idempotent)
+        using_external_db = bool(
+            config_overrides and config_overrides.get("db_url")
+            and not config_overrides["db_url"].startswith("sqlite")
+        )
+        if not using_external_db and codegraph_dir.exists() and (codegraph_dir / "codegraph.db").exists():
             raise FileExistsError(f"CodeGraph already initialized in {root}")
 
         # Create directory
@@ -140,7 +145,8 @@ class CodeGraph:
         return self._queries.get_node_by_id(node_id)
 
     def search(self, query: str, limit: int = 20) -> list[Node]:
-        return self._queries.search_nodes(query, limit)
+        from .types import SearchOptions
+        return [r.node for r in self._queries.search_nodes(query, SearchOptions(limit=limit))]
 
     def get_callers(self, node_id: str) -> list[Edge]:
         return self._queries.get_callers(node_id)
