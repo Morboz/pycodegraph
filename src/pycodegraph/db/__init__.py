@@ -1,165 +1,143 @@
-"""Database connection and initialization."""
+"""Database connection and initialization using SQLAlchemy Core."""
 
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
-from typing import Optional
+from sqlalchemy import create_engine, event, text, Engine
+from sqlalchemy import Connection as SAConnection
 
-SCHEMA_SQL = """\
--- CodeGraph SQLite Schema
+from .tables import metadata, schema_versions
 
-CREATE TABLE IF NOT EXISTS schema_versions (
-    version INTEGER PRIMARY KEY,
-    applied_at INTEGER NOT NULL,
-    description TEXT
-);
 
-INSERT INTO schema_versions (version, applied_at, description)
-VALUES (1, strftime('%s', 'now') * 1000, 'Initial schema');
+def _apply_sqlite_pragmas(dbapi_connection, connection_record):
+    """Apply SQLite performance PRAGMAs on each new connection."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys = ON")
+    cursor.execute("PRAGMA journal_mode = WAL")
+    cursor.execute("PRAGMA busy_timeout = 120000")
+    cursor.execute("PRAGMA synchronous = NORMAL")
+    cursor.execute("PRAGMA cache_size = -64000")
+    cursor.execute("PRAGMA temp_store = MEMORY")
+    cursor.close()
 
-CREATE TABLE IF NOT EXISTS nodes (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    name TEXT NOT NULL,
-    qualified_name TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    language TEXT NOT NULL,
-    start_line INTEGER NOT NULL,
-    end_line INTEGER NOT NULL,
-    start_column INTEGER NOT NULL,
-    end_column INTEGER NOT NULL,
-    docstring TEXT,
-    signature TEXT,
-    visibility TEXT,
-    is_exported INTEGER DEFAULT 0,
-    is_async INTEGER DEFAULT 0,
-    is_static INTEGER DEFAULT 0,
-    is_abstract INTEGER DEFAULT 0,
-    decorators TEXT,
-    type_parameters TEXT,
-    updated_at INTEGER NOT NULL
-);
 
-CREATE TABLE IF NOT EXISTS edges (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source TEXT NOT NULL,
-    target TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    metadata TEXT,
-    line INTEGER,
-    col INTEGER,
-    provenance TEXT DEFAULT NULL,
-    FOREIGN KEY (source) REFERENCES nodes(id) ON DELETE CASCADE,
-    FOREIGN KEY (target) REFERENCES nodes(id) ON DELETE CASCADE
-);
+def _init_sqlite_fts(engine: Engine) -> None:
+    """Create FTS5 virtual table and sync triggers for SQLite."""
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5("
+            "id, name, qualified_name, docstring, signature,"
+            "content='nodes', content_rowid='rowid')"
+        ))
+        conn.execute(text(
+            "CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN"
+            "  INSERT INTO nodes_fts(rowid, id, name, qualified_name, docstring, signature)"
+            "  VALUES (NEW.rowid, NEW.id, NEW.name, NEW.qualified_name, NEW.docstring, NEW.signature);"
+            "END"
+        ))
+        conn.execute(text(
+            "CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN"
+            "  INSERT INTO nodes_fts(nodes_fts, rowid, id, name, qualified_name, docstring, signature)"
+            "  VALUES ('delete', OLD.rowid, OLD.id, OLD.name, OLD.qualified_name, OLD.docstring, OLD.signature);"
+            "END"
+        ))
+        conn.execute(text(
+            "CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN"
+            "  INSERT INTO nodes_fts(nodes_fts, rowid, id, name, qualified_name, docstring, signature)"
+            "  VALUES ('delete', OLD.rowid, OLD.id, OLD.name, OLD.qualified_name, OLD.docstring, OLD.signature);"
+            "  INSERT INTO nodes_fts(rowid, id, name, qualified_name, docstring, signature)"
+            "  VALUES (NEW.rowid, NEW.id, NEW.name, NEW.qualified_name, NEW.docstring, NEW.signature);"
+            "END"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_lower_name ON nodes(lower(name))"
+        ))
 
-CREATE TABLE IF NOT EXISTS files (
-    path TEXT PRIMARY KEY,
-    content_hash TEXT NOT NULL,
-    language TEXT NOT NULL,
-    size INTEGER NOT NULL,
-    modified_at REAL NOT NULL,
-    indexed_at INTEGER NOT NULL,
-    node_count INTEGER DEFAULT 0,
-    errors TEXT
-);
 
-CREATE TABLE IF NOT EXISTS unresolved_refs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    from_node_id TEXT NOT NULL,
-    reference_name TEXT NOT NULL,
-    reference_kind TEXT NOT NULL,
-    line INTEGER NOT NULL,
-    col INTEGER NOT NULL,
-    candidates TEXT,
-    file_path TEXT NOT NULL DEFAULT '',
-    language TEXT NOT NULL DEFAULT 'unknown',
-    FOREIGN KEY (from_node_id) REFERENCES nodes(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS project_metadata (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);
-CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
-CREATE INDEX IF NOT EXISTS idx_nodes_qualified_name ON nodes(qualified_name);
-CREATE INDEX IF NOT EXISTS idx_nodes_file_path ON nodes(file_path);
-CREATE INDEX IF NOT EXISTS idx_nodes_language ON nodes(language);
-CREATE INDEX IF NOT EXISTS idx_nodes_file_line ON nodes(file_path, start_line);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
-    id,
-    name,
-    qualified_name,
-    docstring,
-    signature,
-    content='nodes',
-    content_rowid='rowid'
-);
-
-CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
-    INSERT INTO nodes_fts(rowid, id, name, qualified_name, docstring, signature)
-    VALUES (NEW.rowid, NEW.id, NEW.name, NEW.qualified_name, NEW.docstring, NEW.signature);
-END;
-
-CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN
-    INSERT INTO nodes_fts(nodes_fts, rowid, id, name, qualified_name, docstring, signature)
-    VALUES ('delete', OLD.rowid, OLD.id, OLD.name, OLD.qualified_name, OLD.docstring, OLD.signature);
-END;
-
-CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
-    INSERT INTO nodes_fts(nodes_fts, rowid, id, name, qualified_name, docstring, signature)
-    VALUES ('delete', OLD.rowid, OLD.id, OLD.name, OLD.qualified_name, OLD.docstring, OLD.signature);
-    INSERT INTO nodes_fts(rowid, id, name, qualified_name, docstring, signature)
-    VALUES (NEW.rowid, NEW.id, NEW.name, NEW.qualified_name, NEW.docstring, NEW.signature);
-END;
-
-CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
-CREATE INDEX IF NOT EXISTS idx_edges_source_kind ON edges(source, kind);
-CREATE INDEX IF NOT EXISTS idx_edges_target_kind ON edges(target, kind);
-
-CREATE INDEX IF NOT EXISTS idx_nodes_lower_name ON nodes(lower(name));
-
-CREATE INDEX IF NOT EXISTS idx_unresolved_from_node ON unresolved_refs(from_node_id);
-CREATE INDEX IF NOT EXISTS idx_unresolved_name ON unresolved_refs(reference_name);
-CREATE INDEX IF NOT EXISTS idx_unresolved_file_path ON unresolved_refs(file_path);
-"""
+def _init_postgresql_fts(engine: Engine) -> None:
+    """Create tsvector column, GIN index, and auto-update trigger for PostgreSQL."""
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE EXTENSION IF NOT EXISTS pg_trgm"
+        ))
+        conn.execute(text(
+            "ALTER TABLE nodes ADD COLUMN IF NOT EXISTS fts tsvector"
+            " GENERATED ALWAYS AS ("
+            "  setweight(to_tsvector('simple', coalesce(name, '')), 'A') ||"
+            "  setweight(to_tsvector('simple', coalesce(qualified_name, '')), 'B') ||"
+            "  setweight(to_tsvector('simple', coalesce(docstring, '')), 'C') ||"
+            "  setweight(to_tsvector('simple', coalesce(signature, '')), 'D')"
+            " ) STORED"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_fts ON nodes USING GIN (fts)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_lower_name ON nodes (lower(name))"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_name_trgm ON nodes USING GIN (name gin_trgm_ops)"
+        ))
 
 
 class DatabaseConnection:
-    def __init__(self, db: sqlite3.Connection):
-        self._db = db
+    """Wraps a SQLAlchemy Engine with dialect-specific initialization."""
+
+    def __init__(self, engine: Engine, connection: SAConnection | None = None) -> None:
+        self._engine = engine
+        self._connection = connection
 
     @property
-    def db(self) -> sqlite3.Connection:
-        return self._db
+    def engine(self) -> Engine:
+        return self._engine
+
+    @property
+    def dialect_name(self) -> str:
+        return self._engine.dialect.name
+
+    def get_connection(self) -> SAConnection:
+        if self._connection is None:
+            self._connection = self._engine.connect()
+        return self._connection
 
     @classmethod
-    def initialize(cls, db_path: str | Path) -> DatabaseConnection:
-        path = Path(db_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        db = sqlite3.connect(str(path))
-        db.execute("PRAGMA foreign_keys = ON")
-        db.execute("PRAGMA journal_mode = WAL")
-        db.execute("PRAGMA busy_timeout = 120000")
-        db.execute("PRAGMA synchronous = NORMAL")
-        db.execute("PRAGMA cache_size = -64000")
-        db.execute("PRAGMA temp_store = MEMORY")
-        db.executescript(SCHEMA_SQL)
-        db.commit()
-        return cls(db)
+    def initialize(cls, db_url: str) -> DatabaseConnection:
+        """Create a new database with full schema."""
+        engine = create_engine(db_url)
+
+        if engine.dialect.name == "sqlite":
+            event.listen(engine, "connect", _apply_sqlite_pragmas)
+
+        with engine.begin() as conn:
+            metadata.create_all(conn)
+            conn.execute(
+                schema_versions.insert(),
+                {"version": 1, "applied_at": _now_ms(), "description": "Initial schema"},
+            )
+
+        if engine.dialect.name == "sqlite":
+            _init_sqlite_fts(engine)
+        elif engine.dialect.name == "postgresql":
+            _init_postgresql_fts(engine)
+
+        return cls(engine)
 
     @classmethod
-    def open(cls, db_path: str | Path) -> DatabaseConnection:
-        db = sqlite3.connect(str(db_path))
-        db.execute("PRAGMA foreign_keys = ON")
-        db.execute("PRAGMA journal_mode = WAL")
-        db.execute("PRAGMA busy_timeout = 120000")
-        return cls(db)
+    def open(cls, db_url: str) -> DatabaseConnection:
+        """Open an existing database."""
+        engine = create_engine(db_url)
+
+        if engine.dialect.name == "sqlite":
+            event.listen(engine, "connect", _apply_sqlite_pragmas)
+
+        return cls(engine)
 
     def close(self) -> None:
-        self._db.close()
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+        self._engine.dispose()
+
+
+def _now_ms() -> int:
+    import time
+    return int(time.time() * 1000)

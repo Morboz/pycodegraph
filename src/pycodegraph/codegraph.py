@@ -11,7 +11,7 @@ from .types import (
 )
 from .config import CodeGraphConfig
 from .config import (
-    CODEGRAPH_DIR, get_db_path, get_config_path,
+    CODEGRAPH_DIR, get_db_path, get_config_path, get_db_url,
     save_config, load_config, create_default_config,
 )
 from .db import DatabaseConnection
@@ -32,6 +32,7 @@ class CodeGraph:
         project_root: str,
     ):
         self._db = db
+        self._conn = db.get_connection()
         self._queries = queries
         self._config = config
         self._project_root = project_root
@@ -74,9 +75,9 @@ class CodeGraph:
         save_config(root, config)
 
         # Initialize database
-        db_path = get_db_path(root)
-        db = DatabaseConnection.initialize(str(db_path))
-        queries = QueryBuilder(db.db)
+        db_url = get_db_url(root, config)
+        db = DatabaseConnection.initialize(db_url)
+        queries = QueryBuilder(db.get_connection())
 
         return cls(db, queries, config, root)
 
@@ -84,14 +85,17 @@ class CodeGraph:
     def open(cls, project_root: str) -> CodeGraph:
         """Open an existing CodeGraph project."""
         root = str(Path(project_root).resolve())
-        db_path = get_db_path(root)
-
-        if not db_path.exists():
-            raise FileNotFoundError(f"CodeGraph not initialized in {root}. Run init() first.")
 
         config = load_config(root)
-        db = DatabaseConnection.open(str(db_path))
-        queries = QueryBuilder(db.db)
+        db_url = get_db_url(root, config)
+
+        if db_url.startswith("sqlite:///"):
+            db_path = Path(db_url[len("sqlite:///"):])
+            if not db_path.exists():
+                raise FileNotFoundError(f"CodeGraph not initialized in {root}. Run init() first.")
+
+        db = DatabaseConnection.open(db_url)
+        queries = QueryBuilder(db.get_connection())
 
         return cls(db, queries, config, root)
 

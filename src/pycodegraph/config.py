@@ -17,6 +17,7 @@ CODEGRAPH_DIR = ".codegraph"
 class CodeGraphConfig:
     version: int = 1
     root_dir: str = "."
+    db_url: Optional[str] = None
     include: list[str] = field(default_factory=lambda: [
         "**/*.py",
         "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx",
@@ -49,6 +50,17 @@ def get_config_path(project_root: str | Path) -> Path:
 
 def get_db_path(project_root: str | Path) -> Path:
     return Path(project_root) / CODEGRAPH_DIR / "codegraph.db"
+
+
+def get_db_url(project_root: str | Path, config: Optional[CodeGraphConfig] = None) -> str:
+    """Return a SQLAlchemy database URL.
+
+    Uses config.db_url if set, otherwise falls back to local SQLite.
+    """
+    if config and config.db_url:
+        return config.db_url
+    db_path = get_db_path(project_root)
+    return f"sqlite:///{db_path}"
 
 
 def save_config(project_root: str | Path, config: CodeGraphConfig) -> None:
