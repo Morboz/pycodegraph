@@ -104,7 +104,17 @@ class CodeGraph:
         Args:
             on_progress: Optional callback(phase, current, total, current_file) for progress.
         """
-        return self._orchestrator.index_all(on_progress)
+        result = self._orchestrator.index_all(on_progress)
+
+        if result.success:
+            from .resolution import create_resolver
+            resolver = create_resolver(self._project_root, self._queries)
+            resolution_result = resolver.resolve_and_persist(on_progress)
+            result.edges_created += resolution_result.stats.get("resolved", 0)
+            result.refs_resolved = resolution_result.stats.get("resolved", 0)
+            result.refs_unresolved = resolution_result.stats.get("unresolved", 0)
+
+        return result
 
     def index_file(self, file_path: str) -> None:
         """Index a single file (relative path)."""

@@ -184,6 +184,77 @@ class QueryBuilder:
         )
         self._db.commit()
 
+    def get_nodes_by_qualified_name(self, qualified_name: str) -> list[Node]:
+        cur = self._db.execute(
+            "SELECT id, kind, name, qualified_name, file_path, language, "
+            "start_line, end_line, start_column, end_column, "
+            "docstring, signature, visibility, is_exported, is_async, "
+            "is_static, is_abstract, decorators, type_parameters, updated_at "
+            "FROM nodes WHERE qualified_name = ?",
+            (qualified_name,),
+        )
+        return [self._row_to_node(r) for r in cur.fetchall()]
+
+    def get_nodes_by_lower_name(self, lower_name: str) -> list[Node]:
+        cur = self._db.execute(
+            "SELECT id, kind, name, qualified_name, file_path, language, "
+            "start_line, end_line, start_column, end_column, "
+            "docstring, signature, visibility, is_exported, is_async, "
+            "is_static, is_abstract, decorators, type_parameters, updated_at "
+            "FROM nodes WHERE lower(name) = ?",
+            (lower_name,),
+        )
+        return [self._row_to_node(r) for r in cur.fetchall()]
+
+    def get_nodes_by_file(self, file_path: str) -> list[Node]:
+        cur = self._db.execute(
+            "SELECT id, kind, name, qualified_name, file_path, language, "
+            "start_line, end_line, start_column, end_column, "
+            "docstring, signature, visibility, is_exported, is_async, "
+            "is_static, is_abstract, decorators, type_parameters, updated_at "
+            "FROM nodes WHERE file_path = ? ORDER BY start_line",
+            (file_path,),
+        )
+        return [self._row_to_node(r) for r in cur.fetchall()]
+
+    def get_nodes_by_kind(self, kind) -> list[Node]:
+        kind_val = kind.value if hasattr(kind, "value") else str(kind)
+        cur = self._db.execute(
+            "SELECT id, kind, name, qualified_name, file_path, language, "
+            "start_line, end_line, start_column, end_column, "
+            "docstring, signature, visibility, is_exported, is_async, "
+            "is_static, is_abstract, decorators, type_parameters, updated_at "
+            "FROM nodes WHERE kind = ?",
+            (kind_val,),
+        )
+        return [self._row_to_node(r) for r in cur.fetchall()]
+
+    def get_all_file_paths(self) -> list[str]:
+        cur = self._db.execute("SELECT path FROM files ORDER BY path")
+        return [r[0] for r in cur.fetchall()]
+
+    def get_all_node_names(self) -> list[str]:
+        cur = self._db.execute("SELECT DISTINCT name FROM nodes")
+        return [r[0] for r in cur.fetchall()]
+
+    def get_unresolved_refs_batch(self, offset: int = 0, limit: int = 5000) -> list[UnresolvedReference]:
+        cur = self._db.execute(
+            "SELECT from_node_id, reference_name, reference_kind, line, col, "
+            "candidates, file_path, language "
+            "FROM unresolved_refs LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        return [self._row_to_ref(r) for r in cur.fetchall()]
+
+    def delete_specific_resolved_refs(self, refs: list[dict]) -> None:
+        for ref in refs:
+            self._db.execute(
+                "DELETE FROM unresolved_refs "
+                "WHERE from_node_id = ? AND reference_name = ? AND reference_kind = ?",
+                (ref["from_node_id"], ref["reference_name"], ref["reference_kind"]),
+            )
+        self._db.commit()
+
     def get_stats(self) -> dict:
         node_count = self._db.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
         edge_count = self._db.execute("SELECT COUNT(*) FROM edges").fetchone()[0]

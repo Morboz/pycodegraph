@@ -122,6 +122,8 @@ CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 CREATE INDEX IF NOT EXISTS idx_edges_source_kind ON edges(source, kind);
 CREATE INDEX IF NOT EXISTS idx_edges_target_kind ON edges(target, kind);
 
+CREATE INDEX IF NOT EXISTS idx_nodes_lower_name ON nodes(lower(name));
+
 CREATE INDEX IF NOT EXISTS idx_unresolved_from_node ON unresolved_refs(from_node_id);
 CREATE INDEX IF NOT EXISTS idx_unresolved_name ON unresolved_refs(reference_name);
 CREATE INDEX IF NOT EXISTS idx_unresolved_file_path ON unresolved_refs(file_path);

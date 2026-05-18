@@ -312,7 +312,7 @@ class ExtractionOrchestrator:
                     line=r.line,
                     column=r.column,
                     file_path=r.file_path or file_path,
-                    language=r.language or language.value if isinstance(language, Language) else str(language),
+                    language=r.language if r.language and r.language != "unknown" else (language.value if isinstance(language, Language) else str(language)),
                 )
                 for r in result.unresolved_references
                 if r.from_node_id in inserted_ids

@@ -161,5 +161,7 @@ class IndexResult:
     files_errored: int = 0
     nodes_created: int = 0
     edges_created: int = 0
+    refs_resolved: int = 0
+    refs_unresolved: int = 0
     errors: list[ExtractionError] = field(default_factory=list)
     duration_ms: int = 0
