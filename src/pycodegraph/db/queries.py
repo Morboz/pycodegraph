@@ -250,8 +250,9 @@ class QueryBuilder:
         for ref in refs:
             self._db.execute(
                 "DELETE FROM unresolved_refs "
-                "WHERE from_node_id = ? AND reference_name = ? AND reference_kind = ?",
-                (ref["from_node_id"], ref["reference_name"], ref["reference_kind"]),
+                "WHERE from_node_id = ? AND reference_name = ? AND reference_kind = ? "
+                "AND line = ?",
+                (ref["from_node_id"], ref["reference_name"], ref["reference_kind"], ref["line"]),
             )
         self._db.commit()
 

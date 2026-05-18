@@ -232,10 +232,11 @@ class ReferenceResolver:
 
         total_result = ResolutionResult()
         batch_size = 5000
-        offset = 0
 
         while True:
-            refs = self._queries.get_unresolved_refs_batch(offset=offset, limit=batch_size)
+            # Always read from offset 0 — resolved and unresolvable refs
+            # are deleted after each batch, shifting remaining rows forward.
+            refs = self._queries.get_unresolved_refs_batch(offset=0, limit=batch_size)
             if not refs:
                 break
 
@@ -254,15 +255,32 @@ class ReferenceResolver:
                         "from_node_id": r.original.from_node_id,
                         "reference_name": r.original.reference_name,
                         "reference_kind": r.original.reference_kind.value,
+                        "line": r.original.line,
                     }
                     for r in batch_result.resolved
                 ]
                 self._queries.delete_specific_resolved_refs(resolved_dicts)
 
-            offset += batch_size
+            # Delete unresolvable refs (builtins, external, genuinely
+            # unresolvable) so they don't re-appear in the next batch.
+            if batch_result.unresolved:
+                unresolved_dicts = [
+                    {
+                        "from_node_id": r.from_node_id,
+                        "reference_name": r.reference_name,
+                        "reference_kind": r.reference_kind.value,
+                        "line": r.line,
+                    }
+                    for r in batch_result.unresolved
+                ]
+                self._queries.delete_specific_resolved_refs(unresolved_dicts)
 
             # Clear per-batch caches to bound memory
             self._context.clear_caches()
+
+            # If nothing was resolved or removed, avoid infinite loop
+            if not batch_result.resolved and len(batch_result.unresolved) == len(refs):
+                break
 
         total_result.stats = {
             "total": len(total_result.resolved) + len(total_result.unresolved),
