@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Callable
 
-from .types import IndexResult, Node, Edge
+from .types import (
+    IndexResult, Node, Edge, Context, Subgraph, TaskContext,
+    BuildContextOptions, FindRelevantContextOptions,
+)
 from .config import CodeGraphConfig
 from .config import (
     CODEGRAPH_DIR, get_db_path, get_config_path,
@@ -14,6 +17,8 @@ from .config import (
 from .db import DatabaseConnection
 from .db.queries import QueryBuilder
 from .extraction.orchestrator import ExtractionOrchestrator
+from .graph import GraphTraverser, GraphQueryManager
+from .context.builder import ContextBuilder
 
 
 class CodeGraph:
@@ -31,6 +36,9 @@ class CodeGraph:
         self._config = config
         self._project_root = project_root
         self._orchestrator = ExtractionOrchestrator(project_root, config, queries)
+        self._traverser = GraphTraverser(queries)
+        self._graph_manager = GraphQueryManager(queries)
+        self._context_builder = ContextBuilder(project_root, queries, self._traverser)
 
     # =========================================================================
     # Lifecycle
@@ -138,6 +146,54 @@ class CodeGraph:
 
     def get_stats(self) -> dict:
         return self._queries.get_stats()
+
+    # --- Graph queries ---
+
+    def get_context(self, node_id: str) -> Context:
+        """Get full context for a node (ancestors, children, refs, types, imports)."""
+        return self._graph_manager.get_context(node_id)
+
+    def get_callers_deep(self, node_id: str, max_depth: int = 1) -> list[tuple[Node, Edge]]:
+        """Find all callers of a function/method up to *max_depth* hops."""
+        return self._traverser.get_callers(node_id, max_depth)
+
+    def get_callees_deep(self, node_id: str, max_depth: int = 1) -> list[tuple[Node, Edge]]:
+        """Find all functions/methods called by a function up to *max_depth* hops."""
+        return self._traverser.get_callees(node_id, max_depth)
+
+    def get_call_graph(self, node_id: str, depth: int = 2) -> Subgraph:
+        """Get the call graph (callers + callees) for a function."""
+        return self._traverser.get_call_graph(node_id, depth)
+
+    def get_type_hierarchy(self, node_id: str) -> Subgraph:
+        """Get the type hierarchy (extends/implements) for a class/interface."""
+        return self._traverser.get_type_hierarchy(node_id)
+
+    def find_usages(self, node_id: str) -> list[tuple[Node, Edge]]:
+        """Find all usages of a symbol."""
+        return self._traverser.find_usages(node_id)
+
+    def get_impact_radius(self, node_id: str, max_depth: int = 3) -> Subgraph:
+        """Calculate the impact radius of changing a node."""
+        return self._traverser.get_impact_radius(node_id, max_depth)
+
+    def get_file_dependencies(self, file_path: str) -> list[str]:
+        """Get all files that this file imports from."""
+        return self._graph_manager.get_file_dependencies(file_path)
+
+    def get_file_dependents(self, file_path: str) -> list[str]:
+        """Get all files that import from this file."""
+        return self._graph_manager.get_file_dependents(file_path)
+
+    # --- Context building ---
+
+    def build_context(
+        self,
+        task_input,
+        options: Optional[BuildContextOptions] = None,
+    ):
+        """Build rich context for a task using hybrid search + graph traversal."""
+        return self._context_builder.build_context(task_input, options)
 
     # =========================================================================
     # Properties

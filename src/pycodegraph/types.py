@@ -165,3 +165,105 @@ class IndexResult:
     refs_unresolved: int = 0
     errors: list[ExtractionError] = field(default_factory=list)
     duration_ms: int = 0
+
+
+# =============================================================================
+# Query Types
+# =============================================================================
+
+@dataclass
+class Subgraph:
+    nodes: dict[str, Node] = field(default_factory=dict)
+    edges: list[Edge] = field(default_factory=list)
+    roots: list[str] = field(default_factory=list)
+
+
+@dataclass
+class TraversalOptions:
+    max_depth: float = float('inf')
+    edge_kinds: list[EdgeKind] = field(default_factory=list)
+    node_kinds: list[NodeKind] = field(default_factory=list)
+    direction: str = 'outgoing'  # 'outgoing' | 'incoming' | 'both'
+    limit: int = 1000
+    include_start: bool = True
+
+
+@dataclass
+class SearchOptions:
+    kinds: Optional[list[NodeKind]] = None
+    languages: Optional[list[Language]] = None
+    include_patterns: Optional[list[str]] = None
+    exclude_patterns: Optional[list[str]] = None
+    limit: int = 100
+    offset: int = 0
+    case_sensitive: bool = False
+
+
+@dataclass
+class SearchResult:
+    node: Node
+    score: float = 0.0
+    highlights: Optional[list[str]] = None
+
+
+@dataclass
+class Context:
+    focal: Optional[Node] = None
+    ancestors: list[Node] = field(default_factory=list)
+    children: list[Node] = field(default_factory=list)
+    incoming_refs: list[dict] = field(default_factory=list)   # [{node, edge}]
+    outgoing_refs: list[dict] = field(default_factory=list)   # [{node, edge}]
+    types: list[Node] = field(default_factory=list)
+    imports: list[Node] = field(default_factory=list)
+
+
+@dataclass
+class CodeBlock:
+    content: str
+    file_path: str
+    start_line: int
+    end_line: int
+    language: Language
+    node: Optional[Node] = None
+
+
+@dataclass
+class BuildContextOptions:
+    max_nodes: int = 20
+    max_code_blocks: int = 5
+    max_code_block_size: int = 1500
+    include_code: bool = True
+    format: str = 'markdown'  # 'markdown' | 'json'
+    search_limit: int = 3
+    traversal_depth: int = 1
+    min_score: float = 0.3
+
+
+@dataclass
+class FindRelevantContextOptions:
+    search_limit: int = 3
+    traversal_depth: int = 1
+    max_nodes: int = 20
+    min_score: float = 0.3
+    edge_kinds: list[EdgeKind] = field(default_factory=list)
+    node_kinds: list[NodeKind] = field(default_factory=list)
+
+
+@dataclass
+class TaskContext:
+    query: str
+    subgraph: Subgraph
+    entry_points: list[Node] = field(default_factory=list)
+    code_blocks: list[CodeBlock] = field(default_factory=list)
+    related_files: list[str] = field(default_factory=list)
+    summary: str = ''
+    stats: Optional[dict] = None
+
+
+@dataclass
+class ParsedQuery:
+    text: str = ''
+    kinds: list[NodeKind] = field(default_factory=list)
+    languages: list[Language] = field(default_factory=list)
+    path_filters: list[str] = field(default_factory=list)
+    name_filters: list[str] = field(default_factory=list)
