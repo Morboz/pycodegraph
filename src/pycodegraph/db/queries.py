@@ -254,6 +254,14 @@ class QueryBuilder:
         stmt = select(*_NODE_COLUMNS).where(nodes.c.kind == kind_val)
         return [self._row_to_node(r) for r in self._conn.execute(stmt).fetchall()]
 
+    def get_all_nodes(self, limit: int = 50000, offset: int = 0) -> list[Node]:
+        stmt = select(*_NODE_COLUMNS).order_by(nodes.c.file_path, nodes.c.start_line).limit(limit).offset(offset)
+        return [self._row_to_node(r) for r in self._conn.execute(stmt).fetchall()]
+
+    def get_all_edges(self, limit: int = 100000, offset: int = 0) -> list[Edge]:
+        stmt = select(*_EDGE_COLUMNS).limit(limit).offset(offset)
+        return [self._row_to_edge(r) for r in self._conn.execute(stmt).fetchall()]
+
     # =========================================================================
     # Edge query operations
     # =========================================================================

@@ -157,6 +157,12 @@ class CodeGraph:
     def get_stats(self) -> dict:
         return self._queries.get_stats()
 
+    def get_all_nodes(self, limit: int = 50000, offset: int = 0) -> list[Node]:
+        return self._queries.get_all_nodes(limit, offset)
+
+    def get_all_edges(self, limit: int = 100000, offset: int = 0) -> list[Edge]:
+        return self._queries.get_all_edges(limit, offset)
+
     # --- Graph queries ---
 
     def get_context(self, node_id: str) -> Context:

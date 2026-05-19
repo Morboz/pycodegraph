@@ -99,6 +99,14 @@ def scan_directory(
 
 def _get_git_visible_files(root: Path) -> Optional[set[str]]:
     try:
+        # Only use git if root is the repo toplevel — avoid inheriting a parent repo
+        toplevel = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(root), capture_output=True, text=True, timeout=10,
+        )
+        if toplevel.returncode != 0 or Path(toplevel.stdout.strip()).resolve() != root:
+            return None
+
         result = subprocess.run(
             ["git", "ls-files", "-c"],
             cwd=str(root), capture_output=True, text=True, timeout=30,
