@@ -618,21 +618,24 @@ class QueryBuilder:
             return []
 
     def _search_nodes_fts_pg(
-        self, text: str,
+        self, query_text: str,
         kinds: Optional[list[str]], languages: Optional[list[str]],
         limit: int, offset: int,
     ) -> list[SearchResult]:
         fts_limit = max(limit * 5, 100)
+        # OR-based tsquery: multiple keywords → match any, rank by relevance.
+        # plainto_tsquery tokenizes safely, then replace & with | for OR.
         sql = (
             "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path, n.language, "
             "n.start_line, n.end_line, n.start_column, n.end_column, "
             "n.docstring, n.signature, n.visibility, n.is_exported, n.is_async, "
             "n.is_static, n.is_abstract, n.decorators, n.type_parameters, n.updated_at, "
-            "ts_rank(n.fts, query) as score "
-            "FROM nodes n, plainto_tsquery('simple', :query) query "
-            "WHERE n.fts @@ query"
+            "ts_rank(n.fts, ts_q) as score "
+            "FROM nodes n, "
+            "(SELECT replace(plainto_tsquery('simple', :query)::text, '&', '|')::tsquery AS ts_q) sub "
+            "WHERE n.fts @@ sub.ts_q"
         )
-        params: dict = {"query": text}
+        params: dict = {"query": query_text}
         if kinds:
             ph = ",".join(f":k{i}" for i in range(len(kinds)))
             sql += f" AND n.kind IN ({ph})"
