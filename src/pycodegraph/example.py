@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+import time
 from pycodegraph import CodeGraph
 
 
@@ -40,6 +41,8 @@ def main():
 
     config_overrides = {"db_url": db_url} if db_url else None
 
+    t0 = time.monotonic()
+
     # Initialize
     cg = CodeGraph.init(project_path, config_overrides=config_overrides)
 
@@ -57,7 +60,8 @@ def main():
 
     # Print results
     stats = cg.get_stats()
-    print(f"\nDone in {result.duration_ms}ms:")
+    total_ms = (time.monotonic() - t0) * 1000
+    print(f"\nDone in {result.duration_ms}ms (total: {total_ms:.0f}ms):")
     print(f"  Files indexed:  {result.files_indexed}")
     print(f"  Files skipped:  {result.files_skipped}")
     print(f"  Files errored:  {result.files_errored}")

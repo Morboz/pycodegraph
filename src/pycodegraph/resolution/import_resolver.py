@@ -220,18 +220,8 @@ def _resolve_aliased_import(
 
 # --- Import mapping extraction ---
 
-_import_mapping_cache: dict[str, list[ImportMapping]] = {}
-
-
-def clear_import_mapping_cache() -> None:
-    _import_mapping_cache.clear()
-
 
 def extract_import_mappings(file_path: str, content: str, language: str) -> list[ImportMapping]:
-    cache_key = f"{language}:{file_path}"
-    if cache_key in _import_mapping_cache:
-        return _import_mapping_cache[cache_key]
-
     mappings: list[ImportMapping] = []
 
     if language in ("typescript", "javascript", "tsx", "jsx"):
@@ -241,7 +231,6 @@ def extract_import_mappings(file_path: str, content: str, language: str) -> list
     elif language == "go":
         mappings = _extract_go_imports(content)
 
-    _import_mapping_cache[cache_key] = mappings
     return mappings
 
 

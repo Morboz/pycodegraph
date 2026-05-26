@@ -6,7 +6,7 @@ import json
 from collections import OrderedDict
 from typing import Optional
 
-from sqlalchemy import Connection, select, insert, delete, text, func, case
+from sqlalchemy import Connection, select, insert, delete, text, func, case, tuple_
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -526,13 +526,20 @@ class QueryBuilder:
         return [self._row_to_ref(r) for r in self._conn.execute(stmt).fetchall()]
 
     def delete_specific_resolved_refs(self, refs: list[dict]) -> None:
-        for ref in refs:
+        if not refs:
+            return
+        # Batch DELETE using tuple IN instead of one statement per row
+        keys = [(r["from_node_id"], r["reference_name"], r["reference_kind"], r["line"]) for r in refs]
+        for i in range(0, len(keys), 500):
+            chunk = keys[i:i + 500]
             self._conn.execute(
                 delete(unresolved_refs).where(
-                    unresolved_refs.c.from_node_id == ref["from_node_id"],
-                    unresolved_refs.c.reference_name == ref["reference_name"],
-                    unresolved_refs.c.reference_kind == ref["reference_kind"],
-                    unresolved_refs.c.line == ref["line"],
+                    tuple_(
+                        unresolved_refs.c.from_node_id,
+                        unresolved_refs.c.reference_name,
+                        unresolved_refs.c.reference_kind,
+                        unresolved_refs.c.line,
+                    ).in_(chunk)
                 )
             )
         self._conn.commit()
@@ -544,6 +551,106 @@ class QueryBuilder:
     def get_all_file_paths(self) -> list[str]:
         stmt = select(files.c.path).order_by(files.c.path)
         return [r[0] for r in self._conn.execute(stmt).fetchall()]
+
+    def get_all_file_paths_indexed(self) -> dict[str, str]:
+        """Return {path: content_hash} for all indexed files."""
+        stmt = select(files.c.path, files.c.content_hash)
+        return {r[0]: r[1] for r in self._conn.execute(stmt).fetchall()}
+
+    def delete_files_batch(self, file_paths: list[str]) -> None:
+        """Delete multiple files and their associated nodes/edges by path."""
+        if not file_paths:
+            return
+        # Nodes/edges cascade on FK delete, so just delete from files
+        for i in range(0, len(file_paths), 500):
+            chunk = file_paths[i:i + 500]
+            self._conn.execute(delete(files).where(files.c.path.in_(chunk)))
+        self._conn.commit()
+
+    def bulk_insert(
+        self,
+        nodes_data: list[Node],
+        edges_data: list[Edge],
+        refs_data: list[UnresolvedReference],
+        file_records: list[FileRecord],
+    ) -> None:
+        """Bulk insert nodes, edges, refs, and file records in a single transaction."""
+        # Nodes
+        if nodes_data:
+            rows = [
+                {
+                    "id": n.id, "kind": n.kind.value, "name": n.name,
+                    "qualified_name": n.qualified_name, "file_path": n.file_path,
+                    "language": n.language.value,
+                    "start_line": n.start_line, "end_line": n.end_line,
+                    "start_column": n.start_column, "end_column": n.end_column,
+                    "docstring": n.docstring, "signature": n.signature,
+                    "visibility": n.visibility,
+                    "is_exported": int(n.is_exported), "is_async": int(n.is_async),
+                    "is_static": int(n.is_static), "is_abstract": int(n.is_abstract),
+                    "decorators": n.decorators, "type_parameters": n.type_parameters,
+                    "updated_at": n.updated_at,
+                }
+                for n in nodes_data
+            ]
+            if self._dialect == "sqlite":
+                stmt = sqlite_insert(nodes).on_conflict_do_nothing(index_elements=["id"])
+            else:
+                stmt = pg_insert(nodes).on_conflict_do_nothing(index_elements=["id"])
+            self._conn.execute(stmt, rows)
+
+        # Edges
+        if edges_data:
+            rows = [
+                {
+                    "source": e.source, "target": e.target, "kind": e.kind.value,
+                    "metadata": (
+                        e.metadata if isinstance(e.metadata, (str, type(None)))
+                        else json.dumps(e.metadata) if e.metadata else None
+                    ),
+                    "line": e.line, "col": e.col, "provenance": e.provenance,
+                }
+                for e in edges_data
+            ]
+            self._conn.execute(insert(edges), rows)
+
+        # Unresolved refs
+        if refs_data:
+            rows = [
+                {
+                    "from_node_id": r.from_node_id, "reference_name": r.reference_name,
+                    "reference_kind": r.reference_kind.value,
+                    "line": r.line, "col": r.column,
+                    "candidates": (
+                        r.candidates if isinstance(r.candidates, (str, type(None)))
+                        else json.dumps(r.candidates) if r.candidates else None
+                    ),
+                    "file_path": r.file_path, "language": r.language,
+                }
+                for r in refs_data
+            ]
+            self._conn.execute(insert(unresolved_refs), rows)
+
+        # Files
+        if file_records:
+            for rec in file_records:
+                row = {
+                    "path": rec.path, "content_hash": rec.content_hash,
+                    "language": rec.language.value, "size": rec.size,
+                    "modified_at": rec.modified_at, "indexed_at": rec.indexed_at,
+                    "node_count": rec.node_count, "errors": rec.errors,
+                }
+                if self._dialect == "sqlite":
+                    stmt = sqlite_insert(files).values(**row).on_conflict_do_update(
+                        index_elements=["path"], set_=row,
+                    )
+                else:
+                    stmt = pg_insert(files).values(**row).on_conflict_do_update(
+                        index_elements=["path"], set_=row,
+                    )
+                self._conn.execute(stmt)
+
+        self._conn.commit()
 
     def get_all_node_names(self) -> list[str]:
         stmt = select(nodes.c.name).distinct()

@@ -4,74 +4,136 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import OrderedDict
 from typing import Optional, Callable
 
 from ..types import Edge, EdgeKind, NodeKind, UnresolvedReference
 from ..db.queries import QueryBuilder
 from .types import UnresolvedRef, ResolvedRef, ResolutionResult, ImportMapping
 from .builtins import is_builtin_or_external
-from .import_resolver import resolve_via_import, extract_import_mappings, clear_import_mapping_cache
+from .import_resolver import resolve_via_import, extract_import_mappings
 from .name_matcher import match_reference
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_CACHE_LIMIT = 5000
+
+
+class _LRUCache:
+    """Simple LRU cache backed by OrderedDict."""
+
+    def __init__(self, max_size: int = _DEFAULT_CACHE_LIMIT) -> None:
+        self._cache: OrderedDict = OrderedDict()
+        self._max_size = max_size
+
+    def get(self, key: str):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        return None
+
+    def put(self, key: str, value) -> None:
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        else:
+            if len(self._cache) >= self._max_size:
+                self._cache.popitem(last=False)
+        self._cache[key] = value
+
+    def has(self, key: str) -> bool:
+        return key in self._cache
+
+    def clear(self) -> None:
+        self._cache.clear()
+
 
 class ResolutionContext:
-    """Cached read layer over QueryBuilder for resolution."""
+    """Cached read layer over QueryBuilder for resolution.
+
+    Uses LRU-bounded caches that persist across batches (unlike the old
+    unbounded dicts that were cleared after every batch).  ``known_names``
+    and ``known_files`` are stable sets that never need clearing during
+    a single resolution run.
+    """
 
     def __init__(self, queries: QueryBuilder, project_root: str):
         self._queries = queries
         self._project_root = project_root
 
-        self._nodes_by_file: dict[str, list] = {}
-        self._nodes_by_name: dict[str, list] = {}
-        self._nodes_by_qname: dict[str, list] = {}
-        self._import_mappings: dict[str, list[ImportMapping]] = {}
-        self._file_contents: dict[str, str] = {}
+        limit = _DEFAULT_CACHE_LIMIT
+        content_limit = max(64, limit // 5)
+
+        self._nodes_by_file = _LRUCache(limit)
+        self._nodes_by_name = _LRUCache(limit)
+        self._nodes_by_qname = _LRUCache(limit)
+        self._nodes_by_lower_name = _LRUCache(limit)
+        self._import_mappings = _LRUCache(limit)
+        self._file_contents = _LRUCache(content_limit)
         self._known_files: Optional[set[str]] = None
         self._known_names: Optional[set[str]] = None
+        self._caches_warmed = False
 
     def get_project_root(self) -> str:
         return self._project_root
 
     def get_nodes_by_name(self, name: str) -> list[Node]:
-        if name not in self._nodes_by_name:
-            self._nodes_by_name[name] = self._queries.get_nodes_by_name(name)
-        return self._nodes_by_name[name]
+        cached = self._nodes_by_name.get(name)
+        if cached is not None:
+            return cached
+        result = self._queries.get_nodes_by_name(name)
+        self._nodes_by_name.put(name, result)
+        return result
 
     def get_nodes_by_qualified_name(self, qualified_name: str) -> list[Node]:
-        if qualified_name not in self._nodes_by_qname:
-            self._nodes_by_qname[qualified_name] = self._queries.get_nodes_by_qualified_name(qualified_name)
-        return self._nodes_by_qname[qualified_name]
+        cached = self._nodes_by_qname.get(qualified_name)
+        if cached is not None:
+            return cached
+        result = self._queries.get_nodes_by_qualified_name(qualified_name)
+        self._nodes_by_qname.put(qualified_name, result)
+        return result
 
     def get_nodes_by_lower_name(self, lower_name: str) -> list[Node]:
-        # No caching — used only by fuzzy matcher as a fallback
-        return self._queries.get_nodes_by_lower_name(lower_name)
+        cached = self._nodes_by_lower_name.get(lower_name)
+        if cached is not None:
+            return cached
+        result = self._queries.get_nodes_by_lower_name(lower_name)
+        self._nodes_by_lower_name.put(lower_name, result)
+        return result
 
     def get_nodes_in_file(self, file_path: str) -> list[Node]:
-        if file_path not in self._nodes_by_file:
-            self._nodes_by_file[file_path] = self._queries.get_nodes_by_file(file_path)
-        return self._nodes_by_file[file_path]
+        cached = self._nodes_by_file.get(file_path)
+        if cached is not None:
+            return cached
+        result = self._queries.get_nodes_by_file(file_path)
+        self._nodes_by_file.put(file_path, result)
+        return result
 
     def get_import_mappings(self, file_path: str, language: str) -> list[ImportMapping]:
         key = f"{language}:{file_path}"
-        if key not in self._import_mappings:
-            content = self.read_file(file_path)
-            if content:
-                self._import_mappings[key] = extract_import_mappings(file_path, content, language)
-            else:
-                self._import_mappings[key] = []
-        return self._import_mappings[key]
+        cached = self._import_mappings.get(key)
+        if cached is not None:
+            return cached
+        content = self.read_file(file_path)
+        if content:
+            result = extract_import_mappings(file_path, content, language)
+        else:
+            result = []
+        self._import_mappings.put(key, result)
+        return result
 
     def read_file(self, file_path: str) -> Optional[str]:
-        if file_path not in self._file_contents:
-            try:
-                full = f"{self._project_root}/{file_path}"
-                with open(full) as f:
-                    self._file_contents[file_path] = f.read()
-            except (OSError, UnicodeDecodeError):
-                self._file_contents[file_path] = ""
-        return self._file_contents[file_path] or None
+        cached = self._file_contents.get(file_path)
+        if cached is not None:
+            return cached or None
+        try:
+            full = f"{self._project_root}/{file_path}"
+            with open(full) as f:
+                content = f.read()
+            self._file_contents.put(file_path, content)
+            return content
+        except (OSError, UnicodeDecodeError):
+            self._file_contents.put(file_path, "")
+            return None
 
     def file_exists(self, rel_path: str) -> bool:
         if self._known_files is None:
@@ -84,15 +146,13 @@ class ResolutionContext:
             self._known_names = set(self._queries.get_all_node_names())
         return self._known_names
 
-    def clear_caches(self) -> None:
-        self._nodes_by_file.clear()
-        self._nodes_by_name.clear()
-        self._nodes_by_qname.clear()
-        self._import_mappings.clear()
-        self._file_contents.clear()
-        self._known_files = None
-        self._known_names = None
-        clear_import_mapping_cache()
+    def warm_caches(self) -> None:
+        """Pre-populate known_names and known_files. Idempotent."""
+        if self._caches_warmed:
+            return
+        _ = self.known_names
+        _ = self.file_exists("")
+        self._caches_warmed = True
 
 
 class ReferenceResolver:
@@ -104,8 +164,7 @@ class ReferenceResolver:
         self._context = ResolutionContext(queries, project_root)
 
     def warm_caches(self) -> None:
-        self._context.known_names
-        self._context.file_exists("")
+        self._context.warm_caches()
 
     def resolve_all(
         self,
@@ -274,9 +333,6 @@ class ReferenceResolver:
                     for r in batch_result.unresolved
                 ]
                 self._queries.delete_specific_resolved_refs(unresolved_dicts)
-
-            # Clear per-batch caches to bound memory
-            self._context.clear_caches()
 
             # If nothing was resolved or removed, avoid infinite loop
             if not batch_result.resolved and len(batch_result.unresolved) == len(refs):
