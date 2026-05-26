@@ -47,6 +47,13 @@ class QueryDialect:
         """Hook for dialects that maintain external node search indexes."""
         return None
 
+    def prepare_node_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Prepare node insert rows for dialect-specific columns."""
+        return [
+            {key: value for key, value in row.items() if key != "fts_text"}
+            for row in rows
+        ]
+
 
 class SQLiteQueryDialect(QueryDialect):
     name = "sqlite"
@@ -179,7 +186,21 @@ class InferDBQueryDialect(QueryDialect):
     name = "inferdb"
 
     def insert_nodes_ignore(self):
-        return mysql_insert(nodes).prefix_with("IGNORE")
+        return text(
+            "INSERT IGNORE INTO nodes ("
+            "id, kind, name, qualified_name, file_path, language, "
+            "start_line, end_line, start_column, end_column, "
+            "docstring, signature, visibility, is_exported, is_async, "
+            "is_static, is_abstract, decorators, type_parameters, updated_at, "
+            "fts_text"
+            ") VALUES ("
+            ":id, :kind, :name, :qualified_name, :file_path, :language, "
+            ":start_line, :end_line, :start_column, :end_column, "
+            ":docstring, :signature, :visibility, :is_exported, :is_async, "
+            ":is_static, :is_abstract, :decorators, :type_parameters, :updated_at, "
+            ":fts_text"
+            ")"
+        )
 
     def upsert_file(self, row: dict[str, Any]):
         update_values = {key: value for key, value in row.items() if key != "path"}
@@ -246,6 +267,9 @@ class InferDBQueryDialect(QueryDialect):
         conn.execute(text(
             f"/*+ duck_execute */ PRAGMA create_fts_index({table_name}, 'id', 'fts_text')"
         ))
+
+    def prepare_node_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return rows
 
 
 def get_query_dialect(dialect_name: str) -> QueryDialect:

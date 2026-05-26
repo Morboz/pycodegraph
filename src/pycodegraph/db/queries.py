@@ -6,7 +6,7 @@ import json
 from collections import OrderedDict
 from typing import Optional
 
-from sqlalchemy import Connection, select, insert, delete, func, case, tuple_
+from sqlalchemy import Connection, select, insert, delete, func, case, tuple_, or_
 
 from ..types import (
     Node, Edge, UnresolvedReference, FileRecord, Language,
@@ -36,6 +36,35 @@ _REF_COLUMNS = (
     unresolved_refs.c.reference_kind, unresolved_refs.c.line, unresolved_refs.c.col,
     unresolved_refs.c.candidates, unresolved_refs.c.file_path, unresolved_refs.c.language,
 )
+
+
+def _node_search_text(node: Node) -> str:
+    return " ".join(
+        part for part in (
+            node.name,
+            node.qualified_name,
+            node.docstring,
+            node.signature,
+        )
+        if part
+    )
+
+
+def _node_row(node: Node) -> dict:
+    return {
+        "id": node.id, "kind": node.kind.value, "name": node.name,
+        "qualified_name": node.qualified_name, "file_path": node.file_path,
+        "language": node.language.value,
+        "start_line": node.start_line, "end_line": node.end_line,
+        "start_column": node.start_column, "end_column": node.end_column,
+        "docstring": node.docstring, "signature": node.signature,
+        "visibility": node.visibility,
+        "is_exported": int(node.is_exported), "is_async": int(node.is_async),
+        "is_static": int(node.is_static), "is_abstract": int(node.is_abstract),
+        "decorators": node.decorators, "type_parameters": node.type_parameters,
+        "updated_at": node.updated_at,
+        "fts_text": _node_search_text(node),
+    }
 
 
 class _LRUNodeCache:
@@ -89,24 +118,10 @@ class QueryBuilder:
     def insert_nodes(self, nodes_data: list[Node]) -> None:
         if not nodes_data:
             return
-        rows = [
-            {
-                "id": n.id, "kind": n.kind.value, "name": n.name,
-                "qualified_name": n.qualified_name, "file_path": n.file_path,
-                "language": n.language.value,
-                "start_line": n.start_line, "end_line": n.end_line,
-                "start_column": n.start_column, "end_column": n.end_column,
-                "docstring": n.docstring, "signature": n.signature,
-                "visibility": n.visibility,
-                "is_exported": int(n.is_exported), "is_async": int(n.is_async),
-                "is_static": int(n.is_static), "is_abstract": int(n.is_abstract),
-                "decorators": n.decorators, "type_parameters": n.type_parameters,
-                "updated_at": n.updated_at,
-            }
-            for n in nodes_data
-        ]
+        rows = self._dialect.prepare_node_rows([_node_row(n) for n in nodes_data])
         stmt = self._dialect.insert_nodes_ignore()
         self._conn.execute(stmt, rows)
+        self._dialect.after_nodes_changed(self._conn)
         self._conn.commit()
 
     # =========================================================================
@@ -193,8 +208,28 @@ class QueryBuilder:
         self._conn.commit()
 
     def delete_file(self, file_path: str) -> None:
+        node_ids = [
+            row[0]
+            for row in self._conn.execute(
+                select(nodes.c.id).where(nodes.c.file_path == file_path)
+            ).fetchall()
+        ]
+        if node_ids:
+            self._conn.execute(
+                delete(unresolved_refs).where(unresolved_refs.c.from_node_id.in_(node_ids))
+            )
+            self._conn.execute(
+                delete(edges).where(
+                    or_(
+                        edges.c.source.in_(node_ids),
+                        edges.c.target.in_(node_ids),
+                    )
+                )
+            )
+            self._conn.execute(delete(nodes).where(nodes.c.file_path == file_path))
         self._conn.execute(delete(files).where(files.c.path == file_path))
         self._node_cache.invalidate_file(file_path)
+        self._dialect.after_nodes_changed(self._conn)
         self._conn.commit()
 
     # =========================================================================
@@ -523,10 +558,32 @@ class QueryBuilder:
         """Delete multiple files and their associated nodes/edges by path."""
         if not file_paths:
             return
-        # Nodes/edges cascade on FK delete, so just delete from files
+        # nodes.file_path is not an FK, so remove graph rows explicitly.
         for i in range(0, len(file_paths), 500):
             chunk = file_paths[i:i + 500]
+            node_ids = [
+                row[0]
+                for row in self._conn.execute(
+                    select(nodes.c.id).where(nodes.c.file_path.in_(chunk))
+                ).fetchall()
+            ]
+            if node_ids:
+                self._conn.execute(
+                    delete(unresolved_refs).where(unresolved_refs.c.from_node_id.in_(node_ids))
+                )
+                self._conn.execute(
+                    delete(edges).where(
+                        or_(
+                            edges.c.source.in_(node_ids),
+                            edges.c.target.in_(node_ids),
+                        )
+                    )
+                )
+                self._conn.execute(delete(nodes).where(nodes.c.file_path.in_(chunk)))
             self._conn.execute(delete(files).where(files.c.path.in_(chunk)))
+            for file_path in chunk:
+                self._node_cache.invalidate_file(file_path)
+        self._dialect.after_nodes_changed(self._conn)
         self._conn.commit()
 
     def bulk_insert(
@@ -539,22 +596,7 @@ class QueryBuilder:
         """Bulk insert nodes, edges, refs, and file records in a single transaction."""
         # Nodes
         if nodes_data:
-            rows = [
-                {
-                    "id": n.id, "kind": n.kind.value, "name": n.name,
-                    "qualified_name": n.qualified_name, "file_path": n.file_path,
-                    "language": n.language.value,
-                    "start_line": n.start_line, "end_line": n.end_line,
-                    "start_column": n.start_column, "end_column": n.end_column,
-                    "docstring": n.docstring, "signature": n.signature,
-                    "visibility": n.visibility,
-                    "is_exported": int(n.is_exported), "is_async": int(n.is_async),
-                    "is_static": int(n.is_static), "is_abstract": int(n.is_abstract),
-                    "decorators": n.decorators, "type_parameters": n.type_parameters,
-                    "updated_at": n.updated_at,
-                }
-                for n in nodes_data
-            ]
+            rows = self._dialect.prepare_node_rows([_node_row(n) for n in nodes_data])
             stmt = self._dialect.insert_nodes_ignore()
             self._conn.execute(stmt, rows)
 
@@ -602,6 +644,8 @@ class QueryBuilder:
                 stmt = self._dialect.upsert_file(row)
                 self._conn.execute(stmt)
 
+        if nodes_data:
+            self._dialect.after_nodes_changed(self._conn)
         self._conn.commit()
 
     def get_all_node_names(self) -> list[str]:
