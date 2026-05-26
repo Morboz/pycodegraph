@@ -6,6 +6,7 @@ import json
 from typing import Any, Optional
 
 from sqlalchemy import Connection, text
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -41,6 +42,10 @@ class QueryDialect:
         offset: int,
     ) -> list[tuple]:
         return []
+
+    def after_nodes_changed(self, conn: Connection) -> None:
+        """Hook for dialects that maintain external node search indexes."""
+        return None
 
 
 class SQLiteQueryDialect(QueryDialect):
@@ -170,11 +175,86 @@ class PostgreSQLQueryDialect(QueryDialect):
         return conn.execute(text(sql), params).fetchall()
 
 
+class InferDBQueryDialect(QueryDialect):
+    name = "inferdb"
+
+    def insert_nodes_ignore(self):
+        return mysql_insert(nodes).prefix_with("IGNORE")
+
+    def upsert_file(self, row: dict[str, Any]):
+        update_values = {key: value for key, value in row.items() if key != "path"}
+        return mysql_insert(files).values(**row).on_duplicate_key_update(**update_values)
+
+    def find_edges_between_nodes(
+        self,
+        conn: Connection,
+        node_ids: list[str],
+        kinds: Optional[list[str]] = None,
+    ) -> list[tuple]:
+        ids_placeholders = ",".join(f":id{i}" for i in range(len(node_ids)))
+        sql = (
+            "SELECT source, target, kind, metadata, line, col, provenance FROM edges "
+            f"WHERE source IN ({ids_placeholders}) AND target IN ({ids_placeholders})"
+        )
+        params: dict[str, Any] = {f"id{i}": node_id for i, node_id in enumerate(node_ids)}
+        if kinds:
+            placeholders = ",".join(f":k{i}" for i in range(len(kinds)))
+            sql += f" AND kind IN ({placeholders})"
+            for i, kind in enumerate(kinds):
+                params[f"k{i}"] = kind
+        return conn.execute(text(sql), params).fetchall()
+
+    def search_nodes_fts(
+        self,
+        conn: Connection,
+        query_text: str,
+        kinds: Optional[list[str]],
+        languages: Optional[list[str]],
+        limit: int,
+        offset: int,
+    ) -> list[tuple]:
+        database = conn.engine.url.database
+        if not database:
+            return []
+        database_identifier = _mysql_identifier(database)
+        fts_database_identifier = _mysql_identifier(f"fts_{database}_nodes")
+        fts_limit = max(limit * 5, 100)
+        sql = (
+            "/*+ duck_execute */ SELECT "
+            "n.id, n.kind, n.name, n.qualified_name, n.file_path, n.language, "
+            "n.start_line, n.end_line, n.start_column, n.end_column, "
+            "n.docstring, n.signature, n.visibility, n.is_exported, n.is_async, "
+            "n.is_static, n.is_abstract, n.decorators, n.type_parameters, n.updated_at, "
+            f"ltmdb_sql.{fts_database_identifier}.match_bm25("
+            "n.id, :query, fields := 'fts_text') AS score "
+            f"FROM ltmdb_sql.{database_identifier}.nodes n "
+            "WHERE score IS NOT NULL"
+        )
+        params: dict[str, Any] = {"query": query_text}
+        sql, params = _append_filters(sql, params, kinds, languages)
+        sql += " ORDER BY score DESC LIMIT :lim OFFSET :off"
+        params["lim"] = fts_limit
+        params["off"] = offset
+
+        return conn.execute(text(sql), params).fetchall()
+
+    def after_nodes_changed(self, conn: Connection) -> None:
+        database = conn.engine.url.database
+        if not database:
+            return
+        table_name = _sql_string_literal(f"ltmdb_sql.{database}.nodes")
+        conn.execute(text(
+            f"/*+ duck_execute */ PRAGMA create_fts_index({table_name}, 'id', 'fts_text')"
+        ))
+
+
 def get_query_dialect(dialect_name: str) -> QueryDialect:
     if dialect_name == "sqlite":
         return SQLiteQueryDialect()
     if dialect_name == "postgresql":
         return PostgreSQLQueryDialect()
+    if dialect_name == "inferdb":
+        return InferDBQueryDialect()
     return QueryDialect()
 
 
@@ -195,3 +275,11 @@ def _append_filters(
         for i, language in enumerate(languages):
             params[f"l{i}"] = language
     return sql, params
+
+
+def _mysql_identifier(identifier: str) -> str:
+    return f"`{identifier.replace('`', '``')}`"
+
+
+def _sql_string_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"

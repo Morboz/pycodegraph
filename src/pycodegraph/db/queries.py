@@ -77,7 +77,9 @@ class _LRUNodeCache:
 class QueryBuilder:
     def __init__(self, conn: Connection):
         self._conn = conn
-        self._dialect = get_query_dialect(conn.engine.dialect.name)
+        self._dialect = get_query_dialect(
+            conn.info.get("pycodegraph_backend", conn.engine.dialect.name)
+        )
         self._node_cache = _LRUNodeCache()
 
     # =========================================================================
