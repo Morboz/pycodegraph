@@ -512,6 +512,11 @@ class QueryBuilder:
         stmt = select(*_REF_COLUMNS).limit(limit).offset(offset)
         return [self._row_to_ref(r) for r in self._conn.execute(stmt).fetchall()]
 
+    def delete_all_unresolved_refs(self) -> None:
+        """Delete all unresolved refs in one statement."""
+        self._conn.execute(delete(unresolved_refs))
+        self._conn.commit()
+
     def delete_unresolved_refs(self, from_node_id: str, reference_name: str) -> None:
         self._conn.execute(
             delete(unresolved_refs).where(

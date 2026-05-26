@@ -7,7 +7,7 @@ import time
 from collections import OrderedDict
 from typing import Optional, Callable
 
-from ..types import Edge, EdgeKind, NodeKind, UnresolvedReference
+from ..types import Edge, EdgeKind, Node, NodeKind, UnresolvedReference
 from ..db.queries import QueryBuilder
 from .types import UnresolvedRef, ResolvedRef, ResolutionResult, ImportMapping
 from .builtins import is_builtin_or_external
@@ -16,13 +16,11 @@ from .name_matcher import match_reference
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_CACHE_LIMIT = 5000
-
 
 class _LRUCache:
     """Simple LRU cache backed by OrderedDict."""
 
-    def __init__(self, max_size: int = _DEFAULT_CACHE_LIMIT) -> None:
+    def __init__(self, max_size: int = 5000) -> None:
         self._cache: OrderedDict = OrderedDict()
         self._max_size = max_size
 
@@ -40,73 +38,73 @@ class _LRUCache:
                 self._cache.popitem(last=False)
         self._cache[key] = value
 
-    def has(self, key: str) -> bool:
-        return key in self._cache
-
-    def clear(self) -> None:
-        self._cache.clear()
-
 
 class ResolutionContext:
-    """Cached read layer over QueryBuilder for resolution.
+    """In-memory index over all nodes for O(1) resolution lookups.
 
-    Uses LRU-bounded caches that persist across batches (unlike the old
-    unbounded dicts that were cleared after every batch).  ``known_names``
-    and ``known_files`` are stable sets that never need clearing during
-    a single resolution run.
+    ``warm_caches()`` loads every node in a single SELECT and builds
+    dicts keyed by name, qualified_name, file_path, lower(name), and id.
+    All subsequent lookups are pure dict operations — zero DB queries.
     """
 
     def __init__(self, queries: QueryBuilder, project_root: str):
         self._queries = queries
         self._project_root = project_root
 
-        limit = _DEFAULT_CACHE_LIMIT
-        content_limit = max(64, limit // 5)
+        # Populated by warm_caches()
+        self._id_index: dict[str, Node] = {}
+        self._name_index: dict[str, list[Node]] = {}
+        self._qname_index: dict[str, list[Node]] = {}
+        self._file_index: dict[str, list[Node]] = {}
+        self._lower_name_index: dict[str, list[Node]] = {}
 
-        self._nodes_by_file = _LRUCache(limit)
-        self._nodes_by_name = _LRUCache(limit)
-        self._nodes_by_qname = _LRUCache(limit)
-        self._nodes_by_lower_name = _LRUCache(limit)
-        self._import_mappings = _LRUCache(limit)
-        self._file_contents = _LRUCache(content_limit)
-        self._known_files: Optional[set[str]] = None
-        self._known_names: Optional[set[str]] = None
+        # Per-file data (LRU-bounded to limit memory)
+        self._import_mappings = _LRUCache(5000)
+        self._file_contents = _LRUCache(1000)
+
+        self._known_files: set[str] = set()
+        self._known_names: set[str] = set()
         self._caches_warmed = False
 
     def get_project_root(self) -> str:
         return self._project_root
 
+    def warm_caches(self) -> None:
+        """Load all nodes into memory and build lookup indexes. Idempotent."""
+        if self._caches_warmed:
+            return
+
+        all_nodes = self._queries.get_all_nodes(limit=500000)
+        for node in all_nodes:
+            self._id_index[node.id] = node
+            self._name_index.setdefault(node.name, []).append(node)
+            if node.qualified_name:
+                self._qname_index.setdefault(node.qualified_name, []).append(node)
+            self._file_index.setdefault(node.file_path, []).append(node)
+            self._lower_name_index.setdefault(node.name.lower(), []).append(node)
+
+        self._known_names = set(self._name_index.keys())
+        self._known_files = set(self._file_index.keys())
+        self._caches_warmed = True
+
+    # --- Node lookups (all in-memory, zero DB queries) ---
+
+    def get_node_by_id(self, node_id: str) -> Optional[Node]:
+        return self._id_index.get(node_id)
+
     def get_nodes_by_name(self, name: str) -> list[Node]:
-        cached = self._nodes_by_name.get(name)
-        if cached is not None:
-            return cached
-        result = self._queries.get_nodes_by_name(name)
-        self._nodes_by_name.put(name, result)
-        return result
+        return self._name_index.get(name, [])
 
     def get_nodes_by_qualified_name(self, qualified_name: str) -> list[Node]:
-        cached = self._nodes_by_qname.get(qualified_name)
-        if cached is not None:
-            return cached
-        result = self._queries.get_nodes_by_qualified_name(qualified_name)
-        self._nodes_by_qname.put(qualified_name, result)
-        return result
+        return self._qname_index.get(qualified_name, [])
 
     def get_nodes_by_lower_name(self, lower_name: str) -> list[Node]:
-        cached = self._nodes_by_lower_name.get(lower_name)
-        if cached is not None:
-            return cached
-        result = self._queries.get_nodes_by_lower_name(lower_name)
-        self._nodes_by_lower_name.put(lower_name, result)
-        return result
+        return self._lower_name_index.get(lower_name, [])
 
     def get_nodes_in_file(self, file_path: str) -> list[Node]:
-        cached = self._nodes_by_file.get(file_path)
-        if cached is not None:
-            return cached
-        result = self._queries.get_nodes_by_file(file_path)
-        self._nodes_by_file.put(file_path, result)
-        return result
+        return self._file_index.get(file_path, [])
+
+    # --- Per-file data (still LRU-cached) ---
 
     def get_import_mappings(self, file_path: str, language: str) -> list[ImportMapping]:
         key = f"{language}:{file_path}"
@@ -136,23 +134,11 @@ class ResolutionContext:
             return None
 
     def file_exists(self, rel_path: str) -> bool:
-        if self._known_files is None:
-            self._known_files = set(self._queries.get_all_file_paths())
         return rel_path in self._known_files
 
     @property
     def known_names(self) -> set[str]:
-        if self._known_names is None:
-            self._known_names = set(self._queries.get_all_node_names())
         return self._known_names
-
-    def warm_caches(self) -> None:
-        """Pre-populate known_names and known_files. Idempotent."""
-        if self._caches_warmed:
-            return
-        _ = self.known_names
-        _ = self.file_exists("")
-        self._caches_warmed = True
 
 
 class ReferenceResolver:
@@ -289,72 +275,41 @@ class ReferenceResolver:
     ) -> ResolutionResult:
         self.warm_caches()
 
-        total_result = ResolutionResult()
-        batch_size = 5000
+        # Load all unresolved refs at once (single query)
+        all_db_refs = self._queries.get_all_unresolved_refs(limit=200000)
+        if not all_db_refs:
+            return ResolutionResult()
 
-        while True:
-            # Always read from offset 0 — resolved and unresolvable refs
-            # are deleted after each batch, shifting remaining rows forward.
-            refs = self._queries.get_unresolved_refs_batch(offset=0, limit=batch_size)
-            if not refs:
-                break
+        total = len(all_db_refs)
+        internal_refs = [self._to_internal_ref(r) for r in all_db_refs]
 
-            internal_refs = [self._to_internal_ref(r) for r in refs]
+        # Resolve all in memory (zero DB queries for node lookups)
+        result = self.resolve_all(internal_refs, on_progress)
 
-            batch_result = self.resolve_all(internal_refs, on_progress)
-            total_result.resolved.extend(batch_result.resolved)
-            total_result.unresolved.extend(batch_result.unresolved)
+        # Bulk insert edges (single query)
+        if result.resolved:
+            edges = self.create_edges(result.resolved)
+            self._queries.insert_edges(edges)
 
-            if batch_result.resolved:
-                edges = self.create_edges(batch_result.resolved)
-                self._queries.insert_edges(edges)
+        # Delete all processed refs (single truncate)
+        self._queries.delete_all_unresolved_refs()
 
-                resolved_dicts = [
-                    {
-                        "from_node_id": r.original.from_node_id,
-                        "reference_name": r.original.reference_name,
-                        "reference_kind": r.original.reference_kind.value,
-                        "line": r.original.line,
-                    }
-                    for r in batch_result.resolved
-                ]
-                self._queries.delete_specific_resolved_refs(resolved_dicts)
-
-            # Delete unresolvable refs (builtins, external, genuinely
-            # unresolvable) so they don't re-appear in the next batch.
-            if batch_result.unresolved:
-                unresolved_dicts = [
-                    {
-                        "from_node_id": r.from_node_id,
-                        "reference_name": r.reference_name,
-                        "reference_kind": r.reference_kind.value,
-                        "line": r.line,
-                    }
-                    for r in batch_result.unresolved
-                ]
-                self._queries.delete_specific_resolved_refs(unresolved_dicts)
-
-            # If nothing was resolved or removed, avoid infinite loop
-            if not batch_result.resolved and len(batch_result.unresolved) == len(refs):
-                break
-
-        total_result.stats = {
-            "total": len(total_result.resolved) + len(total_result.unresolved),
-            "resolved": len(total_result.resolved),
-            "unresolved": len(total_result.unresolved),
-            "by_method": self._count_by_method(total_result.resolved),
+        result.stats = {
+            "total": total,
+            "resolved": len(result.resolved),
+            "unresolved": len(result.unresolved),
+            "by_method": self._count_by_method(result.resolved),
         }
-        return total_result
+        return result
 
     # --- Internals ---
 
     def _promote_edge_kind(self, original_kind: EdgeKind, target_id: str) -> EdgeKind:
+        target = self._context.get_node_by_id(target_id)
         if original_kind == EdgeKind.CALLS:
-            target = self._queries.get_node_by_id(target_id)
             if target and target.kind in (NodeKind.CLASS, NodeKind.STRUCT):
                 return EdgeKind.INSTANTIATES
         elif original_kind == EdgeKind.EXTENDS:
-            target = self._queries.get_node_by_id(target_id)
             if target and target.kind in (NodeKind.INTERFACE, NodeKind.PROTOCOL, NodeKind.TRAIT):
                 return EdgeKind.IMPLEMENTS
         return original_kind
