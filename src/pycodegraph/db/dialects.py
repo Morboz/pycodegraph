@@ -265,7 +265,7 @@ class InferDBQueryDialect(QueryDialect):
             return
         table_name = _sql_string_literal(f"ltmdb_sql.{database}.nodes")
         conn.execute(text(
-            f"/*+ duck_execute */ PRAGMA create_fts_index({table_name}, 'id', 'fts_text')"
+            f"/*+ duck_execute */ PRAGMA create_fts_index({table_name}, 'id', 'fts_text', overwrite=1)"
         ))
 
     def prepare_node_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

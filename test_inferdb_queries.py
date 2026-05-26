@@ -275,6 +275,7 @@ def test_inferdb_after_nodes_changed_sql_shape() -> None:
     check("InferDB refresh creates FTS index", "PRAGMA create_fts_index" in sql, sql)
     check("InferDB refresh uses DuckDB execution hint", "/*+ duck_execute */" in sql, sql)
     check("InferDB refresh indexes fts_text", "fts_text" in sql, sql)
+    check("InferDB refresh overwrites existing FTS index", "overwrite=1" in sql, sql)
     check("InferDB refresh escapes database string", "code''graph" in sql, sql)
 
 

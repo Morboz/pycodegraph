@@ -55,9 +55,12 @@ All data is stored in `.codegraph/` within the project directory:
 ### InferDB backend
 
 InferDB is supported as a MySQL-compatible relational backend with InferDB FTS.
-Use a MySQL SQLAlchemy URL and mark the logical backend explicitly:
+Install the InferDB extra, then use a MySQL SQLAlchemy URL and mark the logical
+backend explicitly:
 
 ```bash
+uv sync --extra inferdb
+
 python -m pycodegraph.example /path/to/project \
   --db 'mysql+pymysql://user:pass@host:port/db?backend=inferdb'
 ```
