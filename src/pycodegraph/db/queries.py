@@ -6,9 +6,7 @@ import json
 from collections import OrderedDict
 from typing import Optional
 
-from sqlalchemy import Connection, select, insert, delete, text, func, case, tuple_
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import Connection, select, insert, delete, func, case, tuple_
 
 from ..types import (
     Node, Edge, UnresolvedReference, FileRecord, Language,
@@ -16,6 +14,7 @@ from ..types import (
 )
 from ..search.query_parser import parse_query, bounded_edit_distance
 from ..search.query_utils import kind_bonus, name_match_bonus, score_path_relevance
+from .dialects import get_query_dialect
 from .tables import nodes, edges, files, unresolved_refs
 
 _NODE_COLUMNS = (
@@ -78,7 +77,7 @@ class _LRUNodeCache:
 class QueryBuilder:
     def __init__(self, conn: Connection):
         self._conn = conn
-        self._dialect = conn.engine.dialect.name
+        self._dialect = get_query_dialect(conn.engine.dialect.name)
         self._node_cache = _LRUNodeCache()
 
     # =========================================================================
@@ -104,14 +103,7 @@ class QueryBuilder:
             }
             for n in nodes_data
         ]
-        if self._dialect == "sqlite":
-            stmt = sqlite_insert(nodes).on_conflict_do_nothing(
-                index_elements=["id"],
-            )
-        else:
-            stmt = pg_insert(nodes).on_conflict_do_nothing(
-                index_elements=["id"],
-            )
+        stmt = self._dialect.insert_nodes_ignore()
         self._conn.execute(stmt, rows)
         self._conn.commit()
 
@@ -194,16 +186,7 @@ class QueryBuilder:
             "modified_at": record.modified_at, "indexed_at": record.indexed_at,
             "node_count": record.node_count, "errors": record.errors,
         }
-        if self._dialect == "sqlite":
-            stmt = sqlite_insert(files).values(**row).on_conflict_do_update(
-                index_elements=["path"],
-                set_=row,
-            )
-        else:
-            stmt = pg_insert(files).values(**row).on_conflict_do_update(
-                index_elements=["path"],
-                set_=row,
-            )
+        stmt = self._dialect.upsert_file(row)
         self._conn.execute(stmt)
         self._conn.commit()
 
@@ -237,10 +220,7 @@ class QueryBuilder:
         return [self._row_to_node(r) for r in self._conn.execute(stmt).fetchall()]
 
     def get_nodes_by_lower_name(self, lower_name: str) -> list[Node]:
-        if self._dialect == "postgresql":
-            stmt = select(*_NODE_COLUMNS).where(func.lower(nodes.c.name) == lower_name)
-        else:
-            stmt = select(*_NODE_COLUMNS).where(func.lower(nodes.c.name) == lower_name)
+        stmt = select(*_NODE_COLUMNS).where(func.lower(nodes.c.name) == lower_name)
         return [self._row_to_node(r) for r in self._conn.execute(stmt).fetchall()]
 
     def get_nodes_by_file(self, file_path: str) -> list[Node]:
@@ -293,32 +273,7 @@ class QueryBuilder:
     def find_edges_between_nodes(self, node_ids: list[str], kinds: Optional[list[str]] = None) -> list[Edge]:
         if not node_ids:
             return []
-        if self._dialect == "sqlite":
-            ids_json = json.dumps(node_ids)
-            sql = (
-                "SELECT source, target, kind, metadata, line, col, provenance FROM edges "
-                "WHERE source IN (SELECT value FROM json_each(:ids)) "
-                "AND target IN (SELECT value FROM json_each(:ids2))"
-            )
-            params = {"ids": ids_json, "ids2": ids_json}
-            if kinds:
-                placeholders = ",".join(f":k{i}" for i in range(len(kinds)))
-                sql += f" AND kind IN ({placeholders})"
-                for i, k in enumerate(kinds):
-                    params[f"k{i}"] = k
-            rows = self._conn.execute(text(sql), params).fetchall()
-        else:
-            sql = (
-                "SELECT source, target, kind, metadata, line, col, provenance FROM edges "
-                "WHERE source = ANY(:ids) AND target = ANY(:ids2)"
-            )
-            params = {"ids": node_ids, "ids2": node_ids}
-            if kinds:
-                placeholders = ",".join(f":k{i}" for i in range(len(kinds)))
-                sql += f" AND kind IN ({placeholders})"
-                for i, k in enumerate(kinds):
-                    params[f"k{i}"] = k
-            rows = self._conn.execute(text(sql), params).fetchall()
+        rows = self._dialect.find_edges_between_nodes(self._conn, node_ids, kinds)
         return [self._row_to_edge(r) for r in rows]
 
     # =========================================================================
@@ -598,10 +553,7 @@ class QueryBuilder:
                 }
                 for n in nodes_data
             ]
-            if self._dialect == "sqlite":
-                stmt = sqlite_insert(nodes).on_conflict_do_nothing(index_elements=["id"])
-            else:
-                stmt = pg_insert(nodes).on_conflict_do_nothing(index_elements=["id"])
+            stmt = self._dialect.insert_nodes_ignore()
             self._conn.execute(stmt, rows)
 
         # Edges
@@ -645,14 +597,7 @@ class QueryBuilder:
                     "modified_at": rec.modified_at, "indexed_at": rec.indexed_at,
                     "node_count": rec.node_count, "errors": rec.errors,
                 }
-                if self._dialect == "sqlite":
-                    stmt = sqlite_insert(files).values(**row).on_conflict_do_update(
-                        index_elements=["path"], set_=row,
-                    )
-                else:
-                    stmt = pg_insert(files).values(**row).on_conflict_do_update(
-                        index_elements=["path"], set_=row,
-                    )
+                stmt = self._dialect.upsert_file(row)
                 self._conn.execute(stmt)
 
         self._conn.commit()
@@ -679,91 +624,10 @@ class QueryBuilder:
         kinds: Optional[list[str]], languages: Optional[list[str]],
         limit: int, offset: int,
     ) -> list[SearchResult]:
-        if self._dialect == "sqlite":
-            return self._search_nodes_fts_sqlite(text, kinds, languages, limit, offset)
-        elif self._dialect == "postgresql":
-            return self._search_nodes_fts_pg(text, kinds, languages, limit, offset)
-        return []
-
-    def _search_nodes_fts_sqlite(
-        self, text: str,
-        kinds: Optional[list[str]], languages: Optional[list[str]],
-        limit: int, offset: int,
-    ) -> list[SearchResult]:
-        fts_terms = " OR ".join(
-            f'"{t}"*'
-            for t in text.split()
-            if t and t.upper() not in ("AND", "OR", "NOT", "NEAR")
-        )
-        if not fts_terms:
-            return []
-
-        fts_limit = max(limit * 5, 100)
-        sql = (
-            "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path, n.language, "
-            "n.start_line, n.end_line, n.start_column, n.end_column, "
-            "n.docstring, n.signature, n.visibility, n.is_exported, n.is_async, "
-            "n.is_static, n.is_abstract, n.decorators, n.type_parameters, n.updated_at, "
-            "bm25(nodes_fts, 0, 20, 5, 1, 2) as score "
-            "FROM nodes_fts fts JOIN nodes n ON n.id = fts.id "
-            "WHERE nodes_fts MATCH :match"
-        )
-        params: dict = {"match": fts_terms}
-        if kinds:
-            ph = ",".join(f":k{i}" for i in range(len(kinds)))
-            sql += f" AND n.kind IN ({ph})"
-            for i, k in enumerate(kinds):
-                params[f"k{i}"] = k
-        if languages:
-            ph = ",".join(f":l{i}" for i in range(len(languages)))
-            sql += f" AND n.language IN ({ph})"
-            for i, l in enumerate(languages):
-                params[f"l{i}"] = l
-        sql += " ORDER BY score LIMIT :lim OFFSET :off"
-        params["lim"] = fts_limit
-        params["off"] = offset
-
         try:
-            rows = self._conn.execute(text(sql), params).fetchall()
-            return [SearchResult(node=self._row_to_node(r[:20]), score=abs(r[20])) for r in rows]
-        except Exception:
-            return []
-
-    def _search_nodes_fts_pg(
-        self, query_text: str,
-        kinds: Optional[list[str]], languages: Optional[list[str]],
-        limit: int, offset: int,
-    ) -> list[SearchResult]:
-        fts_limit = max(limit * 5, 100)
-        # OR-based tsquery: multiple keywords → match any, rank by relevance.
-        # plainto_tsquery tokenizes safely, then replace & with | for OR.
-        sql = (
-            "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path, n.language, "
-            "n.start_line, n.end_line, n.start_column, n.end_column, "
-            "n.docstring, n.signature, n.visibility, n.is_exported, n.is_async, "
-            "n.is_static, n.is_abstract, n.decorators, n.type_parameters, n.updated_at, "
-            "ts_rank(n.fts, ts_q) as score "
-            "FROM nodes n, "
-            "(SELECT replace(plainto_tsquery('simple', :query)::text, '&', '|')::tsquery AS ts_q) sub "
-            "WHERE n.fts @@ sub.ts_q"
-        )
-        params: dict = {"query": query_text}
-        if kinds:
-            ph = ",".join(f":k{i}" for i in range(len(kinds)))
-            sql += f" AND n.kind IN ({ph})"
-            for i, k in enumerate(kinds):
-                params[f"k{i}"] = k
-        if languages:
-            ph = ",".join(f":l{i}" for i in range(len(languages)))
-            sql += f" AND n.language IN ({ph})"
-            for i, l in enumerate(languages):
-                params[f"l{i}"] = l
-        sql += " ORDER BY score DESC LIMIT :lim OFFSET :off"
-        params["lim"] = fts_limit
-        params["off"] = offset
-
-        try:
-            rows = self._conn.execute(text(sql), params).fetchall()
+            rows = self._dialect.search_nodes_fts(
+                self._conn, text, kinds, languages, limit, offset,
+            )
             return [SearchResult(node=self._row_to_node(r[:20]), score=abs(r[20])) for r in rows]
         except Exception:
             return []
