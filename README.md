@@ -69,6 +69,29 @@ The InferDB backend creates MySQL-compatible tables and uses InferDB's
 `PRAGMA create_fts_index` / `match_bm25` support for symbol search through a
 DuckDB shadow FTS table.
 
+For integrations that manage CodeGraph databases outside pycodegraph, use
+`InferDBCodeGraphBackend` instead of manually creating MySQL and DuckDB schemas:
+
+```python
+from pycodegraph import CodeGraph, InferDBCodeGraphBackend
+
+backend = InferDBCodeGraphBackend(
+    host="127.0.0.1",
+    port=3307,
+    user="test",
+    password="123456",
+)
+
+db_url = backend.ensure_database("cg_1234abcd")
+cg = CodeGraph.init("/path/to/project", {"db_url": db_url})
+```
+
+`ensure_database()` creates the MySQL database, ensures the matching
+InferDB DuckDB schema under `ltmdb_sql`, and returns a `?backend=inferdb` URL.
+Use `existing_database_url()` on read paths when missing databases should return
+`None` instead of being created. Use `open_codegraph(database)` when a read path
+wants pycodegraph to open the `CodeGraph` instance directly.
+
 ## Development
 
 ```bash

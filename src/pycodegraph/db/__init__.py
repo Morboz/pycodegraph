@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, event, text, Engine
 from sqlalchemy import Connection as SAConnection
 from sqlalchemy.engine import make_url
 
+from .inferdb import ensure_inferdb_duck_schema
 from .tables import metadata, schema_versions
 
 
@@ -83,6 +84,7 @@ def _init_postgresql_fts(engine: Engine) -> None:
 
 def _init_inferdb_schema(engine: Engine) -> None:
     """Create MySQL-compatible tables for InferDB."""
+    ensure_inferdb_duck_schema(engine)
     with engine.begin() as conn:
         conn.execute(text(
             "CREATE TABLE IF NOT EXISTS schema_versions ("

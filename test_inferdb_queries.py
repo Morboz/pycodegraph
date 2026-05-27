@@ -15,7 +15,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.dialects import mysql
 from sqlalchemy.engine import make_url
 
-from pycodegraph import CodeGraph
+from pycodegraph import CodeGraph, InferDBCodeGraphBackend
 from pycodegraph.types import Edge, EdgeKind, FileRecord, Language, Node, NodeKind, UnresolvedReference
 from pycodegraph.db import _init_inferdb_schema, prepare_engine_url, resolve_backend_name
 from pycodegraph.db.dialects import InferDBQueryDialect, get_query_dialect
@@ -33,6 +33,9 @@ class _FakeResult:
 
     def fetchall(self) -> list[tuple]:
         return self._rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
 
 
 class _FakeConnection:
@@ -98,6 +101,9 @@ class _FakeEngine:
         self.conn = _FakeConnection()
 
     def begin(self) -> _FakeBegin:
+        return _FakeBegin(self.conn)
+
+    def connect(self) -> _FakeBegin:
         return _FakeBegin(self.conn)
 
 
@@ -182,6 +188,64 @@ def test_engine_url_sanitization() -> None:
     )
 
 
+def test_inferdb_backend_lifecycle_sql_and_urls() -> None:
+    engine = _FakeEngine()
+    backend = InferDBCodeGraphBackend(
+        host="db.local",
+        port=3307,
+        user="test",
+        password="p@ss/word",
+        engine_factory=lambda _url: engine,
+    )
+
+    db_url = backend.ensure_database("cg_1234abcd")
+
+    check(
+        "InferDB backend URL includes backend marker",
+        db_url == "mysql+pymysql://test:p%40ss%2Fword@db.local:3307/cg_1234abcd?backend=inferdb",
+        db_url,
+    )
+    check(
+        "InferDB backend creates MySQL database",
+        "CREATE DATABASE IF NOT EXISTS `cg_1234abcd`" in engine.conn.sql,
+        str(engine.conn.sql),
+    )
+    check(
+        "InferDB backend creates DuckDB ltmdb_sql schema",
+        '/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql."cg_1234abcd"' in engine.conn.raw_sql,
+        str(engine.conn.raw_sql),
+    )
+
+    backend.drop_database("cg_1234abcd")
+    check(
+        "InferDB backend drops DuckDB ltmdb_sql schema",
+        '/*+ duck_execute */ DROP SCHEMA IF EXISTS ltmdb_sql."cg_1234abcd" CASCADE' in engine.conn.raw_sql,
+        str(engine.conn.raw_sql),
+    )
+
+
+def test_inferdb_backend_existing_database_does_not_create() -> None:
+    engine = _FakeEngine()
+    backend = InferDBCodeGraphBackend(
+        host="db.local",
+        port=3307,
+        user="test",
+        password="secret",
+        engine_factory=lambda _url: engine,
+    )
+
+    db_url = backend.existing_database_url("missing_db")
+    codegraph = backend.open_codegraph("missing_db")
+
+    check("InferDB backend returns None for missing database", db_url is None, str(db_url))
+    check("InferDB backend opens missing CodeGraph as None", codegraph is None, str(codegraph))
+    check(
+        "InferDB backend existing lookup does not create database",
+        not any("CREATE DATABASE" in sql for sql in engine.conn.sql),
+        str(engine.conn.sql),
+    )
+
+
 def test_inferdb_schema_keeps_long_reference_names() -> None:
     engine = _FakeEngine()
 
@@ -192,6 +256,11 @@ def test_inferdb_schema_keeps_long_reference_names() -> None:
         stmt for stmt in engine.conn.sql if "CREATE TABLE IF NOT EXISTS unresolved_refs" in stmt
     )
     check("InferDB schema creates unresolved_refs", "unresolved_refs" in sql, sql)
+    check(
+        "InferDB schema ensures DuckDB ltmdb_sql schema",
+        '/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql."codegraph_query_test"' in engine.conn.raw_sql,
+        str(engine.conn.raw_sql),
+    )
     check(
         "InferDB unresolved_refs reference_name is TEXT",
         "reference_name TEXT NOT NULL" in unresolved_refs_sql,
@@ -429,6 +498,8 @@ def test_inferdb_smoke() -> None:
 if __name__ == "__main__":
     test_backend_resolution()
     test_engine_url_sanitization()
+    test_inferdb_backend_lifecycle_sql_and_urls()
+    test_inferdb_backend_existing_database_does_not_create()
     test_inferdb_schema_keeps_long_reference_names()
     test_inferdb_query_dialect()
     test_prepare_node_rows_fts_text_handling()
