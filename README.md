@@ -66,7 +66,8 @@ python -m pycodegraph.example /path/to/project \
 ```
 
 The InferDB backend creates MySQL-compatible tables and uses InferDB's
-`PRAGMA create_fts_index` / `match_bm25` support for symbol search.
+`PRAGMA create_fts_index` / `match_bm25` support for symbol search through a
+DuckDB shadow FTS table.
 
 ## Development
 

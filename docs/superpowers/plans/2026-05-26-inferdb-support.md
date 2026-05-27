@@ -4,7 +4,7 @@
 
 **Goal:** Add InferDB as an explicit pycodegraph backend using MySQL-compatible relational tables and InferDB FTS search.
 
-**Architecture:** Keep `QueryBuilder` public APIs unchanged and route database-specific behavior through backend-specific schema initializers and query dialects. InferDB is selected explicitly from a MySQL URL with `backend=inferdb`, uses MySQL DDL/DML for relational storage, and refreshes an InferDB FTS index over `nodes.fts_text` after node-changing writes.
+**Architecture:** Keep `QueryBuilder` public APIs unchanged and route database-specific behavior through backend-specific schema initializers and query dialects. InferDB is selected explicitly from a MySQL URL with `backend=inferdb`, uses MySQL DDL/DML for relational storage, and refreshes an InferDB DuckDB shadow FTS table from `nodes.fts_text` after node-changing writes.
 
 **Tech Stack:** Python 3.10+, SQLAlchemy Core, SQLite, PostgreSQL, MySQL-compatible InferDB, pytest/standalone smoke scripts.
 
@@ -13,7 +13,7 @@
 ## File Structure
 
 - Modify `src/pycodegraph/db/__init__.py`: resolve logical backend names, split schema initialization by backend, add InferDB MySQL-compatible DDL and InferDB FTS setup.
-- Modify `src/pycodegraph/db/dialects.py`: add `InferDBQueryDialect`, backend factory input, MySQL DML helpers, FTS refresh hook, and InferDB FTS search SQL.
+- Modify `src/pycodegraph/db/dialects.py`: add `InferDBQueryDialect`, backend factory input, MySQL DML helpers, FTS shadow-table refresh hook, and InferDB FTS search SQL.
 - Modify `src/pycodegraph/db/queries.py`: pass logical backend into dialect selection, populate InferDB-only `fts_text` safely, and call node-change hooks after node insert/delete operations.
 - Create `test_inferdb_queries.py`: optional smoke test driven by `INFERDB_TEST_URL`, skipped when the environment variable is absent.
 - Do not change `QueryBuilder` public methods or type models.

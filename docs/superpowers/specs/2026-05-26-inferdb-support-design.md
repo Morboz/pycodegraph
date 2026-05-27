@@ -43,6 +43,8 @@ The `nodes` table will add an InferDB-only `fts_text TEXT` column containing the
 name qualified_name docstring signature
 ```
 
+InferDB's DuckDB FTS engine cannot index ordinary MySQL tables directly. The InferDB dialect therefore maintains a DuckDB shadow table named `pycodegraph_nodes_fts` under `ltmdb_sql.<database>`, containing `seq_id`, `node_id`, and `fts_text`. FTS search reads ranked node IDs from this shadow table, then fetches full node rows from the MySQL `nodes` table.
+
 ## Query Dialect
 
 An `InferDBQueryDialect` will be added alongside the existing SQLite and PostgreSQL query dialects. It will implement:
@@ -50,7 +52,7 @@ An `InferDBQueryDialect` will be added alongside the existing SQLite and Postgre
 - `insert_nodes_ignore` using MySQL-compatible insert-ignore behavior.
 - `upsert_file` using `ON DUPLICATE KEY UPDATE`.
 - `find_edges_between_nodes` using MySQL-compatible `IN (...)` predicates.
-- `search_nodes_fts` using InferDB `match_bm25` over the `nodes` FTS index.
+- `search_nodes_fts` using InferDB `match_bm25` over the DuckDB shadow FTS table.
 
 The `QueryBuilder` API stays stable. Internally, it will ask for a logical backend dialect instead of relying only on `conn.engine.dialect.name`.
 
@@ -67,23 +69,25 @@ The dialect interface will gain an `after_nodes_changed(conn)` hook. SQLite and 
 
 ```sql
 /*+ duck_execute */
-PRAGMA create_fts_index('ltmdb_sql.<database>.nodes', 'id', 'fts_text')
+PRAGMA create_fts_index('ltmdb_sql.<database>.pycodegraph_nodes_fts', 'seq_id', 'fts_text', overwrite=1)
 ```
 
 FTS query shape:
 
 ```sql
 /*+ duck_execute */
-SELECT n.id, ..., ltmdb_sql.fts_<database>_nodes.match_bm25(
-  n.id,
+SELECT node_id, ltmdb_sql.fts_<database>_pycodegraph_nodes_fts.match_bm25(
+  seq_id,
   :query,
   fields := 'fts_text'
 ) AS score
-FROM ltmdb_sql.<database>.nodes n
+FROM ltmdb_sql.<database>.pycodegraph_nodes_fts
 WHERE score IS NOT NULL
 ORDER BY score DESC
 LIMIT :lim OFFSET :off
 ```
+
+The returned `node_id` values are then used in a normal MySQL query against `nodes` to return the existing `QueryBuilder` row shape.
 
 ## Testing
 
