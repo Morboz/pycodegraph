@@ -28,8 +28,11 @@ TEST_URL = os.environ.get("INFERDB_TEST_URL")
 
 
 class _FakeResult:
+    def __init__(self, rows: list[tuple] | None = None) -> None:
+        self._rows = rows or []
+
     def fetchall(self) -> list[tuple]:
-        return []
+        return self._rows
 
 
 class _FakeConnection:
@@ -39,8 +42,11 @@ class _FakeConnection:
         self.params: list[dict] = []
 
     def execute(self, stmt, params=None):
-        self.sql.append(str(stmt))
+        sql = str(stmt)
+        self.sql.append(sql)
         self.params.append(params or {})
+        if sql == "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''":
+            return _FakeResult([("node-1", "QueryBuilder search_nodes")])
         return _FakeResult()
 
 
@@ -261,8 +267,9 @@ def test_inferdb_fts_sql_shape() -> None:
 
     check("InferDB FTS uses DuckDB execution hint", "/*+ duck_execute */" in sql, sql)
     check("InferDB FTS uses match_bm25", "match_bm25(" in sql, sql)
-    check("InferDB FTS scores n.id", "n.id" in sql, sql)
+    check("InferDB FTS scores seq_id", "seq_id" in sql, sql)
     check("InferDB FTS uses fts_text field", "fields := 'fts_text'" in sql, sql)
+    check("InferDB FTS reads shadow table", "pycodegraph_nodes_fts" in sql, sql)
     check("InferDB FTS filters non-matches", "WHERE score IS NOT NULL" in sql, sql)
     check("InferDB FTS does not join FTS table", "JOIN ltmdb_sql" not in sql, sql)
 
@@ -275,6 +282,8 @@ def test_inferdb_after_nodes_changed_sql_shape() -> None:
     check("InferDB refresh creates FTS index", "PRAGMA create_fts_index" in sql, sql)
     check("InferDB refresh uses DuckDB execution hint", "/*+ duck_execute */" in sql, sql)
     check("InferDB refresh indexes fts_text", "fts_text" in sql, sql)
+    check("InferDB refresh indexes seq_id", "'seq_id'" in sql, sql)
+    check("InferDB refresh uses shadow table", "pycodegraph_nodes_fts" in sql, sql)
     check("InferDB refresh overwrites existing FTS index", "overwrite=1" in sql, sql)
     check("InferDB refresh escapes database string", "code''graph" in sql, sql)
 

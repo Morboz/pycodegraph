@@ -184,6 +184,7 @@ class PostgreSQLQueryDialect(QueryDialect):
 
 class InferDBQueryDialect(QueryDialect):
     name = "inferdb"
+    _fts_table = "pycodegraph_nodes_fts"
 
     def insert_nodes_ignore(self):
         return text(
@@ -237,35 +238,89 @@ class InferDBQueryDialect(QueryDialect):
         database = conn.engine.url.database
         if not database:
             return []
-        database_identifier = _mysql_identifier(database)
-        fts_database_identifier = _mysql_identifier(f"fts_{database}_nodes")
+        database_identifier = _duck_identifier(database)
+        fts_database_identifier = _duck_identifier(f"fts_{database}_{self._fts_table}")
+        fts_table_identifier = _duck_identifier(self._fts_table)
         fts_limit = max(limit * 5, 100)
-        sql = (
+        fts_sql = (
             "/*+ duck_execute */ SELECT "
-            "n.id, n.kind, n.name, n.qualified_name, n.file_path, n.language, "
-            "n.start_line, n.end_line, n.start_column, n.end_column, "
-            "n.docstring, n.signature, n.visibility, n.is_exported, n.is_async, "
-            "n.is_static, n.is_abstract, n.decorators, n.type_parameters, n.updated_at, "
+            "node_id, "
             f"ltmdb_sql.{fts_database_identifier}.match_bm25("
-            "n.id, :query, fields := 'fts_text') AS score "
-            f"FROM ltmdb_sql.{database_identifier}.nodes n "
+            "seq_id, :query, fields := 'fts_text') AS score "
+            f"FROM ltmdb_sql.{database_identifier}.{fts_table_identifier} "
             "WHERE score IS NOT NULL"
         )
-        params: dict[str, Any] = {"query": query_text}
-        sql, params = _append_filters(sql, params, kinds, languages)
-        sql += " ORDER BY score DESC LIMIT :lim OFFSET :off"
-        params["lim"] = fts_limit
-        params["off"] = offset
+        fts_params: dict[str, Any] = {"query": query_text, "lim": fts_limit, "off": offset}
+        fts_sql += " ORDER BY score DESC LIMIT :lim OFFSET :off"
+        matches = conn.execute(text(fts_sql), fts_params).fetchall()
+        if not matches:
+            return []
 
-        return conn.execute(text(sql), params).fetchall()
+        node_ids = [row[0] for row in matches]
+        scores = {row[0]: row[1] for row in matches}
+        placeholders = ",".join(f":id{i}" for i in range(len(node_ids)))
+        sql = (
+            "SELECT id, kind, name, qualified_name, file_path, language, "
+            "start_line, end_line, start_column, end_column, "
+            "docstring, signature, visibility, is_exported, is_async, "
+            "is_static, is_abstract, decorators, type_parameters, updated_at "
+            f"FROM nodes WHERE id IN ({placeholders})"
+        )
+        params: dict[str, Any] = {f"id{i}": node_id for i, node_id in enumerate(node_ids)}
+        if kinds:
+            placeholders = ",".join(f":k{i}" for i in range(len(kinds)))
+            sql += f" AND kind IN ({placeholders})"
+            for i, kind in enumerate(kinds):
+                params[f"k{i}"] = kind
+        if languages:
+            placeholders = ",".join(f":l{i}" for i in range(len(languages)))
+            sql += f" AND language IN ({placeholders})"
+            for i, language in enumerate(languages):
+                params[f"l{i}"] = language
+
+        rows = conn.execute(text(sql), params).fetchall()
+        row_by_id = {row[0]: tuple(row) for row in rows}
+        return [
+            row_by_id[node_id] + (scores[node_id],)
+            for node_id in node_ids
+            if node_id in row_by_id
+        ]
 
     def after_nodes_changed(self, conn: Connection) -> None:
         database = conn.engine.url.database
         if not database:
             return
-        table_name = _sql_string_literal(f"ltmdb_sql.{database}.nodes")
+        database_identifier = _duck_identifier(database)
+        fts_table_identifier = _duck_identifier(self._fts_table)
+        qualified_table = f"ltmdb_sql.{database_identifier}.{fts_table_identifier}"
+        conn.execute(text(f"/*+ duck_execute */ DROP TABLE IF EXISTS {qualified_table}"))
         conn.execute(text(
-            f"/*+ duck_execute */ PRAGMA create_fts_index({table_name}, 'id', 'fts_text', overwrite=1)"
+            f"/*+ duck_execute */ CREATE TABLE {qualified_table} ("
+            "seq_id INTEGER, node_id VARCHAR, fts_text VARCHAR)"
+        ))
+        rows = conn.execute(text(
+            "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''"
+        )).fetchall()
+        for start in range(0, len(rows), 500):
+            chunk = rows[start:start + 500]
+            values = ", ".join(
+                "("
+                f"{start + i + 1}, "
+                f"{_sql_string_literal(str(row[0]))}, "
+                f"{_sql_string_literal(str(row[1]))}"
+                ")"
+                for i, row in enumerate(chunk)
+            )
+            if values:
+                conn.execute(text(
+                    f"/*+ duck_execute */ INSERT INTO {qualified_table} "
+                    f"(seq_id, node_id, fts_text) VALUES {values}"
+                ))
+        if not rows:
+            return
+        table_name = _sql_string_literal(f"ltmdb_sql.{database}.{self._fts_table}")
+        conn.execute(text(
+            f"/*+ duck_execute */ PRAGMA create_fts_index({table_name}, 'seq_id', 'fts_text', overwrite=1)"
         ))
 
     def prepare_node_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -301,8 +356,8 @@ def _append_filters(
     return sql, params
 
 
-def _mysql_identifier(identifier: str) -> str:
-    return f"`{identifier.replace('`', '``')}`"
+def _duck_identifier(identifier: str) -> str:
+    return f'"{identifier.replace(chr(34), chr(34) + chr(34))}"'
 
 
 def _sql_string_literal(value: str) -> str:
