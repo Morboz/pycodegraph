@@ -293,11 +293,12 @@ class InferDBQueryDialect(QueryDialect):
         database_identifier = _duck_identifier(database)
         fts_table_identifier = _duck_identifier(self._fts_table)
         qualified_table = f"ltmdb_sql.{database_identifier}.{fts_table_identifier}"
-        conn.execute(text(f"/*+ duck_execute */ DROP TABLE IF EXISTS {qualified_table}"))
-        conn.execute(text(
+        _exec_raw_driver_sql(conn, f"/*+ duck_execute */ DROP TABLE IF EXISTS {qualified_table}")
+        _exec_raw_driver_sql(
+            conn,
             f"/*+ duck_execute */ CREATE TABLE {qualified_table} ("
             "seq_id INTEGER, node_id VARCHAR, fts_text VARCHAR)"
-        ))
+        )
         rows = conn.execute(text(
             "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''"
         )).fetchall()
@@ -312,16 +313,18 @@ class InferDBQueryDialect(QueryDialect):
                 for i, row in enumerate(chunk)
             )
             if values:
-                conn.execute(text(
+                _exec_raw_driver_sql(
+                    conn,
                     f"/*+ duck_execute */ INSERT INTO {qualified_table} "
                     f"(seq_id, node_id, fts_text) VALUES {values}"
-                ))
+                )
         if not rows:
             return
         table_name = _sql_string_literal(f"ltmdb_sql.{database}.{self._fts_table}")
-        conn.execute(text(
+        _exec_raw_driver_sql(
+            conn,
             f"/*+ duck_execute */ PRAGMA create_fts_index({table_name}, 'seq_id', 'fts_text', overwrite=1)"
-        ))
+        )
 
     def prepare_node_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return rows
@@ -362,3 +365,9 @@ def _duck_identifier(identifier: str) -> str:
 
 def _sql_string_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+def _exec_raw_driver_sql(conn: Connection, sql: str) -> None:
+    """Execute SQL without SQLAlchemy or DBAPI parameter parsing."""
+    with conn.connection.driver_connection.cursor() as cursor:
+        cursor.execute(sql)

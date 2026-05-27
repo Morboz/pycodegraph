@@ -17,7 +17,7 @@ from sqlalchemy.engine import make_url
 
 from pycodegraph import CodeGraph
 from pycodegraph.types import Edge, EdgeKind, FileRecord, Language, Node, NodeKind, UnresolvedReference
-from pycodegraph.db import prepare_engine_url, resolve_backend_name
+from pycodegraph.db import _init_inferdb_schema, prepare_engine_url, resolve_backend_name
 from pycodegraph.db.dialects import InferDBQueryDialect, get_query_dialect
 from pycodegraph.db.queries import _node_row, _node_search_text
 from pycodegraph.db.queries import QueryBuilder
@@ -39,7 +39,10 @@ class _FakeConnection:
     def __init__(self, database: str = "codegraph_query_test") -> None:
         self.engine = SimpleNamespace(url=SimpleNamespace(database=database))
         self.sql: list[str] = []
+        self.driver_sql: list[str] = []
+        self.raw_sql: list[str] = []
         self.params: list[dict] = []
+        self.connection = SimpleNamespace(driver_connection=_FakeDriverConnection(self))
 
     def execute(self, stmt, params=None):
         sql = str(stmt)
@@ -48,6 +51,54 @@ class _FakeConnection:
         if sql == "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''":
             return _FakeResult([("node-1", "QueryBuilder search_nodes")])
         return _FakeResult()
+
+    def exec_driver_sql(self, sql: str):
+        self.sql.append(sql)
+        self.driver_sql.append(sql)
+        self.params.append({})
+        return _FakeResult()
+
+
+class _FakeCursor:
+    def __init__(self, conn: _FakeConnection) -> None:
+        self.conn = conn
+
+    def __enter__(self) -> _FakeCursor:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def execute(self, sql: str) -> None:
+        self.conn.sql.append(sql)
+        self.conn.raw_sql.append(sql)
+
+
+class _FakeDriverConnection:
+    def __init__(self, conn: _FakeConnection) -> None:
+        self.conn = conn
+
+    def cursor(self) -> _FakeCursor:
+        return _FakeCursor(self.conn)
+
+
+class _FakeBegin:
+    def __init__(self, conn: _FakeConnection) -> None:
+        self.conn = conn
+
+    def __enter__(self) -> _FakeConnection:
+        return self.conn
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+
+class _FakeEngine:
+    def __init__(self) -> None:
+        self.conn = _FakeConnection()
+
+    def begin(self) -> _FakeBegin:
+        return _FakeBegin(self.conn)
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -128,6 +179,23 @@ def test_engine_url_sanitization() -> None:
         "engine URL preserves other query params",
         parsed.query.get("charset") == "utf8mb4",
         str(parsed.query),
+    )
+
+
+def test_inferdb_schema_keeps_long_reference_names() -> None:
+    engine = _FakeEngine()
+
+    _init_inferdb_schema(engine)
+
+    sql = "\n".join(engine.conn.sql)
+    unresolved_refs_sql = next(
+        stmt for stmt in engine.conn.sql if "CREATE TABLE IF NOT EXISTS unresolved_refs" in stmt
+    )
+    check("InferDB schema creates unresolved_refs", "unresolved_refs" in sql, sql)
+    check(
+        "InferDB unresolved_refs reference_name is TEXT",
+        "reference_name TEXT NOT NULL" in unresolved_refs_sql,
+        unresolved_refs_sql,
     )
 
 
@@ -288,6 +356,29 @@ def test_inferdb_after_nodes_changed_sql_shape() -> None:
     check("InferDB refresh escapes database string", "code''graph" in sql, sql)
 
 
+def test_inferdb_after_nodes_changed_uses_driver_sql_for_fts_literals() -> None:
+    conn = _FakeConnection()
+
+    def execute(stmt, params=None):
+        sql = str(stmt)
+        conn.sql.append(sql)
+        conn.params.append(params or {})
+        if sql == "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''":
+            return _FakeResult([("node-1", "field_size_re (?P<var>char)")])
+        return _FakeResult()
+
+    conn.execute = execute
+
+    InferDBQueryDialect().after_nodes_changed(conn)
+
+    insert_sql = next(stmt for stmt in conn.sql if "INSERT INTO ltmdb_sql" in stmt)
+    check(
+        "InferDB FTS literal insert uses raw cursor SQL",
+        insert_sql in conn.raw_sql,
+        insert_sql,
+    )
+
+
 def test_inferdb_mysql_statement_shapes() -> None:
     dialect = InferDBQueryDialect()
     mysql_dialect = mysql.dialect()
@@ -338,6 +429,7 @@ def test_inferdb_smoke() -> None:
 if __name__ == "__main__":
     test_backend_resolution()
     test_engine_url_sanitization()
+    test_inferdb_schema_keeps_long_reference_names()
     test_inferdb_query_dialect()
     test_prepare_node_rows_fts_text_handling()
     test_node_search_text_and_row()
@@ -345,6 +437,7 @@ if __name__ == "__main__":
     test_delete_files_batch_removes_nodes_for_all_paths()
     test_inferdb_fts_sql_shape()
     test_inferdb_after_nodes_changed_sql_shape()
+    test_inferdb_after_nodes_changed_uses_driver_sql_for_fts_literals()
     test_inferdb_mysql_statement_shapes()
     test_inferdb_smoke()
     print("InferDB smoke checks completed")

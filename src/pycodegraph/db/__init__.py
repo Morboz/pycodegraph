@@ -144,7 +144,7 @@ def _init_inferdb_schema(engine: Engine) -> None:
             "CREATE TABLE IF NOT EXISTS unresolved_refs ("
             "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
             "from_node_id VARCHAR(512) NOT NULL,"
-            "reference_name VARCHAR(512) NOT NULL,"
+            "reference_name TEXT NOT NULL,"
             "reference_kind VARCHAR(64) NOT NULL,"
             "line INT NOT NULL,"
             "col INT NOT NULL,"
