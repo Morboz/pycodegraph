@@ -52,6 +52,23 @@ All data is stored in `.codegraph/` within the project directory:
 - `codegraph.db` — SQLite database with nodes, edges, and file records
 - `config.json` — Project configuration
 
+### InferDB backend
+
+InferDB is supported as a MySQL-compatible relational backend with InferDB FTS.
+Install the InferDB extra, then use a MySQL SQLAlchemy URL and mark the logical
+backend explicitly:
+
+```bash
+uv sync --extra inferdb
+
+python -m pycodegraph.example /path/to/project \
+  --db 'mysql+pymysql://user:pass@host:port/db?backend=inferdb'
+```
+
+The InferDB backend creates MySQL-compatible tables and uses InferDB's
+`PRAGMA create_fts_index` / `match_bm25` support for symbol search through a
+DuckDB shadow FTS table.
+
 ## Development
 
 ```bash
