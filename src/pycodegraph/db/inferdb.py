@@ -8,8 +8,6 @@ from collections.abc import Callable
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import URL
 
-from pycodegraph.config import CodeGraphConfig
-
 
 def _mysql_identifier(identifier: str) -> str:
     return "`" + identifier.replace("`", "``") + "`"
@@ -120,15 +118,11 @@ class InferDBCodeGraphBackend:
     def open_codegraph(self, database: str):
         """Open CodeGraph directly from an existing InferDB database."""
         from pycodegraph import CodeGraph
-        from pycodegraph.db import DatabaseConnection
-        from pycodegraph.db.queries import QueryBuilder
 
         db_url = self.existing_database_url(database)
         if db_url is None:
             return None
-        db = DatabaseConnection.open(db_url)
-        queries = QueryBuilder(db.get_connection())
-        return CodeGraph(db, queries, CodeGraphConfig(db_url=db_url), project_root="")
+        return CodeGraph.open_from_url(db_url)
 
     def _url(self, *, database: str | None, backend_marker: bool) -> str:
         query = {"backend": "inferdb"} if backend_marker else {}

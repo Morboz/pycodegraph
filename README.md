@@ -409,6 +409,14 @@ Typical lifecycle is:
 
 If the project was already initialized, reopen it with `CodeGraph.open(project_root)`.
 
+To connect directly to an external database by URL (e.g. a PostgreSQL schema) without a `.codegraph/` directory on disk, use `CodeGraph.open_from_url(db_url, project_root="")`:
+
+```python
+cg = CodeGraph.open_from_url("postgresql+psycopg://host/db?schema=myproject")
+stats = cg.get_stats()
+cg.close()
+```
+
 ### Multi-project management
 
 Two common patterns:
