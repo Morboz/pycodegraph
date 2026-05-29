@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import sys
 import time
+
 from pycodegraph import CodeGraph
 
 
@@ -52,7 +53,11 @@ def main():
             print(f"\r  Scanning: {current} files...", end="", flush=True)
         elif phase == "parsing":
             pct = (current / total * 100) if total > 0 else 0
-            print(f"\r  Parsing: {current}/{total} ({pct:.0f}%) - {current_file[:60]:<60}", end="", flush=True)
+            print(
+                f"\r  Parsing: {current}/{total} ({pct:.0f}%) - {current_file[:60]:<60}",
+                end="",
+                flush=True,
+            )
 
     print(f"Indexing {project_path}...")
     result = cg.index_all(on_progress)
@@ -73,7 +78,9 @@ def main():
         print("\nSample nodes:")
         nodes = cg.search("class", limit=5)
         for node in nodes:
-            print(f"  [{node.kind.value}] {node.qualified_name} @ {node.file_path}:{node.start_line}")
+            print(
+                f"  [{node.kind.value}] {node.qualified_name} @ {node.file_path}:{node.start_line}"
+            )
 
     cg.close()
 

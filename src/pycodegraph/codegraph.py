@@ -2,24 +2,31 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, Callable
 
-from .types import (
-    IndexResult, Node, Edge, Context, Subgraph, TaskContext,
-    BuildContextOptions, FindRelevantContextOptions,
-)
-from .config import CodeGraphConfig
 from .config import (
-    CODEGRAPH_DIR, get_db_path, get_config_path, get_db_url,
-    save_config, load_config, create_default_config,
+    CODEGRAPH_DIR,
+    CodeGraphConfig,
+    create_default_config,
+    get_db_url,
+    load_config,
+    save_config,
 )
+from .context.builder import ContextBuilder
 from .db import DatabaseConnection
 from .db.queries import QueryBuilder
 from .extraction.orchestrator import ExtractionOrchestrator
-from .graph import GraphTraverser, GraphQueryManager
-from .context.builder import ContextBuilder
+from .graph import GraphQueryManager, GraphTraverser
 from .resolution import create_resolver
+from .types import (
+    BuildContextOptions,
+    Context,
+    Edge,
+    IndexResult,
+    Node,
+    Subgraph,
+)
 
 
 class CodeGraph:
@@ -50,7 +57,7 @@ class CodeGraph:
     def init(
         cls,
         project_root: str,
-        config_overrides: Optional[dict] = None,
+        config_overrides: dict | None = None,
     ) -> CodeGraph:
         """Initialize a new CodeGraph project.
 
@@ -61,10 +68,15 @@ class CodeGraph:
 
         # For SQLite: check db file; for PG/other: skip (schema is idempotent)
         using_external_db = bool(
-            config_overrides and config_overrides.get("db_url")
+            config_overrides
+            and config_overrides.get("db_url")
             and not config_overrides["db_url"].startswith("sqlite")
         )
-        if not using_external_db and codegraph_dir.exists() and (codegraph_dir / "codegraph.db").exists():
+        if (
+            not using_external_db
+            and codegraph_dir.exists()
+            and (codegraph_dir / "codegraph.db").exists()
+        ):
             raise FileExistsError(f"CodeGraph already initialized in {root}")
 
         # Create directory
@@ -96,9 +108,11 @@ class CodeGraph:
         db_url = get_db_url(root, config)
 
         if db_url.startswith("sqlite:///"):
-            db_path = Path(db_url[len("sqlite:///"):])
+            db_path = Path(db_url[len("sqlite:///") :])
             if not db_path.exists():
-                raise FileNotFoundError(f"CodeGraph not initialized in {root}. Run init() first.")
+                raise FileNotFoundError(
+                    f"CodeGraph not initialized in {root}. Run init() first."
+                )
 
         db = DatabaseConnection.open(db_url)
         queries = QueryBuilder(db.get_connection())
@@ -124,7 +138,7 @@ class CodeGraph:
                 to use any indexing methods.
         """
         if db_url.startswith("sqlite:///"):
-            db_path = Path(db_url[len("sqlite:///"):])
+            db_path = Path(db_url[len("sqlite:///") :])
             if not db_path.exists():
                 raise FileNotFoundError(f"SQLite database not found: {db_path}")
 
@@ -143,7 +157,7 @@ class CodeGraph:
 
     def index_all(
         self,
-        on_progress: Optional[Callable] = None,
+        on_progress: Callable | None = None,
     ) -> IndexResult:
         """Index all files in the project.
 
@@ -174,7 +188,7 @@ class CodeGraph:
         changed_files: list[str],
         removed_files: list[str],
         *,
-        on_progress: Optional[Callable] = None,
+        on_progress: Callable | None = None,
     ) -> IndexResult:
         """Apply incremental changes: index changed files, delete removed files, then resolve.
 
@@ -237,12 +251,16 @@ class CodeGraph:
     # Queries
     # =========================================================================
 
-    def get_node_by_id(self, node_id: str) -> Optional[Node]:
+    def get_node_by_id(self, node_id: str) -> Node | None:
         return self._queries.get_node_by_id(node_id)
 
     def search(self, query: str, limit: int = 20) -> list[Node]:
         from .types import SearchOptions
-        return [r.node for r in self._queries.search_nodes(query, SearchOptions(limit=limit))]
+
+        return [
+            r.node
+            for r in self._queries.search_nodes(query, SearchOptions(limit=limit))
+        ]
 
     def get_callers(self, node_id: str) -> list[Edge]:
         return self._queries.get_callers(node_id)
@@ -265,11 +283,15 @@ class CodeGraph:
         """Get full context for a node (ancestors, children, refs, types, imports)."""
         return self._graph_manager.get_context(node_id)
 
-    def get_callers_deep(self, node_id: str, max_depth: int = 1) -> list[tuple[Node, Edge]]:
+    def get_callers_deep(
+        self, node_id: str, max_depth: int = 1
+    ) -> list[tuple[Node, Edge]]:
         """Find all callers of a function/method up to *max_depth* hops."""
         return self._traverser.get_callers(node_id, max_depth)
 
-    def get_callees_deep(self, node_id: str, max_depth: int = 1) -> list[tuple[Node, Edge]]:
+    def get_callees_deep(
+        self, node_id: str, max_depth: int = 1
+    ) -> list[tuple[Node, Edge]]:
         """Find all functions/methods called by a function up to *max_depth* hops."""
         return self._traverser.get_callees(node_id, max_depth)
 
@@ -302,7 +324,7 @@ class CodeGraph:
     def build_context(
         self,
         task_input,
-        options: Optional[BuildContextOptions] = None,
+        options: BuildContextOptions | None = None,
     ):
         """Build rich context for a task using hybrid search + graph traversal."""
         return self._context_builder.build_context(task_input, options)

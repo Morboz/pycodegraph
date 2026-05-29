@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from tree_sitter import Node as TSNode
 
+from ...extraction.helpers import get_child_by_field, get_node_text
 from .base import LanguageExtractor
-from ...extraction.helpers import get_node_text, get_child_by_field
 
 
 def _ts_get_signature(node: TSNode, source: bytes) -> str | None:
@@ -24,8 +24,12 @@ def _ts_is_exported(node: TSNode, source: bytes) -> bool:
     while parent:
         if parent.type == "export_statement":
             return True
-        if parent.type in ("function_declaration", "class_declaration",
-                           "lexical_declaration", "variable_declaration"):
+        if parent.type in (
+            "function_declaration",
+            "class_declaration",
+            "lexical_declaration",
+            "variable_declaration",
+        ):
             break
         parent = parent.parent
     return False
@@ -70,7 +74,10 @@ def _ts_extract_import(node: TSNode, source: bytes) -> dict | None:
                 c = parent.named_child(i)
                 if c and c.type == "string":
                     name = get_node_text(c, source).strip("'\"")
-                    return {"module_name": name, "signature": get_node_text(parent, source)}
+                    return {
+                        "module_name": name,
+                        "signature": get_node_text(parent, source),
+                    }
     return None
 
 
@@ -85,7 +92,12 @@ def _ts_get_visibility(node: TSNode) -> str | None:
 
 
 TYPESCRIPT_EXTRACTOR = LanguageExtractor(
-    function_types=["function_declaration", "function_expression", "arrow_function", "generator_function_declaration"],
+    function_types=[
+        "function_declaration",
+        "function_expression",
+        "arrow_function",
+        "generator_function_declaration",
+    ],
     class_types=["class_declaration", "class"],
     method_types=["method_definition", "generator_function_declaration"],
     interface_types=["interface_declaration"],

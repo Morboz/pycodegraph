@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from tree_sitter import Node as TSNode
 
-from .base import LanguageExtractor
-from ...extraction.helpers import get_node_text, get_child_by_field
+from ...extraction.helpers import get_node_text
 from ...types import NodeKind
+from .base import LanguageExtractor
 
 
 def _go_get_receiver_type(node: TSNode, source: bytes) -> str | None:

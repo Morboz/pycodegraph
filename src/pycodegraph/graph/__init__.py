@@ -1,6 +1,6 @@
 """Graph module - traversal algorithms and query management."""
 
-from .traversal import GraphTraverser
 from .queries import GraphQueryManager
+from .traversal import GraphTraverser
 
-__all__ = ["GraphTraverser", "GraphQueryManager"]
+__all__ = ["GraphQueryManager", "GraphTraverser"]

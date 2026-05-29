@@ -5,8 +5,6 @@ from __future__ import annotations
 from tree_sitter import Node as TSNode
 
 from .base import LanguageExtractor
-from ...extraction.helpers import get_node_text, get_child_by_field
-from ...types import NodeKind
 
 
 def _rust_get_visibility(node: TSNode) -> str | None:

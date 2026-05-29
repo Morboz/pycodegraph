@@ -2,19 +2,30 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Column, Integer, BigInteger, Float, Text, MetaData, Table, ForeignKey
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    Float,
+    ForeignKey,
+    Integer,
+    MetaData,
+    Table,
+    Text,
+)
 
 metadata = MetaData()
 
 schema_versions = Table(
-    "schema_versions", metadata,
+    "schema_versions",
+    metadata,
     Column("version", Integer, primary_key=True),
     Column("applied_at", BigInteger, nullable=False),
     Column("description", Text),
 )
 
 nodes = Table(
-    "nodes", metadata,
+    "nodes",
+    metadata,
     Column("id", Text, primary_key=True),
     Column("kind", Text, nullable=False),
     Column("name", Text, nullable=False),
@@ -38,7 +49,8 @@ nodes = Table(
 )
 
 edges = Table(
-    "edges", metadata,
+    "edges",
+    metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("source", Text, ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False),
     Column("target", Text, ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False),
@@ -50,7 +62,8 @@ edges = Table(
 )
 
 files = Table(
-    "files", metadata,
+    "files",
+    metadata,
     Column("path", Text, primary_key=True),
     Column("content_hash", Text, nullable=False),
     Column("language", Text, nullable=False),
@@ -62,9 +75,12 @@ files = Table(
 )
 
 unresolved_refs = Table(
-    "unresolved_refs", metadata,
+    "unresolved_refs",
+    metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("from_node_id", Text, ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False),
+    Column(
+        "from_node_id", Text, ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False
+    ),
     Column("reference_name", Text, nullable=False),
     Column("reference_kind", Text, nullable=False),
     Column("line", Integer, nullable=False),
@@ -75,7 +91,8 @@ unresolved_refs = Table(
 )
 
 project_metadata = Table(
-    "project_metadata", metadata,
+    "project_metadata",
+    metadata,
     Column("key", Text, primary_key=True),
     Column("value", Text, nullable=False),
     Column("updated_at", BigInteger, nullable=False),

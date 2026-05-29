@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from tree_sitter import Node as TSNode
 
+from ...extraction.helpers import get_child_by_field, get_node_text
 from .base import LanguageExtractor
-from ...extraction.helpers import get_node_text, get_child_by_field
 
 
 def _java_get_visibility(node: TSNode) -> str | None:

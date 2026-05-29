@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Optional, Callable
-
-from tree_sitter import Node as TSNode
-
-from ...types import NodeKind
 
 
 @dataclass
@@ -33,19 +29,19 @@ class LanguageExtractor:
     name_field: str = "name"
     body_field: str = "body"
     params_field: str = "parameters"
-    return_field: Optional[str] = None
+    return_field: str | None = None
 
     # Config flags
     methods_are_top_level: bool = False
 
     # Hook functions
-    get_signature: Optional[Callable] = None
-    get_visibility: Optional[Callable] = None
-    is_exported: Optional[Callable] = None
-    is_async: Optional[Callable] = None
-    is_static: Optional[Callable] = None
-    is_const: Optional[Callable] = None
-    extract_import: Optional[Callable] = None
-    get_receiver_type: Optional[Callable] = None
-    resolve_type_alias_kind: Optional[Callable] = None
-    classify_class_node: Optional[Callable] = None
+    get_signature: Callable | None = None
+    get_visibility: Callable | None = None
+    is_exported: Callable | None = None
+    is_async: Callable | None = None
+    is_static: Callable | None = None
+    is_const: Callable | None = None
+    extract_import: Callable | None = None
+    get_receiver_type: Callable | None = None
+    resolve_type_alias_kind: Callable | None = None
+    classify_class_node: Callable | None = None

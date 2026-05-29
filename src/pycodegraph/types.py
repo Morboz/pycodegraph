@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
-
 
 # =============================================================================
 # Enum-like constants
 # =============================================================================
+
 
 class NodeKind(str, Enum):
     FILE = "file"
@@ -75,6 +74,7 @@ class Language(str, Enum):
 # Core Graph Types
 # =============================================================================
 
+
 @dataclass
 class Node:
     id: str
@@ -88,15 +88,15 @@ class Node:
     start_column: int
     end_column: int
     updated_at: int
-    docstring: Optional[str] = None
-    signature: Optional[str] = None
-    visibility: Optional[str] = None
+    docstring: str | None = None
+    signature: str | None = None
+    visibility: str | None = None
     is_exported: bool = False
     is_async: bool = False
     is_static: bool = False
     is_abstract: bool = False
-    decorators: Optional[str] = None  # JSON
-    type_parameters: Optional[str] = None  # JSON
+    decorators: str | None = None  # JSON
+    type_parameters: str | None = None  # JSON
 
 
 @dataclass
@@ -104,10 +104,10 @@ class Edge:
     source: str
     target: str
     kind: EdgeKind
-    metadata: Optional[str] = None  # JSON
-    line: Optional[int] = None
-    col: Optional[int] = None
-    provenance: Optional[str] = None
+    metadata: str | None = None  # JSON
+    line: int | None = None
+    col: int | None = None
+    provenance: str | None = None
 
 
 @dataclass
@@ -119,17 +119,17 @@ class UnresolvedReference:
     column: int
     file_path: str = ""
     language: str = "unknown"
-    candidates: Optional[str] = None  # JSON
+    candidates: str | None = None  # JSON
 
 
 @dataclass
 class ExtractionError:
     message: str
     severity: str = "error"
-    file_path: Optional[str] = None
-    line: Optional[int] = None
-    column: Optional[int] = None
-    code: Optional[str] = None
+    file_path: str | None = None
+    line: int | None = None
+    column: int | None = None
+    code: str | None = None
 
 
 @dataclass
@@ -150,7 +150,7 @@ class FileRecord:
     modified_at: float
     indexed_at: int
     node_count: int = 0
-    errors: Optional[str] = None  # JSON
+    errors: str | None = None  # JSON
 
 
 @dataclass
@@ -171,6 +171,7 @@ class IndexResult:
 # Query Types
 # =============================================================================
 
+
 @dataclass
 class Subgraph:
     nodes: dict[str, Node] = field(default_factory=dict)
@@ -180,20 +181,20 @@ class Subgraph:
 
 @dataclass
 class TraversalOptions:
-    max_depth: float = float('inf')
+    max_depth: float = float("inf")
     edge_kinds: list[EdgeKind] = field(default_factory=list)
     node_kinds: list[NodeKind] = field(default_factory=list)
-    direction: str = 'outgoing'  # 'outgoing' | 'incoming' | 'both'
+    direction: str = "outgoing"  # 'outgoing' | 'incoming' | 'both'
     limit: int = 1000
     include_start: bool = True
 
 
 @dataclass
 class SearchOptions:
-    kinds: Optional[list[NodeKind]] = None
-    languages: Optional[list[Language]] = None
-    include_patterns: Optional[list[str]] = None
-    exclude_patterns: Optional[list[str]] = None
+    kinds: list[NodeKind] | None = None
+    languages: list[Language] | None = None
+    include_patterns: list[str] | None = None
+    exclude_patterns: list[str] | None = None
     limit: int = 100
     offset: int = 0
     case_sensitive: bool = False
@@ -203,16 +204,16 @@ class SearchOptions:
 class SearchResult:
     node: Node
     score: float = 0.0
-    highlights: Optional[list[str]] = None
+    highlights: list[str] | None = None
 
 
 @dataclass
 class Context:
-    focal: Optional[Node] = None
+    focal: Node | None = None
     ancestors: list[Node] = field(default_factory=list)
     children: list[Node] = field(default_factory=list)
-    incoming_refs: list[dict] = field(default_factory=list)   # [{node, edge}]
-    outgoing_refs: list[dict] = field(default_factory=list)   # [{node, edge}]
+    incoming_refs: list[dict] = field(default_factory=list)  # [{node, edge}]
+    outgoing_refs: list[dict] = field(default_factory=list)  # [{node, edge}]
     types: list[Node] = field(default_factory=list)
     imports: list[Node] = field(default_factory=list)
 
@@ -224,7 +225,7 @@ class CodeBlock:
     start_line: int
     end_line: int
     language: Language
-    node: Optional[Node] = None
+    node: Node | None = None
 
 
 @dataclass
@@ -233,7 +234,7 @@ class BuildContextOptions:
     max_code_blocks: int = 5
     max_code_block_size: int = 1500
     include_code: bool = True
-    format: str = 'markdown'  # 'markdown' | 'json'
+    format: str = "markdown"  # 'markdown' | 'json'
     search_limit: int = 3
     traversal_depth: int = 1
     min_score: float = 0.3
@@ -256,13 +257,13 @@ class TaskContext:
     entry_points: list[Node] = field(default_factory=list)
     code_blocks: list[CodeBlock] = field(default_factory=list)
     related_files: list[str] = field(default_factory=list)
-    summary: str = ''
-    stats: Optional[dict] = None
+    summary: str = ""
+    stats: dict | None = None
 
 
 @dataclass
 class ParsedQuery:
-    text: str = ''
+    text: str = ""
     kinds: list[NodeKind] = field(default_factory=list)
     languages: list[Language] = field(default_factory=list)
     path_filters: list[str] = field(default_factory=list)

@@ -14,17 +14,28 @@ from sqlalchemy import create_engine
 from sqlalchemy.dialects import mysql
 
 from pycodegraph import CodeGraph, InferDBCodeGraphBackend
-from pycodegraph.types import Edge, EdgeKind, FileRecord, Language, Node, NodeKind, UnresolvedReference
-from pycodegraph.db import _init_inferdb_schema, prepare_engine_url, resolve_backend_name
+from pycodegraph.db import (
+    _init_inferdb_schema,
+    prepare_engine_url,
+    resolve_backend_name,
+)
 from pycodegraph.db.dialects import InferDBQueryDialect, get_query_dialect
-from pycodegraph.db.queries import _node_row, _node_search_text
-from pycodegraph.db.queries import QueryBuilder
+from pycodegraph.db.queries import QueryBuilder, _node_row, _node_search_text
 from pycodegraph.db.tables import metadata
-
+from pycodegraph.types import (
+    Edge,
+    EdgeKind,
+    FileRecord,
+    Language,
+    Node,
+    NodeKind,
+    UnresolvedReference,
+)
 
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
+
 
 class _FakeResult:
     def __init__(self, rows: list[tuple] | None = None) -> None:
@@ -50,7 +61,10 @@ class _FakeConnection:
         sql = str(stmt)
         self.sql.append(sql)
         self.params.append(params or {})
-        if sql == "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''":
+        if (
+            sql
+            == "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''"
+        ):
             return _FakeResult([("node-1", "QueryBuilder search_nodes")])
         return _FakeResult()
 
@@ -110,6 +124,7 @@ class _FakeEngine:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _test_node(node_id: str, file_path: str, name: str) -> Node:
     return Node(
         id=node_id,
@@ -149,15 +164,24 @@ def _sqlite_queries():
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestBackendResolution:
     def test_mysql_url_with_backend_inferdb(self):
-        assert resolve_backend_name("mysql+pymysql://u:p@localhost/db?backend=inferdb", "mysql") == "inferdb"
+        assert (
+            resolve_backend_name(
+                "mysql+pymysql://u:p@localhost/db?backend=inferdb", "mysql"
+            )
+            == "inferdb"
+        )
 
     def test_sqlite_url(self):
         assert resolve_backend_name("sqlite:////tmp/codegraph.db", "sqlite") == "sqlite"
 
     def test_postgresql_url(self):
-        assert resolve_backend_name("postgresql+psycopg://u:p@localhost/db", "postgresql") == "postgresql"
+        assert (
+            resolve_backend_name("postgresql+psycopg://u:p@localhost/db", "postgresql")
+            == "postgresql"
+        )
 
 
 class TestEngineUrlSanitization:
@@ -169,6 +193,7 @@ class TestEngineUrlSanitization:
 
     def test_strips_backend_query_param(self):
         from sqlalchemy.engine import make_url
+
         engine_url, _ = prepare_engine_url(
             "mysql+pymysql://u:p@localhost/db?backend=inferdb&charset=utf8mb4"
         )
@@ -177,6 +202,7 @@ class TestEngineUrlSanitization:
 
     def test_preserves_other_query_params(self):
         from sqlalchemy.engine import make_url
+
         engine_url, _ = prepare_engine_url(
             "mysql+pymysql://u:p@localhost/db?backend=inferdb&charset=utf8mb4"
         )
@@ -188,28 +214,46 @@ class TestInferDBBackendLifecycle:
     def test_ensure_database(self):
         engine = _FakeEngine()
         backend = InferDBCodeGraphBackend(
-            host="db.local", port=3307, user="test", password="p@ss/word",
+            host="db.local",
+            port=3307,
+            user="test",
+            password="p@ss/word",
             engine_factory=lambda _url: engine,
         )
         db_url = backend.ensure_database("cg_1234abcd")
-        assert db_url == "mysql+pymysql://test:p%40ss%2Fword@db.local:3307/cg_1234abcd?backend=inferdb"
+        assert (
+            db_url
+            == "mysql+pymysql://test:p%40ss%2Fword@db.local:3307/cg_1234abcd?backend=inferdb"
+        )
         assert "CREATE DATABASE IF NOT EXISTS `cg_1234abcd`" in engine.conn.sql
-        assert '/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql."cg_1234abcd"' in engine.conn.raw_sql
+        assert (
+            '/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql."cg_1234abcd"'
+            in engine.conn.raw_sql
+        )
 
     def test_drop_database(self):
         engine = _FakeEngine()
         backend = InferDBCodeGraphBackend(
-            host="db.local", port=3307, user="test", password="p@ss/word",
+            host="db.local",
+            port=3307,
+            user="test",
+            password="p@ss/word",
             engine_factory=lambda _url: engine,
         )
         backend.ensure_database("cg_1234abcd")
         backend.drop_database("cg_1234abcd")
-        assert '/*+ duck_execute */ DROP SCHEMA IF EXISTS ltmdb_sql."cg_1234abcd" CASCADE' in engine.conn.raw_sql
+        assert (
+            '/*+ duck_execute */ DROP SCHEMA IF EXISTS ltmdb_sql."cg_1234abcd" CASCADE'
+            in engine.conn.raw_sql
+        )
 
     def test_existing_database_returns_none_when_missing(self):
         engine = _FakeEngine()
         backend = InferDBCodeGraphBackend(
-            host="db.local", port=3307, user="test", password="secret",
+            host="db.local",
+            port=3307,
+            user="test",
+            password="secret",
             engine_factory=lambda _url: engine,
         )
         assert backend.existing_database_url("missing_db") is None
@@ -222,10 +266,15 @@ class TestInferDBSchema:
         engine = _FakeEngine()
         _init_inferdb_schema(engine)
         unresolved_sql = next(
-            stmt for stmt in engine.conn.sql if "CREATE TABLE IF NOT EXISTS unresolved_refs" in stmt
+            stmt
+            for stmt in engine.conn.sql
+            if "CREATE TABLE IF NOT EXISTS unresolved_refs" in stmt
         )
         assert "unresolved_refs" in "\n".join(engine.conn.sql)
-        assert '/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql."codegraph_query_test"' in engine.conn.raw_sql
+        assert (
+            '/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql."codegraph_query_test"'
+            in engine.conn.raw_sql
+        )
         assert "reference_name TEXT NOT NULL" in unresolved_sql
 
 
@@ -251,20 +300,37 @@ class TestPrepareNodeRows:
 class TestNodeSearchTextAndRow:
     def _make_node(self):
         return Node(
-            id="node-1", kind=NodeKind.FUNCTION, name="search_nodes",
+            id="node-1",
+            kind=NodeKind.FUNCTION,
+            name="search_nodes",
             qualified_name="pycodegraph.db.queries.QueryBuilder.search_nodes",
-            file_path="src/pycodegraph/db/queries.py", language=Language.PYTHON,
-            start_line=10, end_line=20, start_column=4, end_column=8, updated_at=123,
-            docstring="Find nodes by text", signature="def search_nodes(query: str)",
-            visibility="public", is_exported=True, is_async=False, is_static=True,
-            is_abstract=False, decorators='["cached"]', type_parameters=None,
+            file_path="src/pycodegraph/db/queries.py",
+            language=Language.PYTHON,
+            start_line=10,
+            end_line=20,
+            start_column=4,
+            end_column=8,
+            updated_at=123,
+            docstring="Find nodes by text",
+            signature="def search_nodes(query: str)",
+            visibility="public",
+            is_exported=True,
+            is_async=False,
+            is_static=True,
+            is_abstract=False,
+            decorators='["cached"]',
+            type_parameters=None,
         )
 
     def test_search_text_content(self):
         node = self._make_node()
         search_text = _node_search_text(node)
-        for expected in ("search_nodes", "pycodegraph.db.queries.QueryBuilder.search_nodes",
-                         "Find nodes by text", "def search_nodes(query: str)"):
+        for expected in (
+            "search_nodes",
+            "pycodegraph.db.queries.QueryBuilder.search_nodes",
+            "Find nodes by text",
+            "def search_nodes(query: str)",
+        ):
             assert expected in search_text
 
     def test_node_row(self):
@@ -279,14 +345,23 @@ class TestDeleteFile:
     def test_removes_nodes_edges_refs_and_file_record(self):
         queries, conn, engine = _sqlite_queries()
         try:
-            queries.insert_nodes([_test_node("a1", "a.py", "a_one"), _test_node("a2", "a.py", "a_two")])
+            queries.insert_nodes(
+                [_test_node("a1", "a.py", "a_one"), _test_node("a2", "a.py", "a_two")]
+            )
             queries.insert_edges([Edge(source="a1", target="a2", kind=EdgeKind.CALLS)])
-            queries.insert_unresolved_refs_batch([
-                UnresolvedReference(
-                    from_node_id="a1", reference_name="missing", reference_kind=EdgeKind.REFERENCES,
-                    line=1, column=0, file_path="a.py", language="python",
-                )
-            ])
+            queries.insert_unresolved_refs_batch(
+                [
+                    UnresolvedReference(
+                        from_node_id="a1",
+                        reference_name="missing",
+                        reference_kind=EdgeKind.REFERENCES,
+                        line=1,
+                        column=0,
+                        file_path="a.py",
+                        language="python",
+                    )
+                ]
+            )
             queries.upsert_file(_test_file("a.py", 2))
             queries.delete_file("a.py")
             assert queries.get_nodes_by_file("a.py") == []
@@ -303,11 +378,13 @@ class TestDeleteFilesBatch:
     def test_removes_nodes_for_all_paths(self):
         queries, conn, engine = _sqlite_queries()
         try:
-            queries.insert_nodes([
-                _test_node("a1", "a.py", "a_one"),
-                _test_node("b1", "b.py", "b_one"),
-                _test_node("c1", "c.py", "c_one"),
-            ])
+            queries.insert_nodes(
+                [
+                    _test_node("a1", "a.py", "a_one"),
+                    _test_node("b1", "b.py", "b_one"),
+                    _test_node("c1", "c.py", "c_one"),
+                ]
+            )
             queries.upsert_file(_test_file("a.py", 1))
             queries.upsert_file(_test_file("b.py", 1))
             queries.upsert_file(_test_file("c.py", 1))
@@ -324,7 +401,12 @@ class TestInferDBFtsSql:
     def test_fts_search_sql_shape(self):
         conn = _FakeConnection()
         InferDBQueryDialect().search_nodes_fts(
-            conn, "QueryBuilder", kinds=["class"], languages=["python"], limit=5, offset=0,
+            conn,
+            "QueryBuilder",
+            kinds=["class"],
+            languages=["python"],
+            limit=5,
+            offset=0,
         )
         sql = conn.sql[-1]
         assert "/*+ duck_execute */" in sql
@@ -359,7 +441,10 @@ class TestInferDBFtsSql:
             sql = str(stmt)
             conn.sql.append(sql)
             conn.params.append(params or {})
-            if sql == "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''":
+            if (
+                sql
+                == "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''"
+            ):
                 return _FakeResult([("node-1", "field_size_re (?P<var>char)")])
             return _FakeResult()
 
@@ -380,10 +465,20 @@ class TestInferDBMysqlStatementShapes:
     def test_upsert_file(self):
         dialect = InferDBQueryDialect()
         mysql_dialect = mysql.dialect()
-        upsert_sql = str(dialect.upsert_file({
-            "path": "sample.py", "content_hash": "hash", "language": "python",
-            "size": 1, "modified_at": 1.0, "indexed_at": 1, "node_count": 1, "errors": None,
-        }).compile(dialect=mysql_dialect))
+        upsert_sql = str(
+            dialect.upsert_file(
+                {
+                    "path": "sample.py",
+                    "content_hash": "hash",
+                    "language": "python",
+                    "size": 1,
+                    "modified_at": 1.0,
+                    "indexed_at": 1,
+                    "node_count": 1,
+                    "errors": None,
+                }
+            ).compile(dialect=mysql_dialect)
+        )
         assert "ON DUPLICATE KEY UPDATE" in upsert_sql
 
 
@@ -393,15 +488,18 @@ class TestCreateResolverTopLevelExport:
     def test_create_resolver_importable_from_top_level(self):
         # Before the fix, this would raise ImportError.
         from pycodegraph import create_resolver as cr
+
         assert callable(cr)
 
     def test_create_resolver_in_dunder_all(self):
         import pycodegraph
+
         assert "create_resolver" in pycodegraph.__all__
 
     def test_create_resolver_is_same_as_resolution_module(self):
         from pycodegraph import create_resolver as cr
         from pycodegraph.resolution import create_resolver as cr2
+
         assert cr is cr2
 
 
@@ -409,11 +507,12 @@ class TestCodeGraphDeleteFile:
     """Verify CodeGraph.delete_file() is a public method (issue gap #3)."""
 
     def _make_codegraph(self, queries, conn, tmp_dir: str = "/tmp"):
-        from pycodegraph.config import CodeGraphConfig
         from types import SimpleNamespace
-        from pycodegraph.extraction.orchestrator import ExtractionOrchestrator
-        from pycodegraph.graph import GraphTraverser, GraphQueryManager
+
+        from pycodegraph.config import CodeGraphConfig
         from pycodegraph.context.builder import ContextBuilder
+        from pycodegraph.extraction.orchestrator import ExtractionOrchestrator
+        from pycodegraph.graph import GraphQueryManager, GraphTraverser
 
         config = CodeGraphConfig()
         cg = CodeGraph.__new__(CodeGraph)
@@ -454,6 +553,7 @@ class TestCodeGraphDeleteFile:
     def test_delete_file_delegates_to_queries_delete_file(self):
         """CodeGraph.delete_file() must call the underlying QueryBuilder.delete_file."""
         from unittest.mock import patch
+
         queries, conn, engine = _sqlite_queries()
         try:
             cg = self._make_codegraph(queries, conn)
@@ -469,11 +569,12 @@ class TestCodeGraphApplyDelta:
     """Verify CodeGraph.apply_delta() (issue gap #1 and #2)."""
 
     def _make_codegraph(self, queries, conn, tmp_dir: str):
-        from pycodegraph.config import CodeGraphConfig
         from types import SimpleNamespace
-        from pycodegraph.extraction.orchestrator import ExtractionOrchestrator
-        from pycodegraph.graph import GraphTraverser, GraphQueryManager
+
+        from pycodegraph.config import CodeGraphConfig
         from pycodegraph.context.builder import ContextBuilder
+        from pycodegraph.extraction.orchestrator import ExtractionOrchestrator
+        from pycodegraph.graph import GraphQueryManager, GraphTraverser
 
         config = CodeGraphConfig()
         cg = CodeGraph.__new__(CodeGraph)
@@ -526,7 +627,8 @@ class TestCodeGraphApplyDelta:
     def test_apply_delta_runs_resolution_on_success(self):
         """apply_delta must call resolve_and_persist — this was the key missing step
         in the old index_file() and the main reason apply_delta was requested."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         queries, conn, engine = _sqlite_queries()
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
@@ -538,7 +640,9 @@ class TestCodeGraphApplyDelta:
                 fake_resolver = MagicMock()
                 fake_resolver.resolve_and_persist.return_value = fake_resolution
 
-                with patch("pycodegraph.codegraph.create_resolver", return_value=fake_resolver) as mock_cr:
+                with patch(
+                    "pycodegraph.codegraph.create_resolver", return_value=fake_resolver
+                ) as mock_cr:
                     result = cg.apply_delta(changed_files=["mod.py"], removed_files=[])
 
                 mock_cr.assert_called_once()
@@ -552,6 +656,7 @@ class TestCodeGraphApplyDelta:
         """apply_delta must NOT run resolution when extraction errors occurred,
         matching the documented behaviour."""
         from unittest.mock import patch
+
         queries, conn, engine = _sqlite_queries()
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
@@ -570,6 +675,7 @@ class TestCodeGraphApplyDelta:
 
     def test_apply_delta_returns_index_result_type(self):
         from pycodegraph.types import IndexResult
+
         queries, conn, engine = _sqlite_queries()
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:

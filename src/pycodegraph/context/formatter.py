@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..types import Node, Edge, TaskContext, Subgraph
+from ..types import Edge, Node, Subgraph, TaskContext
 
 
 def format_context_as_markdown(context: TaskContext) -> str:
@@ -17,7 +17,9 @@ def format_context_as_markdown(context: TaskContext) -> str:
         lines.append("### Entry Points\n")
         for node in context.entry_points:
             loc = f":{node.start_line}" if node.start_line else ""
-            lines.append(f"- **{node.name}** ({node.kind.value}) - {node.file_path}{loc}")
+            lines.append(
+                f"- **{node.name}** ({node.kind.value}) - {node.file_path}{loc}"
+            )
             if node.signature:
                 lines.append(f"  `{node.signature}`")
         lines.append("")
@@ -105,8 +107,13 @@ def format_subgraph_tree(subgraph: Subgraph, entry_points: list[Node]) -> str:
 
 
 def _format_node_tree(
-    node: Node, subgraph: Subgraph, outgoing: dict[str, list[Edge]],
-    printed: set[str], lines: list[str], depth: int, prefix: str,
+    node: Node,
+    subgraph: Subgraph,
+    outgoing: dict[str, list[Edge]],
+    printed: set[str],
+    lines: list[str],
+    depth: int,
+    prefix: str,
 ) -> None:
     if node.id in printed:
         return
@@ -118,7 +125,8 @@ def _format_node_tree(
 
     edges = outgoing.get(node.id, [])
     significant = [
-        e for e in edges
+        e
+        for e in edges
         if e.kind.value in ("calls", "extends", "implements", "imports", "references")
     ]
 
@@ -130,14 +138,27 @@ def _format_node_tree(
     for kind, kind_edges in by_kind.items():
         if len(kind_edges) > 3:
             names = ", ".join(
-                subgraph.nodes.get(e.target, Node(
-                    id="", kind=node.kind, name="unknown", qualified_name="",
-                    file_path="", language=node.language,
-                    start_line=0, end_line=0, start_column=0, end_column=0, updated_at=0,
-                )).name
+                subgraph.nodes.get(
+                    e.target,
+                    Node(
+                        id="",
+                        kind=node.kind,
+                        name="unknown",
+                        qualified_name="",
+                        file_path="",
+                        language=node.language,
+                        start_line=0,
+                        end_line=0,
+                        start_column=0,
+                        end_column=0,
+                        updated_at=0,
+                    ),
+                ).name
                 for e in kind_edges[:3]
             )
-            lines.append(f"{new_prefix}├── {kind}: {names} and {len(kind_edges) - 3} more")
+            lines.append(
+                f"{new_prefix}├── {kind}: {names} and {len(kind_edges) - 3} more"
+            )
         else:
             for i, edge in enumerate(kind_edges):
                 target = subgraph.nodes.get(edge.target)
@@ -149,7 +170,9 @@ def _format_node_tree(
         for edge in significant[:3]:
             target = subgraph.nodes.get(edge.target)
             if target and target.id not in printed:
-                _format_node_tree(target, subgraph, outgoing, printed, lines, depth + 1, new_prefix)
+                _format_node_tree(
+                    target, subgraph, outgoing, printed, lines, depth + 1, new_prefix
+                )
 
 
 def _serialize_node(node: Node) -> dict:

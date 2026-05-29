@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import re
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from ..types import Node, NodeKind
-from .types import UnresolvedRef, ResolvedRef
+from .types import ResolvedRef, UnresolvedRef
 
 if TYPE_CHECKING:
     from .resolver import ResolutionContext
 
 
-def match_by_file_path(ref: UnresolvedRef, context: ResolutionContext) -> Optional[ResolvedRef]:
+def match_by_file_path(
+    ref: UnresolvedRef, context: ResolutionContext
+) -> ResolvedRef | None:
     """Match path-like references (e.g., 'snippets/drawer-menu.liquid') by filename."""
     if "/" not in ref.reference_name:
         return None
@@ -30,21 +32,40 @@ def match_by_file_path(ref: UnresolvedRef, context: ResolutionContext) -> Option
     # Exact path match
     for n in file_nodes:
         if n.qualified_name == ref.reference_name or n.file_path == ref.reference_name:
-            return ResolvedRef(original=ref, target_node_id=n.id, confidence=0.95, resolved_by="file-path")
+            return ResolvedRef(
+                original=ref,
+                target_node_id=n.id,
+                confidence=0.95,
+                resolved_by="file-path",
+            )
 
     # Suffix match
     for n in file_nodes:
-        if n.qualified_name.endswith(ref.reference_name) or n.file_path.endswith(ref.reference_name):
-            return ResolvedRef(original=ref, target_node_id=n.id, confidence=0.85, resolved_by="file-path")
+        if n.qualified_name.endswith(ref.reference_name) or n.file_path.endswith(
+            ref.reference_name
+        ):
+            return ResolvedRef(
+                original=ref,
+                target_node_id=n.id,
+                confidence=0.85,
+                resolved_by="file-path",
+            )
 
     # Single candidate
     if len(file_nodes) == 1:
-        return ResolvedRef(original=ref, target_node_id=file_nodes[0].id, confidence=0.7, resolved_by="file-path")
+        return ResolvedRef(
+            original=ref,
+            target_node_id=file_nodes[0].id,
+            confidence=0.7,
+            resolved_by="file-path",
+        )
 
     return None
 
 
-def match_by_qualified_name(ref: UnresolvedRef, context: ResolutionContext) -> Optional[ResolvedRef]:
+def match_by_qualified_name(
+    ref: UnresolvedRef, context: ResolutionContext
+) -> ResolvedRef | None:
     """Match by qualified name (e.g., 'obj.method', 'Class::method')."""
     if "." not in ref.reference_name and "::" not in ref.reference_name:
         return None
@@ -52,7 +73,12 @@ def match_by_qualified_name(ref: UnresolvedRef, context: ResolutionContext) -> O
     candidates = context.get_nodes_by_qualified_name(ref.reference_name)
 
     if len(candidates) == 1:
-        return ResolvedRef(original=ref, target_node_id=candidates[0].id, confidence=0.95, resolved_by="qualified-name")
+        return ResolvedRef(
+            original=ref,
+            target_node_id=candidates[0].id,
+            confidence=0.95,
+            resolved_by="qualified-name",
+        )
 
     # Partial qualified name match
     parts = re.split(r"[.:]", ref.reference_name)
@@ -61,12 +87,19 @@ def match_by_qualified_name(ref: UnresolvedRef, context: ResolutionContext) -> O
         partial_candidates = context.get_nodes_by_name(last_name)
         for candidate in partial_candidates:
             if candidate.qualified_name.endswith(ref.reference_name):
-                return ResolvedRef(original=ref, target_node_id=candidate.id, confidence=0.85, resolved_by="qualified-name")
+                return ResolvedRef(
+                    original=ref,
+                    target_node_id=candidate.id,
+                    confidence=0.85,
+                    resolved_by="qualified-name",
+                )
 
     return None
 
 
-def match_method_call(ref: UnresolvedRef, context: ResolutionContext) -> Optional[ResolvedRef]:
+def match_method_call(
+    ref: UnresolvedRef, context: ResolutionContext
+) -> ResolvedRef | None:
     """Match method calls like 'obj.method' or 'Class::method'."""
     dot_match = re.match(r"^(\w+)\.(\w+)$", ref.reference_name)
     colon_match = re.match(r"^(\w+)::(\w+)$", ref.reference_name)
@@ -89,8 +122,17 @@ def match_method_call(ref: UnresolvedRef, context: ResolutionContext) -> Optiona
             continue
         nodes_in_file = context.get_nodes_in_file(class_node.file_path)
         for n in nodes_in_file:
-            if n.kind == NodeKind.METHOD and n.name == method_name and class_node.name in n.qualified_name:
-                return ResolvedRef(original=ref, target_node_id=n.id, confidence=0.85, resolved_by="qualified-name")
+            if (
+                n.kind == NodeKind.METHOD
+                and n.name == method_name
+                and class_node.name in n.qualified_name
+            ):
+                return ResolvedRef(
+                    original=ref,
+                    target_node_id=n.id,
+                    confidence=0.85,
+                    resolved_by="qualified-name",
+                )
 
     # Strategy 2: Capitalized receiver → class lookup
     capitalized = object_or_class[0].upper() + object_or_class[1:]
@@ -103,19 +145,42 @@ def match_method_call(ref: UnresolvedRef, context: ResolutionContext) -> Optiona
                 continue
             nodes_in_file = context.get_nodes_in_file(class_node.file_path)
             for n in nodes_in_file:
-                if n.kind == NodeKind.METHOD and n.name == method_name and class_node.name in n.qualified_name:
-                    return ResolvedRef(original=ref, target_node_id=n.id, confidence=0.8, resolved_by="instance-method")
+                if (
+                    n.kind == NodeKind.METHOD
+                    and n.name == method_name
+                    and class_node.name in n.qualified_name
+                ):
+                    return ResolvedRef(
+                        original=ref,
+                        target_node_id=n.id,
+                        confidence=0.8,
+                        resolved_by="instance-method",
+                    )
 
     # Strategy 3: Find methods by name, disambiguate by receiver-class similarity
     if method_name:
         method_candidates = context.get_nodes_by_name(method_name)
-        methods = [n for n in method_candidates if n.kind == NodeKind.METHOD and n.name == method_name]
+        methods = [
+            n
+            for n in method_candidates
+            if n.kind == NodeKind.METHOD and n.name == method_name
+        ]
 
-        same_lang = [m_node for m_node in methods if m_node.language.value == ref.language]
+        same_lang = [
+            m_node for m_node in methods if m_node.language.value == ref.language
+        ]
         target_methods = same_lang if same_lang else methods
 
-        if len(target_methods) == 1 and target_methods[0].language.value == ref.language:
-            return ResolvedRef(original=ref, target_node_id=target_methods[0].id, confidence=0.7, resolved_by="instance-method")
+        if (
+            len(target_methods) == 1
+            and target_methods[0].language.value == ref.language
+        ):
+            return ResolvedRef(
+                original=ref,
+                target_node_id=target_methods[0].id,
+                confidence=0.7,
+                resolved_by="instance-method",
+            )
 
         if len(target_methods) > 1:
             receiver_words = _split_camel_case(object_or_class)
@@ -123,19 +188,30 @@ def match_method_call(ref: UnresolvedRef, context: ResolutionContext) -> Optiona
             best_score = 0
             for method_node in target_methods:
                 class_words = _split_camel_case(method_node.qualified_name)
-                score = sum(1 for w in receiver_words if any(cw.lower() == w.lower() for cw in class_words))
+                score = sum(
+                    1
+                    for w in receiver_words
+                    if any(cw.lower() == w.lower() for cw in class_words)
+                )
                 if method_node.language.value == ref.language:
                     score += 1
                 if score > best_score:
                     best_score = score
                     best_match = method_node
             if best_match and best_score >= 2:
-                return ResolvedRef(original=ref, target_node_id=best_match.id, confidence=0.65, resolved_by="instance-method")
+                return ResolvedRef(
+                    original=ref,
+                    target_node_id=best_match.id,
+                    confidence=0.65,
+                    resolved_by="instance-method",
+                )
 
     return None
 
 
-def match_by_exact_name(ref: UnresolvedRef, context: ResolutionContext) -> Optional[ResolvedRef]:
+def match_by_exact_name(
+    ref: UnresolvedRef, context: ResolutionContext
+) -> ResolvedRef | None:
     """Match by exact symbol name."""
     candidates = context.get_nodes_by_name(ref.reference_name)
 
@@ -156,12 +232,17 @@ def match_by_exact_name(ref: UnresolvedRef, context: ResolutionContext) -> Optio
     if best:
         proximity = _compute_path_proximity(ref.file_path, best.file_path)
         confidence = 0.7 if proximity >= 30 else 0.4
-        return ResolvedRef(original=ref, target_node_id=best.id, confidence=confidence, resolved_by="exact-match")
+        return ResolvedRef(
+            original=ref,
+            target_node_id=best.id,
+            confidence=confidence,
+            resolved_by="exact-match",
+        )
 
     return None
 
 
-def match_fuzzy(ref: UnresolvedRef, context: ResolutionContext) -> Optional[ResolvedRef]:
+def match_fuzzy(ref: UnresolvedRef, context: ResolutionContext) -> ResolvedRef | None:
     """Case-insensitive fallback match."""
     lower_name = ref.reference_name.lower()
     candidates = context.get_nodes_by_lower_name(lower_name)
@@ -184,7 +265,9 @@ def match_fuzzy(ref: UnresolvedRef, context: ResolutionContext) -> Optional[Reso
     return None
 
 
-def match_reference(ref: UnresolvedRef, context: ResolutionContext) -> Optional[ResolvedRef]:
+def match_reference(
+    ref: UnresolvedRef, context: ResolutionContext
+) -> ResolvedRef | None:
     """Try all matching strategies in order of confidence."""
     result = match_by_file_path(ref, context)
     if result:
@@ -211,17 +294,20 @@ def match_reference(ref: UnresolvedRef, context: ResolutionContext) -> Optional[
 
 # --- Helpers ---
 
+
 def _split_camel_case(s: str) -> list[str]:
     """Split a camelCase or PascalCase string into words."""
-    return [w for w in
-            re.sub(r"([a-z])([A-Z])", r"\1 \2", s)
-            .replace("_", " ")
-            .replace(":", " ")
-            .replace(".", " ")
-            .replace("/", " ")
-            .replace("\\", " ")
-            .split()
-            if len(w) > 1]
+    return [
+        w
+        for w in re.sub(r"([a-z])([A-Z])", r"\1 \2", s)
+        .replace("_", " ")
+        .replace(":", " ")
+        .replace(".", " ")
+        .replace("/", " ")
+        .replace("\\", " ")
+        .split()
+        if len(w) > 1
+    ]
 
 
 def _compute_path_proximity(path1: str, path2: str) -> int:
@@ -241,10 +327,10 @@ def _find_best_match(
     ref: UnresolvedRef,
     candidates: list[Node],
     context: ResolutionContext,
-) -> Optional[Node]:
+) -> Node | None:
     """Find the best matching node among multiple candidates."""
     best_score = -1
-    best_node: Optional[Node] = None
+    best_node: Node | None = None
 
     for candidate in candidates:
         score = 0

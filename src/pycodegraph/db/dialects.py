@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import Connection, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -28,16 +28,18 @@ class QueryDialect:
         self,
         conn: Connection,
         node_ids: list[str],
-        kinds: Optional[list[str]] = None,
+        kinds: list[str] | None = None,
     ) -> list[tuple]:
-        raise NotImplementedError(f"{self.name} does not support find_edges_between_nodes")
+        raise NotImplementedError(
+            f"{self.name} does not support find_edges_between_nodes"
+        )
 
     def search_nodes_fts(
         self,
         conn: Connection,
         query_text: str,
-        kinds: Optional[list[str]],
-        languages: Optional[list[str]],
+        kinds: list[str] | None,
+        languages: list[str] | None,
         limit: int,
         offset: int,
     ) -> list[tuple]:
@@ -62,16 +64,20 @@ class SQLiteQueryDialect(QueryDialect):
         return sqlite_insert(nodes).on_conflict_do_nothing(index_elements=["id"])
 
     def upsert_file(self, row: dict[str, Any]):
-        return sqlite_insert(files).values(**row).on_conflict_do_update(
-            index_elements=["path"],
-            set_=row,
+        return (
+            sqlite_insert(files)
+            .values(**row)
+            .on_conflict_do_update(
+                index_elements=["path"],
+                set_=row,
+            )
         )
 
     def find_edges_between_nodes(
         self,
         conn: Connection,
         node_ids: list[str],
-        kinds: Optional[list[str]] = None,
+        kinds: list[str] | None = None,
     ) -> list[tuple]:
         ids_json = json.dumps(node_ids)
         sql = (
@@ -91,8 +97,8 @@ class SQLiteQueryDialect(QueryDialect):
         self,
         conn: Connection,
         query_text: str,
-        kinds: Optional[list[str]],
-        languages: Optional[list[str]],
+        kinds: list[str] | None,
+        languages: list[str] | None,
         limit: int,
         offset: int,
     ) -> list[tuple]:
@@ -130,16 +136,20 @@ class PostgreSQLQueryDialect(QueryDialect):
         return pg_insert(nodes).on_conflict_do_nothing(index_elements=["id"])
 
     def upsert_file(self, row: dict[str, Any]):
-        return pg_insert(files).values(**row).on_conflict_do_update(
-            index_elements=["path"],
-            set_=row,
+        return (
+            pg_insert(files)
+            .values(**row)
+            .on_conflict_do_update(
+                index_elements=["path"],
+                set_=row,
+            )
         )
 
     def find_edges_between_nodes(
         self,
         conn: Connection,
         node_ids: list[str],
-        kinds: Optional[list[str]] = None,
+        kinds: list[str] | None = None,
     ) -> list[tuple]:
         sql = (
             "SELECT source, target, kind, metadata, line, col, provenance FROM edges "
@@ -157,8 +167,8 @@ class PostgreSQLQueryDialect(QueryDialect):
         self,
         conn: Connection,
         query_text: str,
-        kinds: Optional[list[str]],
-        languages: Optional[list[str]],
+        kinds: list[str] | None,
+        languages: list[str] | None,
         limit: int,
         offset: int,
     ) -> list[tuple]:
@@ -205,20 +215,24 @@ class InferDBQueryDialect(QueryDialect):
 
     def upsert_file(self, row: dict[str, Any]):
         update_values = {key: value for key, value in row.items() if key != "path"}
-        return mysql_insert(files).values(**row).on_duplicate_key_update(**update_values)
+        return (
+            mysql_insert(files).values(**row).on_duplicate_key_update(**update_values)
+        )
 
     def find_edges_between_nodes(
         self,
         conn: Connection,
         node_ids: list[str],
-        kinds: Optional[list[str]] = None,
+        kinds: list[str] | None = None,
     ) -> list[tuple]:
         ids_placeholders = ",".join(f":id{i}" for i in range(len(node_ids)))
         sql = (
             "SELECT source, target, kind, metadata, line, col, provenance FROM edges "
             f"WHERE source IN ({ids_placeholders}) AND target IN ({ids_placeholders})"
         )
-        params: dict[str, Any] = {f"id{i}": node_id for i, node_id in enumerate(node_ids)}
+        params: dict[str, Any] = {
+            f"id{i}": node_id for i, node_id in enumerate(node_ids)
+        }
         if kinds:
             placeholders = ",".join(f":k{i}" for i in range(len(kinds)))
             sql += f" AND kind IN ({placeholders})"
@@ -230,8 +244,8 @@ class InferDBQueryDialect(QueryDialect):
         self,
         conn: Connection,
         query_text: str,
-        kinds: Optional[list[str]],
-        languages: Optional[list[str]],
+        kinds: list[str] | None,
+        languages: list[str] | None,
         limit: int,
         offset: int,
     ) -> list[tuple]:
@@ -250,7 +264,11 @@ class InferDBQueryDialect(QueryDialect):
             f"FROM ltmdb_sql.{database_identifier}.{fts_table_identifier} "
             "WHERE score IS NOT NULL"
         )
-        fts_params: dict[str, Any] = {"query": query_text, "lim": fts_limit, "off": offset}
+        fts_params: dict[str, Any] = {
+            "query": query_text,
+            "lim": fts_limit,
+            "off": offset,
+        }
         fts_sql += " ORDER BY score DESC LIMIT :lim OFFSET :off"
         matches = conn.execute(text(fts_sql), fts_params).fetchall()
         if not matches:
@@ -266,7 +284,9 @@ class InferDBQueryDialect(QueryDialect):
             "is_static, is_abstract, decorators, type_parameters, updated_at "
             f"FROM nodes WHERE id IN ({placeholders})"
         )
-        params: dict[str, Any] = {f"id{i}": node_id for i, node_id in enumerate(node_ids)}
+        params: dict[str, Any] = {
+            f"id{i}": node_id for i, node_id in enumerate(node_ids)
+        }
         if kinds:
             placeholders = ",".join(f":k{i}" for i in range(len(kinds)))
             sql += f" AND kind IN ({placeholders})"
@@ -293,17 +313,21 @@ class InferDBQueryDialect(QueryDialect):
         database_identifier = _duck_identifier(database)
         fts_table_identifier = _duck_identifier(self._fts_table)
         qualified_table = f"ltmdb_sql.{database_identifier}.{fts_table_identifier}"
-        _exec_raw_driver_sql(conn, f"/*+ duck_execute */ DROP TABLE IF EXISTS {qualified_table}")
+        _exec_raw_driver_sql(
+            conn, f"/*+ duck_execute */ DROP TABLE IF EXISTS {qualified_table}"
+        )
         _exec_raw_driver_sql(
             conn,
             f"/*+ duck_execute */ CREATE TABLE {qualified_table} ("
-            "seq_id INTEGER, node_id VARCHAR, fts_text VARCHAR)"
+            "seq_id INTEGER, node_id VARCHAR, fts_text VARCHAR)",
         )
-        rows = conn.execute(text(
-            "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''"
-        )).fetchall()
+        rows = conn.execute(
+            text(
+                "SELECT id, fts_text FROM nodes WHERE fts_text IS NOT NULL AND fts_text != ''"
+            )
+        ).fetchall()
         for start in range(0, len(rows), 500):
-            chunk = rows[start:start + 500]
+            chunk = rows[start : start + 500]
             values = ", ".join(
                 "("
                 f"{start + i + 1}, "
@@ -316,14 +340,14 @@ class InferDBQueryDialect(QueryDialect):
                 _exec_raw_driver_sql(
                     conn,
                     f"/*+ duck_execute */ INSERT INTO {qualified_table} "
-                    f"(seq_id, node_id, fts_text) VALUES {values}"
+                    f"(seq_id, node_id, fts_text) VALUES {values}",
                 )
         if not rows:
             return
         table_name = _sql_string_literal(f"ltmdb_sql.{database}.{self._fts_table}")
         _exec_raw_driver_sql(
             conn,
-            f"/*+ duck_execute */ PRAGMA create_fts_index({table_name}, 'seq_id', 'fts_text', overwrite=1)"
+            f"/*+ duck_execute */ PRAGMA create_fts_index({table_name}, 'seq_id', 'fts_text', overwrite=1)",
         )
 
     def prepare_node_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -343,8 +367,8 @@ def get_query_dialect(dialect_name: str) -> QueryDialect:
 def _append_filters(
     sql: str,
     params: dict[str, Any],
-    kinds: Optional[list[str]],
-    languages: Optional[list[str]],
+    kinds: list[str] | None,
+    languages: list[str] | None,
 ) -> tuple[str, dict[str, Any]]:
     if kinds:
         placeholders = ",".join(f":k{i}" for i in range(len(kinds)))

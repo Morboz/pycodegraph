@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from ...types import Language
 from .base import LanguageExtractor
-from .python import PYTHON_EXTRACTOR
-from .typescript import TYPESCRIPT_EXTRACTOR, JAVASCRIPT_EXTRACTOR, JSX_EXTRACTOR, TSX_EXTRACTOR
 from .go import GO_EXTRACTOR
 from .java import JAVA_EXTRACTOR
+from .python import PYTHON_EXTRACTOR
 from .rust import RUST_EXTRACTOR
-
-from ...types import Language
+from .typescript import (
+    JAVASCRIPT_EXTRACTOR,
+    JSX_EXTRACTOR,
+    TSX_EXTRACTOR,
+    TYPESCRIPT_EXTRACTOR,
+)
 
 EXTRACTORS: dict[Language, LanguageExtractor] = {
     Language.PYTHON: PYTHON_EXTRACTOR,

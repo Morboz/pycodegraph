@@ -61,7 +61,9 @@ class InferDBCodeGraphBackend:
         self.password = password
         self.drivername = drivername
         self._engine_factory = engine_factory
-        self._admin_engine = engine_factory(self._url(database=None, backend_marker=False))
+        self._admin_engine = engine_factory(
+            self._url(database=None, backend_marker=False)
+        )
 
     @classmethod
     def from_env(cls, prefix: str = "INFERDB_") -> InferDBCodeGraphBackend:
@@ -76,7 +78,9 @@ class InferDBCodeGraphBackend:
     def ensure_database(self, database: str) -> str:
         """Ensure a database is ready for pycodegraph InferDB writes."""
         with self._admin_engine.connect() as conn:
-            conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {_mysql_identifier(database)}"))
+            conn.execute(
+                text(f"CREATE DATABASE IF NOT EXISTS {_mysql_identifier(database)}")
+            )
         _raw_driver_execute(
             self._admin_engine,
             f"/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql.{_duck_identifier(database)}",
@@ -87,7 +91,9 @@ class InferDBCodeGraphBackend:
         """Return a pycodegraph db_url only when the database exists."""
         with self._admin_engine.connect() as conn:
             row = conn.execute(
-                text("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = :name"),
+                text(
+                    "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = :name"
+                ),
                 {"name": database},
             ).first()
         if row is None:

@@ -16,6 +16,7 @@ class TestOpenFromUrl:
             # db_url may be None when using the default resolved path
             if db_url is None:
                 from pycodegraph.config import get_db_url
+
                 db_url = get_db_url(root, cg.config)
 
         cg2 = CodeGraph.open_from_url(db_url)
@@ -30,6 +31,7 @@ class TestOpenFromUrl:
         root = str(tmp_path)
         with CodeGraph.init(root) as cg:
             from pycodegraph.config import get_db_url
+
             db_url = get_db_url(root, cg.config)
 
         cg2 = CodeGraph.open_from_url(db_url)
@@ -43,6 +45,7 @@ class TestOpenFromUrl:
         root = str(tmp_path)
         with CodeGraph.init(root) as cg:
             from pycodegraph.config import get_db_url
+
             db_url = get_db_url(root, cg.config)
 
         cg2 = CodeGraph.open_from_url(db_url)
@@ -56,6 +59,7 @@ class TestOpenFromUrl:
         root = str(tmp_path)
         with CodeGraph.init(root) as cg:
             from pycodegraph.config import get_db_url
+
             db_url = get_db_url(root, cg.config)
 
         custom_root = "/some/external/path"
@@ -70,6 +74,7 @@ class TestOpenFromUrl:
         root = str(tmp_path)
         with CodeGraph.init(root) as cg:
             from pycodegraph.config import get_db_url
+
             db_url = get_db_url(root, cg.config)
 
         with CodeGraph.open_from_url(db_url) as cg2:
