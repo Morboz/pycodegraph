@@ -90,13 +90,12 @@ import os
 
 from pycodegraph import CodeGraph
 
+db_url = os.environ["PYCODEGRAPH_DB_URL"]
+
 cg = CodeGraph.init(
     "/repo",
     {
-        "db_url": (
-            f"mysql+pymysql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}"
-            f"@{os.environ['DB_HOST']}:3307/codegraph_demo?backend=inferdb"
-        ),
+        "db_url": db_url,
     },
 )
 ```
@@ -104,6 +103,7 @@ cg = CodeGraph.init(
 Notes:
 
 - `?backend=inferdb` is required so pycodegraph selects the InferDB dialect.
+- Expected URL shape: `******host:3307/database?backend=inferdb`
 - Plain MySQL without the InferDB backend marker is not a supported write backend.
 - InferDB stores the main tables in MySQL-compatible storage and maintains a DuckDB shadow FTS index for search.
 - In real integrations, prefer environment variables or a secrets manager over hardcoding credentials in code.
@@ -301,7 +301,7 @@ print(cg.get_file_dependents("src/pycodegraph/context/builder.py"))
 6. BFS traversal around the best entry points
 7. edge recovery between selected nodes
 
-This is why prompts like `"How does BuildContextOptions affect build_context?"` usually work better than a single exact symbol name.
+This approach is why prompts such as `"How does BuildContextOptions affect build_context?"` usually work better than a single exact symbol name.
 
 ### `BuildContextOptions`
 
