@@ -16,11 +16,12 @@ import shutil
 import tempfile
 from pathlib import Path
 
-import psycopg
 import pytest
 
-from pycodegraph import CodeGraph
-from pycodegraph.types import Language, NodeKind
+psycopg = pytest.importorskip("psycopg")
+
+from pycodegraph import CodeGraph  # noqa: E402
+from pycodegraph.types import Language, NodeKind  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Config

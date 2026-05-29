@@ -14,12 +14,20 @@ import shutil
 import tempfile
 from pathlib import Path
 
-import psycopg
 import pytest
-from sqlalchemy import text
 
-from pycodegraph import CodeGraph
-from pycodegraph.types import Edge, EdgeKind, Language, Node, NodeKind, SearchOptions
+psycopg = pytest.importorskip("psycopg")
+from sqlalchemy import text  # noqa: E402
+
+from pycodegraph import CodeGraph  # noqa: E402
+from pycodegraph.types import (  # noqa: E402
+    Edge,
+    EdgeKind,
+    Language,
+    Node,
+    NodeKind,
+    SearchOptions,
+)
 
 # ---------------------------------------------------------------------------
 # Config
