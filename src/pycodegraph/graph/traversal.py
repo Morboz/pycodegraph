@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
-from ..types import Node, Edge, EdgeKind, NodeKind, Subgraph, TraversalOptions
 from ..db.queries import QueryBuilder
-
+from ..types import Edge, EdgeKind, Node, NodeKind, Subgraph, TraversalOptions
 
 _DEFAULT_OPTIONS = TraversalOptions()
 
@@ -17,7 +14,9 @@ class GraphTraverser:
     def __init__(self, queries: QueryBuilder) -> None:
         self._queries = queries
 
-    def traverse_bfs(self, start_id: str, options: Optional[TraversalOptions] = None) -> Subgraph:
+    def traverse_bfs(
+        self, start_id: str, options: TraversalOptions | None = None
+    ) -> Subgraph:
         opts = options or _DEFAULT_OPTIONS
         start_node = self._queries.get_node_by_id(start_id)
         if not start_node:
@@ -26,7 +25,7 @@ class GraphTraverser:
         nodes: dict[str, Node] = {}
         edges: list[Edge] = []
         visited: set[str] = set()
-        queue: list[tuple[Node, Optional[Edge], int]] = [(start_node, None, 0)]
+        queue: list[tuple[Node, Edge | None, int]] = [(start_node, None, 0)]
 
         if opts.include_start:
             nodes[start_node.id] = start_node
@@ -43,14 +42,24 @@ class GraphTraverser:
             if depth >= opts.max_depth:
                 continue
 
-            adjacent = self._get_adjacent_edges(node.id, opts.direction, opts.edge_kinds)
+            adjacent = self._get_adjacent_edges(
+                node.id, opts.direction, opts.edge_kinds
+            )
             # Priority: contains > calls > other
-            adjacent.sort(key=lambda e: (
-                0 if e.kind == EdgeKind.CONTAINS else 1 if e.kind == EdgeKind.CALLS else 2
-            ))
+            adjacent.sort(
+                key=lambda e: (
+                    0
+                    if e.kind == EdgeKind.CONTAINS
+                    else 1
+                    if e.kind == EdgeKind.CALLS
+                    else 2
+                )
+            )
 
             for adj_edge in adjacent:
-                next_id = adj_edge.target if adj_edge.source == node.id else adj_edge.source
+                next_id = (
+                    adj_edge.target if adj_edge.source == node.id else adj_edge.source
+                )
                 if next_id in visited:
                     continue
                 next_node = self._queries.get_node_by_id(next_id)
@@ -63,7 +72,9 @@ class GraphTraverser:
 
         return Subgraph(nodes=nodes, edges=edges, roots=[start_id])
 
-    def traverse_dfs(self, start_id: str, options: Optional[TraversalOptions] = None) -> Subgraph:
+    def traverse_dfs(
+        self, start_id: str, options: TraversalOptions | None = None
+    ) -> Subgraph:
         opts = options or _DEFAULT_OPTIONS
         start_node = self._queries.get_node_by_id(start_id)
         if not start_node:
@@ -144,15 +155,18 @@ class GraphTraverser:
         return Subgraph(nodes=nodes, edges=edges, roots=[node_id])
 
     def find_path(
-        self, from_id: str, to_id: str, edge_kinds: Optional[list[EdgeKind]] = None,
-    ) -> Optional[list[tuple[Node, Optional[Edge]]]]:
+        self,
+        from_id: str,
+        to_id: str,
+        edge_kinds: list[EdgeKind] | None = None,
+    ) -> list[tuple[Node, Edge | None]] | None:
         from_node = self._queries.get_node_by_id(from_id)
         to_node = self._queries.get_node_by_id(to_id)
         if not from_node or not to_node:
             return None
 
         visited: set[str] = set()
-        queue: list[tuple[str, list[tuple[Node, Optional[Edge]]]]] = [
+        queue: list[tuple[str, list[tuple[Node, Edge | None]]]] = [
             (from_id, [(from_node, None)])
         ]
 
@@ -170,7 +184,7 @@ class GraphTraverser:
                 if edge.target not in visited:
                     next_node = self._queries.get_node_by_id(edge.target)
                     if next_node:
-                        queue.append((edge.target, path + [(next_node, edge)]))
+                        queue.append((edge.target, [*path, (next_node, edge)]))
 
         return None
 
@@ -184,7 +198,9 @@ class GraphTraverser:
                 break
             visited.add(current_id)
 
-            containing = self._queries.get_incoming_edges(current_id, [EdgeKind.CONTAINS.value])
+            containing = self._queries.get_incoming_edges(
+                current_id, [EdgeKind.CONTAINS.value]
+            )
             if not containing:
                 break
 
@@ -198,7 +214,9 @@ class GraphTraverser:
         return ancestors
 
     def get_children(self, node_id: str) -> list[Node]:
-        contains_edges = self._queries.get_outgoing_edges(node_id, [EdgeKind.CONTAINS.value])
+        contains_edges = self._queries.get_outgoing_edges(
+            node_id, [EdgeKind.CONTAINS.value]
+        )
         children: list[Node] = []
         for edge in contains_edges:
             child = self._queries.get_node_by_id(edge.target)
@@ -211,7 +229,10 @@ class GraphTraverser:
     # =========================================================================
 
     def _get_adjacent_edges(
-        self, node_id: str, direction: str, edge_kinds: Optional[list[EdgeKind]],
+        self,
+        node_id: str,
+        direction: str,
+        edge_kinds: list[EdgeKind] | None,
     ) -> list[Edge]:
         kind_strs = [k.value for k in edge_kinds] if edge_kinds else None
         if direction == "outgoing":
@@ -219,14 +240,18 @@ class GraphTraverser:
         elif direction == "incoming":
             return self._queries.get_incoming_edges(node_id, kind_strs)
         else:
-            return (
-                self._queries.get_outgoing_edges(node_id, kind_strs)
-                + self._queries.get_incoming_edges(node_id, kind_strs)
-            )
+            return self._queries.get_outgoing_edges(
+                node_id, kind_strs
+            ) + self._queries.get_incoming_edges(node_id, kind_strs)
 
     def _dfs_recursive(
-        self, node: Node, depth: int, opts: TraversalOptions,
-        nodes: dict[str, Node], edges: list[Edge], visited: set[str],
+        self,
+        node: Node,
+        depth: int,
+        opts: TraversalOptions,
+        nodes: dict[str, Node],
+        edges: list[Edge],
+        visited: set[str],
     ) -> None:
         if node.id in visited or len(nodes) >= opts.limit or depth >= opts.max_depth:
             return
@@ -247,41 +272,59 @@ class GraphTraverser:
             self._dfs_recursive(next_node, depth + 1, opts, nodes, edges, visited)
 
     def _get_callers_recursive(
-        self, node_id: str, max_depth: int, current_depth: int,
-        result: list[tuple[Node, Edge]], visited: set[str],
+        self,
+        node_id: str,
+        max_depth: int,
+        current_depth: int,
+        result: list[tuple[Node, Edge]],
+        visited: set[str],
     ) -> None:
         if current_depth >= max_depth or node_id in visited:
             return
         visited.add(node_id)
 
         incoming = self._queries.get_incoming_edges(
-            node_id, [EdgeKind.CALLS.value, EdgeKind.REFERENCES.value, EdgeKind.IMPORTS.value]
+            node_id,
+            [EdgeKind.CALLS.value, EdgeKind.REFERENCES.value, EdgeKind.IMPORTS.value],
         )
         for edge in incoming:
             caller = self._queries.get_node_by_id(edge.source)
             if caller and caller.id not in visited:
                 result.append((caller, edge))
-                self._get_callers_recursive(caller.id, max_depth, current_depth + 1, result, visited)
+                self._get_callers_recursive(
+                    caller.id, max_depth, current_depth + 1, result, visited
+                )
 
     def _get_callees_recursive(
-        self, node_id: str, max_depth: int, current_depth: int,
-        result: list[tuple[Node, Edge]], visited: set[str],
+        self,
+        node_id: str,
+        max_depth: int,
+        current_depth: int,
+        result: list[tuple[Node, Edge]],
+        visited: set[str],
     ) -> None:
         if current_depth >= max_depth or node_id in visited:
             return
         visited.add(node_id)
 
         outgoing = self._queries.get_outgoing_edges(
-            node_id, [EdgeKind.CALLS.value, EdgeKind.REFERENCES.value, EdgeKind.IMPORTS.value]
+            node_id,
+            [EdgeKind.CALLS.value, EdgeKind.REFERENCES.value, EdgeKind.IMPORTS.value],
         )
         for edge in outgoing:
             callee = self._queries.get_node_by_id(edge.target)
             if callee and callee.id not in visited:
                 result.append((callee, edge))
-                self._get_callees_recursive(callee.id, max_depth, current_depth + 1, result, visited)
+                self._get_callees_recursive(
+                    callee.id, max_depth, current_depth + 1, result, visited
+                )
 
     def _get_type_ancestors(
-        self, node_id: str, nodes: dict[str, Node], edges: list[Edge], visited: set[str],
+        self,
+        node_id: str,
+        nodes: dict[str, Node],
+        edges: list[Edge],
+        visited: set[str],
     ) -> None:
         if node_id in visited:
             return
@@ -298,7 +341,11 @@ class GraphTraverser:
                 self._get_type_ancestors(parent.id, nodes, edges, visited)
 
     def _get_type_descendants(
-        self, node_id: str, nodes: dict[str, Node], edges: list[Edge], visited: set[str],
+        self,
+        node_id: str,
+        nodes: dict[str, Node],
+        edges: list[Edge],
+        visited: set[str],
     ) -> None:
         if node_id in visited:
             return
@@ -315,8 +362,13 @@ class GraphTraverser:
                 self._get_type_descendants(child.id, nodes, edges, visited)
 
     def _get_impact_recursive(
-        self, node_id: str, max_depth: int, current_depth: int,
-        nodes: dict[str, Node], edges: list[Edge], visited: set[str],
+        self,
+        node_id: str,
+        max_depth: int,
+        current_depth: int,
+        nodes: dict[str, Node],
+        edges: list[Edge],
+        visited: set[str],
     ) -> None:
         if current_depth >= max_depth or node_id in visited:
             return
@@ -326,11 +378,18 @@ class GraphTraverser:
         focal = self._queries.get_node_by_id(node_id)
         if focal:
             container_kinds = {
-                NodeKind.CLASS, NodeKind.INTERFACE, NodeKind.STRUCT,
-                NodeKind.TRAIT, NodeKind.PROTOCOL, NodeKind.MODULE, NodeKind.ENUM,
+                NodeKind.CLASS,
+                NodeKind.INTERFACE,
+                NodeKind.STRUCT,
+                NodeKind.TRAIT,
+                NodeKind.PROTOCOL,
+                NodeKind.MODULE,
+                NodeKind.ENUM,
             }
             if focal.kind in container_kinds:
-                contains = self._queries.get_outgoing_edges(node_id, [EdgeKind.CONTAINS.value])
+                contains = self._queries.get_outgoing_edges(
+                    node_id, [EdgeKind.CONTAINS.value]
+                )
                 for edge in contains:
                     child = self._queries.get_node_by_id(edge.target)
                     if child and child.id not in visited:

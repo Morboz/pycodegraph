@@ -4,53 +4,118 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Optional
 
-from tree_sitter import Node as TSNode, Tree
+from tree_sitter import Node as TSNode
+from tree_sitter import Tree
 
 from ..types import (
-    Node, Edge, NodeKind, EdgeKind, Language,
-    ExtractionResult, ExtractionError, UnresolvedReference,
+    Edge,
+    EdgeKind,
+    ExtractionError,
+    ExtractionResult,
+    Language,
+    Node,
+    NodeKind,
+    UnresolvedReference,
 )
+from .grammars import detect_language, get_parser, is_language_supported
 from .helpers import (
-    generate_node_id, get_node_text, get_child_by_field,
+    generate_node_id,
+    get_child_by_field,
+    get_node_text,
     get_preceding_docstring,
 )
-from .grammars import detect_language, is_language_supported, get_parser
 from .languages import EXTRACTORS
 from .languages.base import LanguageExtractor
 
-INSTANTIATION_KINDS = frozenset([
-    "new_expression",
-    "object_creation_expression",
-    "instance_creation_expression",
-])
+INSTANTIATION_KINDS = frozenset(
+    [
+        "new_expression",
+        "object_creation_expression",
+        "instance_creation_expression",
+    ]
+)
 
-BUILTIN_TYPES = frozenset([
-    "string", "number", "boolean", "void", "null", "undefined", "never", "any", "unknown",
-    "object", "symbol", "bigint", "true", "false",
-    "str", "bool", "int", "float", "complex", "bytes", "bytearray",
-    "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
-    "f32", "f64", "char",
-    "long", "short", "byte", "double",
-    "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
-    "float32", "float64", "complex64", "complex128", "rune", "error",
-])
+BUILTIN_TYPES = frozenset(
+    [
+        "string",
+        "number",
+        "boolean",
+        "void",
+        "null",
+        "undefined",
+        "never",
+        "any",
+        "unknown",
+        "object",
+        "symbol",
+        "bigint",
+        "true",
+        "false",
+        "str",
+        "bool",
+        "int",
+        "float",
+        "complex",
+        "bytes",
+        "bytearray",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "isize",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "usize",
+        "f32",
+        "f64",
+        "char",
+        "long",
+        "short",
+        "byte",
+        "double",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "float32",
+        "float64",
+        "complex64",
+        "complex128",
+        "rune",
+        "error",
+    ]
+)
 
-TYPE_ANNOTATION_LANGUAGES = frozenset([
-    Language.TYPESCRIPT, Language.TSX, Language.DART, Language.KOTLIN,
-    Language.SWIFT, Language.RUST, Language.GO, Language.JAVA, Language.CSHARP,
-])
+TYPE_ANNOTATION_LANGUAGES = frozenset(
+    [
+        Language.TYPESCRIPT,
+        Language.TSX,
+        Language.DART,
+        Language.KOTLIN,
+        Language.SWIFT,
+        Language.RUST,
+        Language.GO,
+        Language.JAVA,
+        Language.CSHARP,
+    ]
+)
 
 
 class TreeSitterExtractor:
     """Core AST visitor that extracts code symbols from a parsed source file."""
 
-    def __init__(self, file_path: str, source: str, language: Optional[Language] = None):
+    def __init__(self, file_path: str, source: str, language: Language | None = None):
         self.file_path = file_path
         self.source_bytes = source.encode("utf-8")
         self.language = language or detect_language(file_path)
-        self.extractor: Optional[LanguageExtractor] = EXTRACTORS.get(self.language)
+        self.extractor: LanguageExtractor | None = EXTRACTORS.get(self.language)
         self.nodes: list[Node] = []
         self.edges: list[Edge] = []
         self.unresolved_refs: list[UnresolvedReference] = []
@@ -62,22 +127,26 @@ class TreeSitterExtractor:
 
         if not is_language_supported(self.language):
             return ExtractionResult(
-                errors=[ExtractionError(
-                    message=f"Unsupported language: {self.language}",
-                    file_path=self.file_path,
-                    code="unsupported_language",
-                )],
+                errors=[
+                    ExtractionError(
+                        message=f"Unsupported language: {self.language}",
+                        file_path=self.file_path,
+                        code="unsupported_language",
+                    )
+                ],
                 duration_ms=int((time.time() - start) * 1000),
             )
 
         parser = get_parser(self.language)
         if not parser:
             return ExtractionResult(
-                errors=[ExtractionError(
-                    message=f"No parser for language: {self.language}",
-                    file_path=self.file_path,
-                    code="parser_error",
-                )],
+                errors=[
+                    ExtractionError(
+                        message=f"No parser for language: {self.language}",
+                        file_path=self.file_path,
+                        code="parser_error",
+                    )
+                ],
                 duration_ms=int((time.time() - start) * 1000),
             )
 
@@ -108,13 +177,15 @@ class TreeSitterExtractor:
             self.node_stack.pop()
 
         except Exception as e:
-            self.errors.append(ExtractionError(
-                message=f"Parse error: {e}",
-                file_path=self.file_path,
-                code="parse_error",
-            ))
+            self.errors.append(
+                ExtractionError(
+                    message=f"Parse error: {e}",
+                    file_path=self.file_path,
+                    code="parse_error",
+                )
+            )
         finally:
-            if 'tree' in dir():
+            if "tree" in dir():
                 pass  # Python tree-sitter GC handles cleanup
 
         return ExtractionResult(
@@ -138,7 +209,10 @@ class TreeSitterExtractor:
 
         # Function declarations
         if node_type in self.extractor.function_types:
-            if self._is_inside_class_like() and node_type in self.extractor.method_types:
+            if (
+                self._is_inside_class_like()
+                and node_type in self.extractor.method_types
+            ):
                 self._extract_method(node)
             else:
                 self._extract_function(node)
@@ -148,7 +222,9 @@ class TreeSitterExtractor:
         elif node_type in self.extractor.class_types:
             classification = "class"
             if self.extractor.classify_class_node:
-                classification = self.extractor.classify_class_node(node, self.source_bytes)
+                classification = self.extractor.classify_class_node(
+                    node, self.source_bytes
+                )
             if classification == "struct":
                 self._extract_struct(node)
             elif classification == "enum":
@@ -186,17 +262,26 @@ class TreeSitterExtractor:
             skip_children = self._extract_type_alias(node)
 
         # Property
-        elif node_type in (self.extractor.property_types or []) and self._is_inside_class_like():
+        elif (
+            node_type in (self.extractor.property_types or [])
+            and self._is_inside_class_like()
+        ):
             self._extract_property(node)
             skip_children = True
 
         # Field
-        elif node_type in (self.extractor.field_types or []) and self._is_inside_class_like():
+        elif (
+            node_type in (self.extractor.field_types or [])
+            and self._is_inside_class_like()
+        ):
             self._extract_field(node)
             skip_children = True
 
         # Variable
-        elif node_type in self.extractor.variable_types and not self._is_inside_class_like():
+        elif (
+            node_type in self.extractor.variable_types
+            and not self._is_inside_class_like()
+        ):
             self._extract_variable(node)
             skip_children = True
 
@@ -233,7 +318,7 @@ class TreeSitterExtractor:
         name: str,
         node: TSNode,
         **extra,
-    ) -> Optional[Node]:
+    ) -> Node | None:
         if not name:
             return None
 
@@ -261,11 +346,13 @@ class TreeSitterExtractor:
         if self.node_stack:
             parent_id = self.node_stack[-1]
             if parent_id:
-                self.edges.append(Edge(
-                    source=parent_id,
-                    target=node_id,
-                    kind=EdgeKind.CONTAINS,
-                ))
+                self.edges.append(
+                    Edge(
+                        source=parent_id,
+                        target=node_id,
+                        kind=EdgeKind.CONTAINS,
+                    )
+                )
 
         return new_node
 
@@ -288,8 +375,12 @@ class TreeSitterExtractor:
         if not parent:
             return False
         return parent.kind in (
-            NodeKind.CLASS, NodeKind.STRUCT, NodeKind.INTERFACE,
-            NodeKind.TRAIT, NodeKind.ENUM, NodeKind.MODULE,
+            NodeKind.CLASS,
+            NodeKind.STRUCT,
+            NodeKind.INTERFACE,
+            NodeKind.TRAIT,
+            NodeKind.ENUM,
+            NodeKind.MODULE,
         )
 
     # =========================================================================
@@ -305,13 +396,21 @@ class TreeSitterExtractor:
         if name_node:
             resolved = name_node
             while resolved.type == "pointer_declarator":
-                inner = get_child_by_field(resolved, "declarator") or resolved.named_child(0)
+                inner = get_child_by_field(
+                    resolved, "declarator"
+                ) or resolved.named_child(0)
                 if not inner:
                     break
                 resolved = inner
             if resolved.type in ("function_declarator", "declarator"):
-                inner = get_child_by_field(resolved, "declarator") or resolved.named_child(0)
-                return get_node_text(inner, self.source_bytes) if inner else get_node_text(resolved, self.source_bytes)
+                inner = get_child_by_field(
+                    resolved, "declarator"
+                ) or resolved.named_child(0)
+                return (
+                    get_node_text(inner, self.source_bytes)
+                    if inner
+                    else get_node_text(resolved, self.source_bytes)
+                )
             return get_node_text(resolved, self.source_bytes)
 
         # Anonymous functions
@@ -326,7 +425,12 @@ class TreeSitterExtractor:
         # Fallback: first identifier child
         for i in range(node.named_child_count):
             c = node.named_child(i)
-            if c and c.type in ("identifier", "type_identifier", "simple_identifier", "constant"):
+            if c and c.type in (
+                "identifier",
+                "type_identifier",
+                "simple_identifier",
+                "constant",
+            ):
                 return get_node_text(c, self.source_bytes)
 
         return "<anonymous>"
@@ -343,30 +447,51 @@ class TreeSitterExtractor:
                 return
 
         name = self._extract_name(node)
-        if name == "<anonymous>":
+        if name == "<anonymous>" and node.type in (
+            "arrow_function",
+            "function_expression",
+        ):
             # Try parent variable_declarator for arrow functions
-            if node.type in ("arrow_function", "function_expression"):
-                parent = node.parent
-                if parent and parent.type == "variable_declarator":
-                    var_name = get_child_by_field(parent, "name")
-                    if var_name:
-                        name = get_node_text(var_name, self.source_bytes)
+            parent = node.parent
+            if parent and parent.type == "variable_declarator":
+                var_name = get_child_by_field(parent, "name")
+                if var_name:
+                    name = get_node_text(var_name, self.source_bytes)
         if name == "<anonymous>":
             return
 
-        docstring = get_preceding_docstring(node, self.source_bytes) if self.extractor else None
-        signature = self.extractor.get_signature(node, self.source_bytes) if self.extractor.get_signature else None
-        visibility = self.extractor.get_visibility(node) if self.extractor.get_visibility else None
-        is_exported = self.extractor.is_exported(node, self.source_bytes) if self.extractor.is_exported else None
+        docstring = (
+            get_preceding_docstring(node, self.source_bytes) if self.extractor else None
+        )
+        signature = (
+            self.extractor.get_signature(node, self.source_bytes)
+            if self.extractor.get_signature
+            else None
+        )
+        visibility = (
+            self.extractor.get_visibility(node)
+            if self.extractor.get_visibility
+            else None
+        )
+        is_exported = (
+            self.extractor.is_exported(node, self.source_bytes)
+            if self.extractor.is_exported
+            else None
+        )
         is_async = self.extractor.is_async(node) if self.extractor.is_async else None
         is_static = self.extractor.is_static(node) if self.extractor.is_static else None
 
-        func_node = self._create_node(NodeKind.FUNCTION, name, node,
-                                       docstring=docstring, signature=signature,
-                                       visibility=visibility,
-                                       is_exported=bool(is_exported) if is_exported else False,
-                                       is_async=bool(is_async) if is_async else False,
-                                       is_static=bool(is_static) if is_static else False)
+        func_node = self._create_node(
+            NodeKind.FUNCTION,
+            name,
+            node,
+            docstring=docstring,
+            signature=signature,
+            visibility=visibility,
+            is_exported=bool(is_exported) if is_exported else False,
+            is_async=bool(is_async) if is_async else False,
+            is_static=bool(is_static) if is_static else False,
+        )
         if not func_node:
             return
 
@@ -384,7 +509,11 @@ class TreeSitterExtractor:
         if self.extractor.get_receiver_type:
             receiver_type = self.extractor.get_receiver_type(node, self.source_bytes)
 
-        if not self._is_inside_class_like() and not self.extractor.methods_are_top_level and not receiver_type:
+        if (
+            not self._is_inside_class_like()
+            and not self.extractor.methods_are_top_level
+            and not receiver_type
+        ):
             if node.parent and node.parent.type in ("object", "object_expression"):
                 return
             self._extract_function(node)
@@ -392,19 +521,32 @@ class TreeSitterExtractor:
 
         name = self._extract_name(node)
         docstring = get_preceding_docstring(node, self.source_bytes)
-        signature = self.extractor.get_signature(node, self.source_bytes) if self.extractor.get_signature else None
-        visibility = self.extractor.get_visibility(node) if self.extractor.get_visibility else None
+        signature = (
+            self.extractor.get_signature(node, self.source_bytes)
+            if self.extractor.get_signature
+            else None
+        )
+        visibility = (
+            self.extractor.get_visibility(node)
+            if self.extractor.get_visibility
+            else None
+        )
         is_async = self.extractor.is_async(node) if self.extractor.is_async else None
         is_static = self.extractor.is_static(node) if self.extractor.is_static else None
 
         qname = f"{receiver_type}::{name}" if receiver_type else None
 
-        method_node = self._create_node(NodeKind.METHOD, name, node,
-                                         docstring=docstring, signature=signature,
-                                         visibility=visibility,
-                                         is_async=bool(is_async) if is_async else False,
-                                         is_static=bool(is_static) if is_static else False,
-                                         qualified_name=qname)
+        method_node = self._create_node(
+            NodeKind.METHOD,
+            name,
+            node,
+            docstring=docstring,
+            signature=signature,
+            visibility=visibility,
+            is_async=bool(is_async) if is_async else False,
+            is_static=bool(is_static) if is_static else False,
+            qualified_name=qname,
+        )
         if not method_node:
             return
 
@@ -420,12 +562,25 @@ class TreeSitterExtractor:
 
         name = self._extract_name(node)
         docstring = get_preceding_docstring(node, self.source_bytes)
-        visibility = self.extractor.get_visibility(node) if self.extractor.get_visibility else None
-        is_exported = self.extractor.is_exported(node, self.source_bytes) if self.extractor.is_exported else None
+        visibility = (
+            self.extractor.get_visibility(node)
+            if self.extractor.get_visibility
+            else None
+        )
+        is_exported = (
+            self.extractor.is_exported(node, self.source_bytes)
+            if self.extractor.is_exported
+            else None
+        )
 
-        class_node = self._create_node(kind, name, node,
-                                        docstring=docstring, visibility=visibility,
-                                        is_exported=bool(is_exported) if is_exported else False)
+        class_node = self._create_node(
+            kind,
+            name,
+            node,
+            docstring=docstring,
+            visibility=visibility,
+            is_exported=bool(is_exported) if is_exported else False,
+        )
         if not class_node:
             return
 
@@ -445,11 +600,19 @@ class TreeSitterExtractor:
 
         name = self._extract_name(node)
         docstring = get_preceding_docstring(node, self.source_bytes)
-        is_exported = self.extractor.is_exported(node, self.source_bytes) if self.extractor.is_exported else None
+        is_exported = (
+            self.extractor.is_exported(node, self.source_bytes)
+            if self.extractor.is_exported
+            else None
+        )
 
-        iface_node = self._create_node(NodeKind.INTERFACE, name, node,
-                                        docstring=docstring,
-                                        is_exported=bool(is_exported) if is_exported else False)
+        iface_node = self._create_node(
+            NodeKind.INTERFACE,
+            name,
+            node,
+            docstring=docstring,
+            is_exported=bool(is_exported) if is_exported else False,
+        )
         if not iface_node:
             return
 
@@ -472,10 +635,15 @@ class TreeSitterExtractor:
 
         name = self._extract_name(node)
         docstring = get_preceding_docstring(node, self.source_bytes)
-        visibility = self.extractor.get_visibility(node) if self.extractor.get_visibility else None
+        visibility = (
+            self.extractor.get_visibility(node)
+            if self.extractor.get_visibility
+            else None
+        )
 
-        struct_node = self._create_node(NodeKind.STRUCT, name, node,
-                                         docstring=docstring, visibility=visibility)
+        struct_node = self._create_node(
+            NodeKind.STRUCT, name, node, docstring=docstring, visibility=visibility
+        )
         if not struct_node:
             return
 
@@ -497,10 +665,15 @@ class TreeSitterExtractor:
 
         name = self._extract_name(node)
         docstring = get_preceding_docstring(node, self.source_bytes)
-        visibility = self.extractor.get_visibility(node) if self.extractor.get_visibility else None
+        visibility = (
+            self.extractor.get_visibility(node)
+            if self.extractor.get_visibility
+            else None
+        )
 
-        enum_node = self._create_node(NodeKind.ENUM, name, node,
-                                       docstring=docstring, visibility=visibility)
+        enum_node = self._create_node(
+            NodeKind.ENUM, name, node, docstring=docstring, visibility=visibility
+        )
         if not enum_node:
             return
 
@@ -521,49 +694,79 @@ class TreeSitterExtractor:
     def _extract_enum_member(self, node: TSNode) -> None:
         name_node = get_child_by_field(node, "name")
         if name_node:
-            self._create_node(NodeKind.ENUM_MEMBER, get_node_text(name_node, self.source_bytes), node)
+            self._create_node(
+                NodeKind.ENUM_MEMBER, get_node_text(name_node, self.source_bytes), node
+            )
             return
         for i in range(node.named_child_count):
             c = node.named_child(i)
-            if c and c.type in ("simple_identifier", "identifier", "property_identifier"):
-                self._create_node(NodeKind.ENUM_MEMBER, get_node_text(c, self.source_bytes), c)
+            if c and c.type in (
+                "simple_identifier",
+                "identifier",
+                "property_identifier",
+            ):
+                self._create_node(
+                    NodeKind.ENUM_MEMBER, get_node_text(c, self.source_bytes), c
+                )
                 return
         if node.named_child_count == 0:
-            self._create_node(NodeKind.ENUM_MEMBER, get_node_text(node, self.source_bytes), node)
+            self._create_node(
+                NodeKind.ENUM_MEMBER, get_node_text(node, self.source_bytes), node
+            )
 
     def _extract_property(self, node: TSNode) -> None:
         if not self.extractor:
             return
-        name_node = (get_child_by_field(node, "name") or
-                     next((c for c in node.named_children if c.type == "identifier"), None))
+        name_node = get_child_by_field(node, "name") or next(
+            (c for c in node.named_children if c.type == "identifier"), None
+        )
         if not name_node:
             return
         name = get_node_text(name_node, self.source_bytes)
-        visibility = self.extractor.get_visibility(node) if self.extractor.get_visibility else None
+        visibility = (
+            self.extractor.get_visibility(node)
+            if self.extractor.get_visibility
+            else None
+        )
         self._create_node(NodeKind.PROPERTY, name, node, visibility=visibility)
 
     def _extract_field(self, node: TSNode) -> None:
         if not self.extractor:
             return
-        visibility = self.extractor.get_visibility(node) if self.extractor.get_visibility else None
+        visibility = (
+            self.extractor.get_visibility(node)
+            if self.extractor.get_visibility
+            else None
+        )
 
         # Find variable_declarator children
-        declarators = [c for c in node.named_children if c.type == "variable_declarator"]
+        declarators = [
+            c for c in node.named_children if c.type == "variable_declarator"
+        ]
         if not declarators:
-            var_decl = next((c for c in node.named_children if c.type == "variable_declaration"), None)
+            var_decl = next(
+                (c for c in node.named_children if c.type == "variable_declaration"),
+                None,
+            )
             if var_decl:
-                declarators = [c for c in var_decl.named_children if c.type == "variable_declarator"]
+                declarators = [
+                    c
+                    for c in var_decl.named_children
+                    if c.type == "variable_declarator"
+                ]
 
         if declarators:
             for decl in declarators:
-                name_node = (get_child_by_field(decl, "name") or
-                             next((c for c in decl.named_children if c.type == "identifier"), None))
+                name_node = get_child_by_field(decl, "name") or next(
+                    (c for c in decl.named_children if c.type == "identifier"), None
+                )
                 if name_node:
                     name = get_node_text(name_node, self.source_bytes)
                     self._create_node(NodeKind.FIELD, name, decl, visibility=visibility)
         else:
-            name_node = (get_child_by_field(node, "name") or
-                         next((c for c in node.named_children if c.type == "identifier"), None))
+            name_node = get_child_by_field(node, "name") or next(
+                (c for c in node.named_children if c.type == "identifier"), None
+            )
             if name_node:
                 name = get_node_text(name_node, self.source_bytes)
                 self._create_node(NodeKind.FIELD, name, node, visibility=visibility)
@@ -575,7 +778,12 @@ class TreeSitterExtractor:
         is_const = self.extractor.is_const(node) if self.extractor.is_const else False
         kind = NodeKind.CONSTANT if is_const else NodeKind.VARIABLE
 
-        if self.language in (Language.TYPESCRIPT, Language.JAVASCRIPT, Language.TSX, Language.JSX):
+        if self.language in (
+            Language.TYPESCRIPT,
+            Language.JAVASCRIPT,
+            Language.TSX,
+            Language.JSX,
+        ):
             for i in range(node.named_child_count):
                 child = node.named_child(i)
                 if child and child.type == "variable_declarator":
@@ -585,11 +793,22 @@ class TreeSitterExtractor:
                         if name_node.type in ("object_pattern", "array_pattern"):
                             continue
                         name = get_node_text(name_node, self.source_bytes)
-                        if value_node and value_node.type in ("arrow_function", "function_expression"):
+                        if value_node and value_node.type in (
+                            "arrow_function",
+                            "function_expression",
+                        ):
                             self._extract_function(value_node)
                             continue
-                        init_val = get_node_text(value_node, self.source_bytes)[:100] if value_node else None
-                        sig = f"= {init_val}{'...' if init_val and len(init_val) >= 100 else ''}" if init_val else None
+                        init_val = (
+                            get_node_text(value_node, self.source_bytes)[:100]
+                            if value_node
+                            else None
+                        )
+                        sig = (
+                            f"= {init_val}{'...' if init_val and len(init_val) >= 100 else ''}"
+                            if init_val
+                            else None
+                        )
                         self._create_node(kind, name, child, signature=sig)
 
         elif self.language in (Language.PYTHON, Language.RUBY):
@@ -597,23 +816,38 @@ class TreeSitterExtractor:
             right = get_child_by_field(node, "right") or node.named_child(1)
             if left and left.type == "identifier":
                 name = get_node_text(left, self.source_bytes)
-                init_val = get_node_text(right, self.source_bytes)[:100] if right else None
-                sig = f"= {init_val}{'...' if init_val and len(init_val) >= 100 else ''}" if init_val else None
+                init_val = (
+                    get_node_text(right, self.source_bytes)[:100] if right else None
+                )
+                sig = (
+                    f"= {init_val}{'...' if init_val and len(init_val) >= 100 else ''}"
+                    if init_val
+                    else None
+                )
                 self._create_node(kind, name, node, signature=sig)
 
         elif self.language == Language.GO:
-            specs = [c for c in node.named_children if c.type in ("var_spec", "const_spec")]
+            specs = [
+                c for c in node.named_children if c.type in ("var_spec", "const_spec")
+            ]
             for spec in specs:
                 name_child = spec.named_child(0)
                 if name_child and name_child.type == "identifier":
                     name = get_node_text(name_child, self.source_bytes)
-                    vkind = NodeKind.CONSTANT if node.type == "const_declaration" else NodeKind.VARIABLE
+                    vkind = (
+                        NodeKind.CONSTANT
+                        if node.type == "const_declaration"
+                        else NodeKind.VARIABLE
+                    )
                     self._create_node(vkind, name, spec)
             if node.type == "short_var_declaration":
                 left = get_child_by_field(node, "left")
                 if left:
-                    ids = ([c for c in left.named_children if c.type == "identifier"]
-                           if left.type == "expression_list" else [left])
+                    ids = (
+                        [c for c in left.named_children if c.type == "identifier"]
+                        if left.type == "expression_list"
+                        else [left]
+                    )
                     for ident in ids:
                         name = get_node_text(ident, self.source_bytes)
                         self._create_node(NodeKind.VARIABLE, name, node)
@@ -622,19 +856,29 @@ class TreeSitterExtractor:
             if node.type == "const_item":
                 name_node = get_child_by_field(node, "name")
                 if name_node:
-                    self._create_node(NodeKind.CONSTANT, get_node_text(name_node, self.source_bytes), node)
+                    self._create_node(
+                        NodeKind.CONSTANT,
+                        get_node_text(name_node, self.source_bytes),
+                        node,
+                    )
             elif node.type == "let_declaration":
                 name_node = get_child_by_field(node, "name")
                 if name_node:
-                    self._create_node(NodeKind.VARIABLE, get_node_text(name_node, self.source_bytes), node)
+                    self._create_node(
+                        NodeKind.VARIABLE,
+                        get_node_text(name_node, self.source_bytes),
+                        node,
+                    )
 
         else:
             for i in range(node.named_child_count):
                 c = node.named_child(i)
                 if c and c.type in ("identifier", "variable_declarator"):
-                    name = (get_node_text(c, self.source_bytes)
-                            if c.type == "identifier"
-                            else self._extract_name(c))
+                    name = (
+                        get_node_text(c, self.source_bytes)
+                        if c.type == "identifier"
+                        else self._extract_name(c)
+                    )
                     if name and name != "<anonymous>":
                         self._create_node(kind, name, c)
 
@@ -647,16 +891,27 @@ class TreeSitterExtractor:
         if self.extractor.extract_import:
             info = self.extractor.extract_import(node, self.source_bytes)
             if info:
-                self._create_node(NodeKind.IMPORT, info["module_name"], node, signature=info.get("signature"))
-                if not info.get("handled_refs") and info["module_name"] and self.node_stack:
+                self._create_node(
+                    NodeKind.IMPORT,
+                    info["module_name"],
+                    node,
+                    signature=info.get("signature"),
+                )
+                if (
+                    not info.get("handled_refs")
+                    and info["module_name"]
+                    and self.node_stack
+                ):
                     parent_id = self.node_stack[-1]
-                    self.unresolved_refs.append(UnresolvedReference(
-                        from_node_id=parent_id,
-                        reference_name=info["module_name"],
-                        reference_kind=EdgeKind.IMPORTS,
-                        line=node.start_point[0] + 1,
-                        column=node.start_point[1],
-                    ))
+                    self.unresolved_refs.append(
+                        UnresolvedReference(
+                            from_node_id=parent_id,
+                            reference_name=info["module_name"],
+                            reference_kind=EdgeKind.IMPORTS,
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                        )
+                    )
                 return
 
         # Python: import os, sys → multiple imports
@@ -664,37 +919,62 @@ class TreeSitterExtractor:
             for i in range(node.named_child_count):
                 c = node.named_child(i)
                 if c and c.type == "dotted_name":
-                    self._create_node(NodeKind.IMPORT, get_node_text(c, self.source_bytes), node,
-                                      signature=import_text)
+                    self._create_node(
+                        NodeKind.IMPORT,
+                        get_node_text(c, self.source_bytes),
+                        node,
+                        signature=import_text,
+                    )
                 elif c and c.type == "aliased_import":
-                    dotted = next((x for x in c.named_children if x.type == "dotted_name"), None)
+                    dotted = next(
+                        (x for x in c.named_children if x.type == "dotted_name"), None
+                    )
                     if dotted:
-                        self._create_node(NodeKind.IMPORT, get_node_text(dotted, self.source_bytes), node,
-                                          signature=import_text)
+                        self._create_node(
+                            NodeKind.IMPORT,
+                            get_node_text(dotted, self.source_bytes),
+                            node,
+                            signature=import_text,
+                        )
             return
 
         # Go imports
         if self.language == Language.GO:
             parent_id = self.node_stack[-1] if self.node_stack else None
             specs = [c for c in node.named_children if c.type == "import_spec"]
-            spec_list = next((c for c in node.named_children if c.type == "import_spec_list"), None)
+            spec_list = next(
+                (c for c in node.named_children if c.type == "import_spec_list"), None
+            )
             if spec_list:
                 specs = [c for c in spec_list.named_children if c.type == "import_spec"]
             for spec in specs:
-                str_lit = next((c for c in spec.named_children if c.type == "interpreted_string_literal"), None)
+                str_lit = next(
+                    (
+                        c
+                        for c in spec.named_children
+                        if c.type == "interpreted_string_literal"
+                    ),
+                    None,
+                )
                 if str_lit:
                     path = get_node_text(str_lit, self.source_bytes).strip("'\"")
                     if path:
-                        self._create_node(NodeKind.IMPORT, path, spec,
-                                          signature=get_node_text(spec, self.source_bytes).strip())
+                        self._create_node(
+                            NodeKind.IMPORT,
+                            path,
+                            spec,
+                            signature=get_node_text(spec, self.source_bytes).strip(),
+                        )
                         if parent_id:
-                            self.unresolved_refs.append(UnresolvedReference(
-                                from_node_id=parent_id,
-                                reference_name=path,
-                                reference_kind=EdgeKind.IMPORTS,
-                                line=spec.start_point[0] + 1,
-                                column=spec.start_point[1],
-                            ))
+                            self.unresolved_refs.append(
+                                UnresolvedReference(
+                                    from_node_id=parent_id,
+                                    reference_name=path,
+                                    reference_kind=EdgeKind.IMPORTS,
+                                    line=spec.start_point[0] + 1,
+                                    column=spec.start_point[1],
+                                )
+                            )
             return
 
         # Java imports
@@ -720,46 +1000,82 @@ class TreeSitterExtractor:
 
         # Java/Kotlin/PHP method_invocation with name + object fields
         name_field = get_child_by_field(node, "name")
-        object_field = get_child_by_field(node, "object") or get_child_by_field(node, "scope")
+        object_field = get_child_by_field(node, "object") or get_child_by_field(
+            node, "scope"
+        )
 
-        if name_field and object_field and node.type in ("method_invocation", "member_call_expression", "scoped_call_expression"):
+        if (
+            name_field
+            and object_field
+            and node.type
+            in ("method_invocation", "member_call_expression", "scoped_call_expression")
+        ):
             method_name = get_node_text(name_field, self.source_bytes)
             receiver_name = get_node_text(object_field, self.source_bytes).lstrip("$")
             skip_receivers = {"self", "this", "cls", "super", "parent", "static"}
-            callee_name = method_name if receiver_name in skip_receivers else f"{receiver_name}.{method_name}"
+            callee_name = (
+                method_name
+                if receiver_name in skip_receivers
+                else f"{receiver_name}.{method_name}"
+            )
         else:
             func = get_child_by_field(node, "function") or node.named_child(0)
             if func:
-                if func.type in ("member_expression", "attribute", "selector_expression", "navigation_expression"):
-                    prop = get_child_by_field(func, "property") or get_child_by_field(func, "field")
+                if func.type in (
+                    "member_expression",
+                    "attribute",
+                    "selector_expression",
+                    "navigation_expression",
+                ):
+                    prop = get_child_by_field(func, "property") or get_child_by_field(
+                        func, "field"
+                    )
                     if not prop:
                         child1 = func.named_child(1)
                         if child1 and child1.type == "navigation_suffix":
-                            prop = next((c for c in child1.named_children if c.type == "simple_identifier"), child1)
+                            prop = next(
+                                (
+                                    c
+                                    for c in child1.named_children
+                                    if c.type == "simple_identifier"
+                                ),
+                                child1,
+                            )
                         else:
                             prop = child1
                     if prop:
                         method_name = get_node_text(prop, self.source_bytes)
-                        receiver = (get_child_by_field(func, "object") or
-                                    get_child_by_field(func, "operand") or
-                                    func.named_child(0))
+                        receiver = (
+                            get_child_by_field(func, "object")
+                            or get_child_by_field(func, "operand")
+                            or func.named_child(0)
+                        )
                         skip_receivers = {"self", "this", "cls", "super"}
-                        if receiver and receiver.type in ("identifier", "simple_identifier"):
+                        if receiver and receiver.type in (
+                            "identifier",
+                            "simple_identifier",
+                        ):
                             rname = get_node_text(receiver, self.source_bytes)
-                            callee_name = method_name if rname in skip_receivers else f"{rname}.{method_name}"
+                            callee_name = (
+                                method_name
+                                if rname in skip_receivers
+                                else f"{rname}.{method_name}"
+                            )
                         else:
                             callee_name = method_name
                 else:
                     callee_name = get_node_text(func, self.source_bytes)
 
         if callee_name:
-            self.unresolved_refs.append(UnresolvedReference(
-                from_node_id=caller_id,
-                reference_name=callee_name,
-                reference_kind=EdgeKind.CALLS,
-                line=node.start_point[0] + 1,
-                column=node.start_point[1],
-            ))
+            self.unresolved_refs.append(
+                UnresolvedReference(
+                    from_node_id=caller_id,
+                    reference_name=callee_name,
+                    reference_kind=EdgeKind.CALLS,
+                    line=node.start_point[0] + 1,
+                    column=node.start_point[1],
+                )
+            )
 
     def _extract_instantiation(self, node: TSNode) -> None:
         if not self.node_stack:
@@ -768,10 +1084,12 @@ class TreeSitterExtractor:
         if not from_id:
             return
 
-        ctor = (get_child_by_field(node, "constructor") or
-                get_child_by_field(node, "type") or
-                get_child_by_field(node, "name") or
-                node.named_child(0))
+        ctor = (
+            get_child_by_field(node, "constructor")
+            or get_child_by_field(node, "type")
+            or get_child_by_field(node, "name")
+            or node.named_child(0)
+        )
         if not ctor:
             return
 
@@ -781,17 +1099,19 @@ class TreeSitterExtractor:
             class_name = class_name[:lt]
         last_dot = max(class_name.rfind("."), class_name.rfind("::"))
         if last_dot >= 0:
-            class_name = class_name[last_dot + 1:].lstrip(":.")
+            class_name = class_name[last_dot + 1 :].lstrip(":.")
         class_name = class_name.strip()
 
         if class_name:
-            self.unresolved_refs.append(UnresolvedReference(
-                from_node_id=from_id,
-                reference_name=class_name,
-                reference_kind=EdgeKind.INSTANTIATES,
-                line=node.start_point[0] + 1,
-                column=node.start_point[1],
-            ))
+            self.unresolved_refs.append(
+                UnresolvedReference(
+                    from_node_id=from_id,
+                    reference_name=class_name,
+                    reference_kind=EdgeKind.INSTANTIATES,
+                    line=node.start_point[0] + 1,
+                    column=node.start_point[1],
+                )
+            )
 
     def _extract_type_alias(self, node: TSNode) -> bool:
         if not self.extractor:
@@ -802,19 +1122,30 @@ class TreeSitterExtractor:
             return False
 
         docstring = get_preceding_docstring(node, self.source_bytes)
-        is_exported = self.extractor.is_exported(node, self.source_bytes) if self.extractor.is_exported else None
+        is_exported = (
+            self.extractor.is_exported(node, self.source_bytes)
+            if self.extractor.is_exported
+            else None
+        )
 
         # Go: type_declaration wraps struct/interface
         if self.extractor.resolve_type_alias_kind:
             resolved = self.extractor.resolve_type_alias_kind(node, self.source_bytes)
             if resolved == NodeKind.STRUCT:
-                struct_node = self._create_node(NodeKind.STRUCT, name, node,
-                                                 docstring=docstring,
-                                                 is_exported=bool(is_exported) if is_exported else False)
+                struct_node = self._create_node(
+                    NodeKind.STRUCT,
+                    name,
+                    node,
+                    docstring=docstring,
+                    is_exported=bool(is_exported) if is_exported else False,
+                )
                 if struct_node:
                     type_child = get_child_by_field(node, "type")
                     if type_child:
-                        body = get_child_by_field(type_child, self.extractor.body_field) or type_child
+                        body = (
+                            get_child_by_field(type_child, self.extractor.body_field)
+                            or type_child
+                        )
                         self.node_stack.append(struct_node.id)
                         for i in range(body.named_child_count):
                             child = body.named_child(i)
@@ -823,14 +1154,22 @@ class TreeSitterExtractor:
                         self.node_stack.pop()
                 return True
             if resolved == NodeKind.INTERFACE:
-                iface_node = self._create_node(NodeKind.INTERFACE, name, node,
-                                                docstring=docstring,
-                                                is_exported=bool(is_exported) if is_exported else False)
+                self._create_node(
+                    NodeKind.INTERFACE,
+                    name,
+                    node,
+                    docstring=docstring,
+                    is_exported=bool(is_exported) if is_exported else False,
+                )
                 return True
 
-        self._create_node(NodeKind.TYPE_ALIAS, name, node,
-                          docstring=docstring,
-                          is_exported=bool(is_exported) if is_exported else False)
+        self._create_node(
+            NodeKind.TYPE_ALIAS,
+            name,
+            node,
+            docstring=docstring,
+            is_exported=bool(is_exported) if is_exported else False,
+        )
         return False
 
     def _extract_rust_impl_item(self, node: TSNode) -> None:
@@ -838,8 +1177,11 @@ class TreeSitterExtractor:
         if not has_for:
             return
 
-        type_idents = [c for c in node.named_children
-                       if c.type in ("type_identifier", "generic_type", "scoped_type_identifier")]
+        type_idents = [
+            c
+            for c in node.named_children
+            if c.type in ("type_identifier", "generic_type", "scoped_type_identifier")
+        ]
         if len(type_idents) < 2:
             return
 
@@ -848,24 +1190,37 @@ class TreeSitterExtractor:
 
         trait_name = get_node_text(trait_node, self.source_bytes)
         if type_node.type == "generic_type":
-            inner = next((c for c in type_node.named_children if c.type == "type_identifier"), None)
-            type_name = get_node_text(inner, self.source_bytes) if inner else get_node_text(type_node, self.source_bytes)
+            inner = next(
+                (c for c in type_node.named_children if c.type == "type_identifier"),
+                None,
+            )
+            type_name = (
+                get_node_text(inner, self.source_bytes)
+                if inner
+                else get_node_text(type_node, self.source_bytes)
+            )
         else:
             type_name = get_node_text(type_node, self.source_bytes)
 
         type_node_id = self._find_node_by_name(type_name)
         if type_node_id:
-            self.unresolved_refs.append(UnresolvedReference(
-                from_node_id=type_node_id,
-                reference_name=trait_name,
-                reference_kind=EdgeKind.IMPLEMENTS,
-                line=trait_node.start_point[0] + 1,
-                column=trait_node.start_point[1],
-            ))
+            self.unresolved_refs.append(
+                UnresolvedReference(
+                    from_node_id=type_node_id,
+                    reference_name=trait_name,
+                    reference_kind=EdgeKind.IMPLEMENTS,
+                    line=trait_node.start_point[0] + 1,
+                    column=trait_node.start_point[1],
+                )
+            )
 
     def _find_node_by_name(self, name: str) -> str | None:
         for n in self.nodes:
-            if n.name == name and n.kind in (NodeKind.STRUCT, NodeKind.ENUM, NodeKind.CLASS):
+            if n.name == name and n.kind in (
+                NodeKind.STRUCT,
+                NodeKind.ENUM,
+                NodeKind.CLASS,
+            ):
                 return n.id
         return None
 
@@ -881,55 +1236,81 @@ class TreeSitterExtractor:
 
             ct = child.type
 
-            if ct in ("extends_clause", "superclass", "base_clause", "extends_interfaces"):
-                type_list = next((c for c in child.named_children if c.type == "type_list"), None)
-                targets = type_list.named_children if type_list else [child.named_child(0)]
+            if ct in (
+                "extends_clause",
+                "superclass",
+                "base_clause",
+                "extends_interfaces",
+            ):
+                type_list = next(
+                    (c for c in child.named_children if c.type == "type_list"), None
+                )
+                targets = (
+                    type_list.named_children if type_list else [child.named_child(0)]
+                )
                 for t in targets:
                     if t:
-                        self.unresolved_refs.append(UnresolvedReference(
-                            from_node_id=class_id,
-                            reference_name=get_node_text(t, self.source_bytes),
-                            reference_kind=EdgeKind.EXTENDS,
-                            line=t.start_point[0] + 1,
-                            column=t.start_point[1],
-                        ))
+                        self.unresolved_refs.append(
+                            UnresolvedReference(
+                                from_node_id=class_id,
+                                reference_name=get_node_text(t, self.source_bytes),
+                                reference_kind=EdgeKind.EXTENDS,
+                                line=t.start_point[0] + 1,
+                                column=t.start_point[1],
+                            )
+                        )
 
-            if ct in ("implements_clause", "class_interface_clause", "super_interfaces", "interfaces"):
-                type_list = next((c for c in child.named_children if c.type == "type_list"), None)
-                targets = type_list.named_children if type_list else child.named_children
+            if ct in (
+                "implements_clause",
+                "class_interface_clause",
+                "super_interfaces",
+                "interfaces",
+            ):
+                type_list = next(
+                    (c for c in child.named_children if c.type == "type_list"), None
+                )
+                targets = (
+                    type_list.named_children if type_list else child.named_children
+                )
                 for iface in targets:
                     if iface:
-                        self.unresolved_refs.append(UnresolvedReference(
-                            from_node_id=class_id,
-                            reference_name=get_node_text(iface, self.source_bytes),
-                            reference_kind=EdgeKind.IMPLEMENTS,
-                            line=iface.start_point[0] + 1,
-                            column=iface.start_point[1],
-                        ))
+                        self.unresolved_refs.append(
+                            UnresolvedReference(
+                                from_node_id=class_id,
+                                reference_name=get_node_text(iface, self.source_bytes),
+                                reference_kind=EdgeKind.IMPLEMENTS,
+                                line=iface.start_point[0] + 1,
+                                column=iface.start_point[1],
+                            )
+                        )
 
             # Python: class Foo(Bar, Baz):
             if ct == "argument_list" and node.type == "class_definition":
                 for arg in child.named_children:
                     if arg.type in ("identifier", "attribute"):
-                        self.unresolved_refs.append(UnresolvedReference(
-                            from_node_id=class_id,
-                            reference_name=get_node_text(arg, self.source_bytes),
-                            reference_kind=EdgeKind.EXTENDS,
-                            line=arg.start_point[0] + 1,
-                            column=arg.start_point[1],
-                        ))
+                        self.unresolved_refs.append(
+                            UnresolvedReference(
+                                from_node_id=class_id,
+                                reference_name=get_node_text(arg, self.source_bytes),
+                                reference_kind=EdgeKind.EXTENDS,
+                                line=arg.start_point[0] + 1,
+                                column=arg.start_point[1],
+                            )
+                        )
 
             # Rust trait_bounds
             if ct == "trait_bounds":
                 for bound in child.named_children:
                     if bound.type == "type_identifier":
-                        self.unresolved_refs.append(UnresolvedReference(
-                            from_node_id=class_id,
-                            reference_name=get_node_text(bound, self.source_bytes),
-                            reference_kind=EdgeKind.EXTENDS,
-                            line=bound.start_point[0] + 1,
-                            column=bound.start_point[1],
-                        ))
+                        self.unresolved_refs.append(
+                            UnresolvedReference(
+                                from_node_id=class_id,
+                                reference_name=get_node_text(bound, self.source_bytes),
+                                reference_kind=EdgeKind.EXTENDS,
+                                line=bound.start_point[0] + 1,
+                                column=bound.start_point[1],
+                            )
+                        )
 
             # C# base_list
             if ct == "base_list":
@@ -937,15 +1318,24 @@ class TreeSitterExtractor:
                     if base_type:
                         name = get_node_text(base_type, self.source_bytes)
                         if base_type.type == "generic_name":
-                            id_node = next((c for c in base_type.named_children if c.type == "identifier"), base_type)
+                            id_node = next(
+                                (
+                                    c
+                                    for c in base_type.named_children
+                                    if c.type == "identifier"
+                                ),
+                                base_type,
+                            )
                             name = get_node_text(id_node, self.source_bytes)
-                        self.unresolved_refs.append(UnresolvedReference(
-                            from_node_id=class_id,
-                            reference_name=name,
-                            reference_kind=EdgeKind.EXTENDS,
-                            line=base_type.start_point[0] + 1,
-                            column=base_type.start_point[1],
-                        ))
+                        self.unresolved_refs.append(
+                            UnresolvedReference(
+                                from_node_id=class_id,
+                                reference_name=name,
+                                reference_kind=EdgeKind.EXTENDS,
+                                line=base_type.start_point[0] + 1,
+                                column=base_type.start_point[1],
+                            )
+                        )
 
             # Recurse into containers
             if ct in ("field_declaration_list", "class_heritage"):
@@ -972,7 +1362,9 @@ class TreeSitterExtractor:
         elif self.extractor.class_types and nt in self.extractor.class_types:
             classification = "class"
             if self.extractor.classify_class_node:
-                classification = self.extractor.classify_class_node(node, self.source_bytes)
+                classification = self.extractor.classify_class_node(
+                    node, self.source_bytes
+                )
             if classification == "struct":
                 self._extract_struct(node)
             elif classification == "enum":

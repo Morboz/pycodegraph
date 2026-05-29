@@ -6,15 +6,15 @@ into structured filters plus free-text for FTS.
 
 from __future__ import annotations
 
-from ..types import NodeKind, Language
+from ..types import Language, NodeKind
 
 # Runtime-iterable value sets for validation
 KIND_VALUES: frozenset[str] = frozenset(k.value for k in NodeKind)
-LANGUAGE_VALUES: frozenset[str] = frozenset(l.value for l in Language)
+LANGUAGE_VALUES: frozenset[str] = frozenset(lang.value for lang in Language)
 
 
 class ParsedQuery:
-    __slots__ = ("text", "kinds", "languages", "path_filters", "name_filters")
+    __slots__ = ("kinds", "languages", "name_filters", "path_filters", "text")
 
     def __init__(self) -> None:
         self.text: str = ""

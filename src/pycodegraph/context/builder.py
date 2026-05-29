@@ -2,30 +2,46 @@
 
 from __future__ import annotations
 
-import re
 import os
-from pathlib import Path
-from typing import Optional, Union
+import re
 
-from ..types import (
-    Node, Edge, NodeKind, EdgeKind, Language,
-    Subgraph, SearchResult, CodeBlock, TaskContext,
-    BuildContextOptions, FindRelevantContextOptions,
-)
 from ..db.queries import QueryBuilder
 from ..graph.traversal import GraphTraverser
 from ..search.query_utils import (
-    extract_search_terms, score_path_relevance, get_stem_variants, is_test_file,
+    extract_search_terms,
+    get_stem_variants,
+    is_test_file,
 )
-from .formatter import format_context_as_markdown, format_context_as_json
-
+from ..types import (
+    BuildContextOptions,
+    CodeBlock,
+    Edge,
+    EdgeKind,
+    FindRelevantContextOptions,
+    Node,
+    NodeKind,
+    SearchResult,
+    Subgraph,
+    TaskContext,
+)
+from .formatter import format_context_as_json, format_context_as_markdown
 
 # Node kinds with high information value in context results
 _HIGH_VALUE_NODE_KINDS: list[NodeKind] = [
-    NodeKind.FUNCTION, NodeKind.METHOD, NodeKind.CLASS, NodeKind.INTERFACE,
-    NodeKind.TYPE_ALIAS, NodeKind.STRUCT, NodeKind.TRAIT,
-    NodeKind.COMPONENT, NodeKind.ROUTE, NodeKind.VARIABLE, NodeKind.CONSTANT,
-    NodeKind.ENUM, NodeKind.MODULE, NodeKind.NAMESPACE,
+    NodeKind.FUNCTION,
+    NodeKind.METHOD,
+    NodeKind.CLASS,
+    NodeKind.INTERFACE,
+    NodeKind.TYPE_ALIAS,
+    NodeKind.STRUCT,
+    NodeKind.TRAIT,
+    NodeKind.COMPONENT,
+    NodeKind.ROUTE,
+    NodeKind.VARIABLE,
+    NodeKind.CONSTANT,
+    NodeKind.ENUM,
+    NodeKind.MODULE,
+    NodeKind.NAMESPACE,
 ]
 
 _DEFAULT_BUILD_OPTIONS = BuildContextOptions()
@@ -34,31 +50,163 @@ _DEFAULT_FIND_OPTIONS = FindRelevantContextOptions(
 )
 
 # Common English words to filter from symbol extraction
-_COMMON_WORDS: frozenset[str] = frozenset({
-    "the", "and", "for", "with", "from", "this", "that", "have", "been",
-    "will", "would", "could", "should", "does", "done", "make", "made",
-    "use", "used", "using", "work", "works", "find", "found", "show",
-    "call", "called", "calling", "get", "set", "add", "all", "any",
-    "how", "what", "when", "where", "which", "who", "why",
-    "not", "but", "are", "was", "were", "has", "had", "its",
-    "can", "did", "may", "also", "into", "than", "then", "them",
-    "each", "other", "some", "such", "only", "same", "about",
-    "after", "before", "between", "through", "during", "without",
-    "again", "further", "once", "here", "there", "both", "just",
-    "more", "most", "very", "being", "having", "doing",
-    "system", "need", "needs", "want", "wants", "like", "look",
-    "change", "changes", "changed", "changing",
-    "layer", "handle", "handles", "handling", "incoming", "outgoing",
-    "data", "flow", "flows", "level", "levels", "request", "requests",
-    "response", "responses", "implement", "implements", "implementation",
-    "interface", "interfaces", "class", "classes", "method", "methods",
-    "trigger", "triggers", "affected", "affect", "affects",
-    "else", "code", "failing", "failed", "silently", "decide", "decides",
-    "return", "returns", "returned", "take", "takes", "taken",
-    "check", "checks", "checked", "create", "creates", "created",
-    "read", "reads", "write", "writes", "written",
-    "start", "starts", "stop", "stops", "run", "runs", "running",
-})
+_COMMON_WORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "have",
+        "been",
+        "will",
+        "would",
+        "could",
+        "should",
+        "does",
+        "done",
+        "make",
+        "made",
+        "use",
+        "used",
+        "using",
+        "work",
+        "works",
+        "find",
+        "found",
+        "show",
+        "call",
+        "called",
+        "calling",
+        "get",
+        "set",
+        "add",
+        "all",
+        "any",
+        "how",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "not",
+        "but",
+        "are",
+        "was",
+        "were",
+        "has",
+        "had",
+        "its",
+        "can",
+        "did",
+        "may",
+        "also",
+        "into",
+        "than",
+        "then",
+        "them",
+        "each",
+        "other",
+        "some",
+        "such",
+        "only",
+        "same",
+        "about",
+        "after",
+        "before",
+        "between",
+        "through",
+        "during",
+        "without",
+        "again",
+        "further",
+        "once",
+        "here",
+        "there",
+        "both",
+        "just",
+        "more",
+        "most",
+        "very",
+        "being",
+        "having",
+        "doing",
+        "system",
+        "need",
+        "needs",
+        "want",
+        "wants",
+        "like",
+        "look",
+        "change",
+        "changes",
+        "changed",
+        "changing",
+        "layer",
+        "handle",
+        "handles",
+        "handling",
+        "incoming",
+        "outgoing",
+        "data",
+        "flow",
+        "flows",
+        "level",
+        "levels",
+        "request",
+        "requests",
+        "response",
+        "responses",
+        "implement",
+        "implements",
+        "implementation",
+        "interface",
+        "interfaces",
+        "class",
+        "classes",
+        "method",
+        "methods",
+        "trigger",
+        "triggers",
+        "affected",
+        "affect",
+        "affects",
+        "else",
+        "code",
+        "failing",
+        "failed",
+        "silently",
+        "decide",
+        "decides",
+        "return",
+        "returns",
+        "returned",
+        "take",
+        "takes",
+        "taken",
+        "check",
+        "checks",
+        "checked",
+        "create",
+        "creates",
+        "created",
+        "read",
+        "reads",
+        "write",
+        "writes",
+        "written",
+        "start",
+        "starts",
+        "stop",
+        "stops",
+        "run",
+        "runs",
+        "running",
+    }
+)
 
 
 def _extract_symbols_from_query(query: str) -> list[str]:
@@ -67,7 +215,8 @@ def _extract_symbols_from_query(query: str) -> list[str]:
 
     # CamelCase
     for m in re.finditer(
-        r"\b([A-Z][a-z]+(?:[A-Z][a-z]*)*|[a-z]+(?:[A-Z][a-z]*)+)\b", query,
+        r"\b([A-Z][a-z]+(?:[A-Z][a-z]*)*|[a-z]+(?:[A-Z][a-z]*)+)\b",
+        query,
     ):
         if len(m.group(1)) >= 2:
             symbols.add(m.group(1))
@@ -88,7 +237,9 @@ def _extract_symbols_from_query(query: str) -> list[str]:
             symbols.add(m.group(1))
 
     # dot.notation
-    for m in re.finditer(r"\b([a-zA-Z][a-zA-Z0-9]*(?:\.[a-zA-Z][a-zA-Z0-9]*)+)\b", query):
+    for m in re.finditer(
+        r"\b([a-zA-Z][a-zA-Z0-9]*(?:\.[a-zA-Z][a-zA-Z0-9]*)+)\b", query
+    ):
         parts = m.group(1).split(".")
         for part in parts:
             if len(part) >= 2:
@@ -105,16 +256,18 @@ def _extract_symbols_from_query(query: str) -> list[str]:
 class ContextBuilder:
     """Coordinates semantic search and graph traversal to build context."""
 
-    def __init__(self, project_root: str, queries: QueryBuilder, traverser: GraphTraverser) -> None:
+    def __init__(
+        self, project_root: str, queries: QueryBuilder, traverser: GraphTraverser
+    ) -> None:
         self._project_root = project_root
         self._queries = queries
         self._traverser = traverser
 
     def build_context(
         self,
-        task_input: Union[str, dict],
-        options: Optional[BuildContextOptions] = None,
-    ) -> Union[TaskContext, str]:
+        task_input: str | dict,
+        options: BuildContextOptions | None = None,
+    ) -> TaskContext | str:
         """Build context for a task."""
         if options is None:
             opts = _DEFAULT_BUILD_OPTIONS
@@ -126,22 +279,32 @@ class ContextBuilder:
         query = (
             task_input
             if isinstance(task_input, str)
-            else task_input.get("title", "") + (
-                f": {task_input['description']}" if task_input.get("description") else ""
+            else task_input.get("title", "")
+            + (
+                f": {task_input['description']}"
+                if task_input.get("description")
+                else ""
             )
         )
 
-        subgraph = self.find_relevant_context(query, FindRelevantContextOptions(
-            search_limit=opts.search_limit,
-            traversal_depth=opts.traversal_depth,
-            max_nodes=opts.max_nodes,
-            min_score=opts.min_score,
-        ))
+        subgraph = self.find_relevant_context(
+            query,
+            FindRelevantContextOptions(
+                search_limit=opts.search_limit,
+                traversal_depth=opts.traversal_depth,
+                max_nodes=opts.max_nodes,
+                min_score=opts.min_score,
+            ),
+        )
 
-        entry_points = [subgraph.nodes[rid] for rid in subgraph.roots if rid in subgraph.nodes]
+        entry_points = [
+            subgraph.nodes[rid] for rid in subgraph.roots if rid in subgraph.nodes
+        ]
 
         code_blocks = (
-            self._extract_code_blocks(subgraph, opts.max_code_blocks, opts.max_code_block_size)
+            self._extract_code_blocks(
+                subgraph, opts.max_code_blocks, opts.max_code_block_size
+            )
             if opts.include_code
             else []
         )
@@ -157,9 +320,13 @@ class ContextBuilder:
         }
 
         context = TaskContext(
-            query=query, subgraph=subgraph, entry_points=entry_points,
-            code_blocks=code_blocks, related_files=related_files,
-            summary=summary, stats=stats,
+            query=query,
+            subgraph=subgraph,
+            entry_points=entry_points,
+            code_blocks=code_blocks,
+            related_files=related_files,
+            summary=summary,
+            stats=stats,
         )
 
         if opts.format == "markdown":
@@ -169,7 +336,9 @@ class ContextBuilder:
         return context
 
     def find_relevant_context(
-        self, query: str, options: Optional[FindRelevantContextOptions] = None,
+        self,
+        query: str,
+        options: FindRelevantContextOptions | None = None,
     ) -> Subgraph:
         """Hybrid search pipeline combining exact lookup + FTS + graph traversal."""
         opts = options or _DEFAULT_FIND_OPTIONS
@@ -190,10 +359,14 @@ class ContextBuilder:
             kind_filter = (
                 [k.value for k in opts.node_kinds] if opts.node_kinds else None
             )
-            exact_matches = self._queries.find_nodes_by_exact_name(
-                symbols,
-                kinds=[NodeKind(k) for k in kind_filter] if kind_filter else None,
-            ) if kind_filter else self._queries.find_nodes_by_exact_name(symbols)
+            exact_matches = (
+                self._queries.find_nodes_by_exact_name(
+                    symbols,
+                    kinds=[NodeKind(k) for k in kind_filter] if kind_filter else None,
+                )
+                if kind_filter
+                else self._queries.find_nodes_by_exact_name(symbols)
+            )
 
             # Co-location boost
             if len(exact_matches) > 1:
@@ -208,13 +381,18 @@ class ContextBuilder:
                         r.score += (count - 1) * 20
                 exact_matches.sort(key=lambda r: r.score, reverse=True)
 
-            exact_matches = exact_matches[:max(opts.search_limit * 2, 1)]
+            exact_matches = exact_matches[: max(opts.search_limit * 2, 1)]
 
         # Step 2b: Definition prefix matching with stem variants
         if symbols:
             definition_kinds = [
-                NodeKind.CLASS, NodeKind.INTERFACE, NodeKind.STRUCT,
-                NodeKind.TRAIT, NodeKind.PROTOCOL, NodeKind.ENUM, NodeKind.TYPE_ALIAS,
+                NodeKind.CLASS,
+                NodeKind.INTERFACE,
+                NodeKind.STRUCT,
+                NodeKind.TRAIT,
+                NodeKind.PROTOCOL,
+                NodeKind.ENUM,
+                NodeKind.TYPE_ALIAS,
             ]
             expanded = set(symbols)
             for sym in symbols:
@@ -226,28 +404,34 @@ class ContextBuilder:
                     continue
                 kind_strs = [k.value for k in definition_kinds]
                 prefix_results = self._queries.find_nodes_by_name_substring(
-                    title_cased, kinds=kind_strs, limit=30,
+                    title_cased,
+                    kinds=kind_strs,
+                    limit=30,
                 )
                 matched: list[SearchResult] = []
                 for r in prefix_results:
                     if r.node.name.lower().startswith(title_cased.lower()):
                         brevity = max(0, 10 - (len(r.node.name) - len(title_cased)) / 3)
-                        matched.append(SearchResult(
-                            node=r.node, score=r.score + 15 + brevity,
-                        ))
+                        matched.append(
+                            SearchResult(
+                                node=r.node,
+                                score=r.score + 15 + brevity,
+                            )
+                        )
                 matched.sort(key=lambda r: r.score, reverse=True)
-                for r in matched[:opts.search_limit]:
+                for r in matched[: opts.search_limit]:
                     if not any(e.node.id == r.node.id for e in exact_matches):
                         exact_matches.append(r)
 
             exact_matches.sort(key=lambda r: r.score, reverse=True)
-            exact_matches = exact_matches[:opts.search_limit * 3]
+            exact_matches = exact_matches[: opts.search_limit * 3]
 
         # Step 3: Text search
         text_results: list[SearchResult] = []
         search_terms = extract_search_terms(query)
         if search_terms:
             from ..types import SearchOptions as SO
+
             term_results_map: dict[str, dict] = {}
             search_kinds = (
                 [k.value for k in opts.node_kinds]
@@ -257,23 +441,32 @@ class ContextBuilder:
             for term in search_terms:
                 term_results = self._queries.search_nodes(
                     term,
-                    SO(kinds=[NodeKind(k) for k in search_kinds], limit=opts.search_limit * 2),
+                    SO(
+                        kinds=[NodeKind(k) for k in search_kinds],
+                        limit=opts.search_limit * 2,
+                    ),
                 )
                 for r in term_results:
                     existing = term_results_map.get(r.node.id)
                     if existing:
                         existing["hits"] += 1
-                        existing["result"].score = max(existing["result"].score, r.score)
+                        existing["result"].score = max(
+                            existing["result"].score, r.score
+                        )
                     else:
                         term_results_map[r.node.id] = {"result": r, "hits": 1}
 
             text_results = sorted(
                 [
-                    SearchResult(node=info["result"].node, score=info["result"].score + (info["hits"] - 1) * 5)
+                    SearchResult(
+                        node=info["result"].node,
+                        score=info["result"].score + (info["hits"] - 1) * 5,
+                    )
                     for info in term_results_map.values()
                 ],
-                key=lambda r: r.score, reverse=True,
-            )[:opts.search_limit * 2]
+                key=lambda r: r.score,
+                reverse=True,
+            )[: opts.search_limit * 2]
 
         # Step 4: Merge results
         result_by_id: dict[str, SearchResult] = {}
@@ -281,14 +474,18 @@ class ContextBuilder:
 
         for r in exact_matches:
             if r.node.id in result_by_id:
-                result_by_id[r.node.id].score = max(result_by_id[r.node.id].score, r.score)
+                result_by_id[r.node.id].score = max(
+                    result_by_id[r.node.id].score, r.score
+                )
             else:
                 result_by_id[r.node.id] = r
                 search_results.append(r)
 
         for r in text_results:
             if r.node.id in result_by_id:
-                result_by_id[r.node.id].score = max(result_by_id[r.node.id].score, r.score)
+                result_by_id[r.node.id].score = max(
+                    result_by_id[r.node.id].score, r.score
+                )
             else:
                 result_by_id[r.node.id] = r
                 search_results.append(r)
@@ -302,11 +499,11 @@ class ContextBuilder:
                     r.score *= 0.3
 
         search_results.sort(key=lambda r: r.score, reverse=True)
-        search_results = search_results[:opts.search_limit * 3]
+        search_results = search_results[: opts.search_limit * 3]
 
         filtered = [r for r in search_results if r.score >= opts.min_score]
         filtered = self._resolve_imports_to_definitions(filtered)
-        filtered = filtered[:opts.search_limit]
+        filtered = filtered[: opts.search_limit]
 
         for r in filtered:
             nodes[r.node.id] = r.node
@@ -314,8 +511,11 @@ class ContextBuilder:
 
         # Type hierarchy expansion
         type_kinds = {
-            NodeKind.CLASS, NodeKind.INTERFACE, NodeKind.STRUCT,
-            NodeKind.TRAIT, NodeKind.PROTOCOL,
+            NodeKind.CLASS,
+            NodeKind.INTERFACE,
+            NodeKind.STRUCT,
+            NodeKind.TRAIT,
+            NodeKind.PROTOCOL,
         }
         max_hierarchy = max(1, opts.max_nodes // 4)
         hierarchy_added = 0
@@ -331,24 +531,29 @@ class ContextBuilder:
                         hierarchy_added += 1
                 for edge in hierarchy.edges:
                     if not any(
-                        e.source == edge.source and e.target == edge.target and e.kind == edge.kind
+                        e.source == edge.source
+                        and e.target == edge.target
+                        and e.kind == edge.kind
                         for e in edges
                     ):
                         edges.append(edge)
 
         # BFS traversal from entry points
-        edge_kind_strs = [k.value for k in opts.edge_kinds] if opts.edge_kinds else None
         node_kind_filter = opts.node_kinds if opts.node_kinds else None
 
         for r in filtered:
             from ..types import TraversalOptions as TO
-            traversal = self._traverser.traverse_bfs(r.node.id, TO(
-                max_depth=opts.traversal_depth,
-                edge_kinds=opts.edge_kinds if opts.edge_kinds else [],
-                node_kinds=node_kind_filter or [],
-                direction="both",
-                limit=max(1, opts.max_nodes // max(1, len(filtered))),
-            ))
+
+            traversal = self._traverser.traverse_bfs(
+                r.node.id,
+                TO(
+                    max_depth=opts.traversal_depth,
+                    edge_kinds=opts.edge_kinds if opts.edge_kinds else [],
+                    node_kinds=node_kind_filter or [],
+                    direction="both",
+                    limit=max(1, opts.max_nodes // max(1, len(filtered))),
+                ),
+            )
 
             for nid, t_node in traversal.nodes.items():
                 if nid not in nodes:
@@ -356,7 +561,9 @@ class ContextBuilder:
 
             for edge in traversal.edges:
                 if not any(
-                    e.source == edge.source and e.target == edge.target and e.kind == edge.kind
+                    e.source == edge.source
+                    and e.target == edge.target
+                    and e.kind == edge.kind
                     for e in edges
                 ):
                     edges.append(edge)
@@ -369,16 +576,23 @@ class ContextBuilder:
 
         root_set = set(roots)
         kind_priority = {
-            NodeKind.CLASS: 3, NodeKind.INTERFACE: 3, NodeKind.STRUCT: 3,
-            NodeKind.TRAIT: 3, NodeKind.PROTOCOL: 3, NodeKind.ENUM: 3,
+            NodeKind.CLASS: 3,
+            NodeKind.INTERFACE: 3,
+            NodeKind.STRUCT: 3,
+            NodeKind.TRAIT: 3,
+            NodeKind.PROTOCOL: 3,
+            NodeKind.ENUM: 3,
         }
         for _, node_ids in file_counts.items():
             if len(node_ids) <= max_per_file:
                 continue
-            node_ids.sort(key=lambda nid: (
-                (10 if nid in root_set else 0)
-                + kind_priority.get(nodes[nid].kind, 0)
-            ), reverse=True)
+            node_ids.sort(
+                key=lambda nid: (
+                    (10 if nid in root_set else 0)
+                    + kind_priority.get(nodes[nid].kind, 0)
+                ),
+                reverse=True,
+            )
             for nid in node_ids[max_per_file:]:
                 del nodes[nid]
 
@@ -397,8 +611,11 @@ class ContextBuilder:
 
         # Edge recovery: discover edges between selected nodes
         recovery_kinds = [
-            EdgeKind.CALLS, EdgeKind.EXTENDS, EdgeKind.IMPLEMENTS,
-            EdgeKind.REFERENCES, EdgeKind.OVERRIDES,
+            EdgeKind.CALLS,
+            EdgeKind.EXTENDS,
+            EdgeKind.IMPLEMENTS,
+            EdgeKind.REFERENCES,
+            EdgeKind.OVERRIDES,
         ]
         recovered = self._queries.find_edges_between_nodes(
             list(nodes.keys()), [k.value for k in recovery_kinds]
@@ -412,7 +629,7 @@ class ContextBuilder:
 
         return Subgraph(nodes=nodes, edges=edges, roots=roots)
 
-    def get_code(self, node_id: str) -> Optional[str]:
+    def get_code(self, node_id: str) -> str | None:
         """Get source code for a node."""
         node = self._queries.get_node_by_id(node_id)
         if not node:
@@ -423,7 +640,7 @@ class ContextBuilder:
     # Private helpers
     # =========================================================================
 
-    def _extract_node_code(self, node: Node) -> Optional[str]:
+    def _extract_node_code(self, node: Node) -> str | None:
         file_path = os.path.join(self._project_root, node.file_path)
         if not os.path.exists(file_path):
             return None
@@ -437,7 +654,10 @@ class ContextBuilder:
             return None
 
     def _extract_code_blocks(
-        self, subgraph: Subgraph, max_blocks: int, max_size: int,
+        self,
+        subgraph: Subgraph,
+        max_blocks: int,
+        max_size: int,
     ) -> list[CodeBlock]:
         blocks: list[CodeBlock] = []
         priority: list[Node] = []
@@ -450,7 +670,10 @@ class ContextBuilder:
 
         # Functions/methods
         for node in subgraph.nodes.values():
-            if node.id not in subgraph.roots and node.kind in (NodeKind.FUNCTION, NodeKind.METHOD):
+            if node.id not in subgraph.roots and node.kind in (
+                NodeKind.FUNCTION,
+                NodeKind.METHOD,
+            ):
                 priority.append(node)
 
         # Classes
@@ -468,15 +691,22 @@ class ContextBuilder:
                     if len(code) > max_size
                     else code
                 )
-                blocks.append(CodeBlock(
-                    content=truncated, file_path=node.file_path,
-                    start_line=node.start_line, end_line=node.end_line,
-                    language=node.language, node=node,
-                ))
+                blocks.append(
+                    CodeBlock(
+                        content=truncated,
+                        file_path=node.file_path,
+                        start_line=node.start_line,
+                        end_line=node.end_line,
+                        language=node.language,
+                        node=node,
+                    )
+                )
 
         return blocks
 
-    def _resolve_imports_to_definitions(self, results: list[SearchResult]) -> list[SearchResult]:
+    def _resolve_imports_to_definitions(
+        self, results: list[SearchResult]
+    ) -> list[SearchResult]:
         resolved: list[SearchResult] = []
         seen: set[str] = set()
 
@@ -489,24 +719,27 @@ class ContextBuilder:
                 continue
 
             edge_kind = (
-                EdgeKind.IMPORTS.value if node.kind == NodeKind.IMPORT
+                EdgeKind.IMPORTS.value
+                if node.kind == NodeKind.IMPORT
                 else EdgeKind.EXPORTS.value
             )
             outgoing = self._queries.get_outgoing_edges(node.id, [edge_kind])
 
-            found = False
             for edge in outgoing:
                 target = self._queries.get_node_by_id(edge.target)
                 if target and target.id not in seen:
                     seen.add(target.id)
                     resolved.append(SearchResult(node=target, score=r.score))
-                    found = True
 
         return resolved
 
-    def _generate_summary(self, query: str, subgraph: Subgraph, entry_points: list[Node]) -> str:
+    def _generate_summary(
+        self, query: str, subgraph: Subgraph, entry_points: list[Node]
+    ) -> str:
         entry_names = ", ".join(n.name for n in entry_points[:3])
-        remaining = f" and {len(entry_points) - 3} more" if len(entry_points) > 3 else ""
+        remaining = (
+            f" and {len(entry_points) - 3} more" if len(entry_points) > 3 else ""
+        )
         files = sorted({n.file_path for n in subgraph.nodes.values()})
         return (
             f"Found {len(subgraph.nodes)} relevant code symbols across {len(files)} files. "
@@ -516,6 +749,8 @@ class ContextBuilder:
 
 
 def create_context_builder(
-    project_root: str, queries: QueryBuilder, traverser: GraphTraverser,
+    project_root: str,
+    queries: QueryBuilder,
+    traverser: GraphTraverser,
 ) -> ContextBuilder:
     return ContextBuilder(project_root, queries, traverser)

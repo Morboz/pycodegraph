@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import re
-from typing import Optional, Callable
+from collections.abc import Callable
 
-from ..types import Node, Edge, Context, Subgraph, NodeKind, EdgeKind
 from ..db.queries import QueryBuilder
+from ..types import Context, Edge, EdgeKind, Node, NodeKind, Subgraph
 from .traversal import GraphTraverser
 
 
@@ -56,15 +56,21 @@ class GraphQueryManager:
         imports: list[Node] = []
         file_node = next((a for a in ancestors if a.kind == NodeKind.FILE), None)
         if file_node:
-            for edge in self._queries.get_outgoing_edges(file_node.id, [EdgeKind.IMPORTS.value]):
+            for edge in self._queries.get_outgoing_edges(
+                file_node.id, [EdgeKind.IMPORTS.value]
+            ):
                 import_node = self._queries.get_node_by_id(edge.target)
                 if import_node:
                     imports.append(import_node)
 
         return Context(
-            focal=focal, ancestors=ancestors, children=children,
-            incoming_refs=incoming_refs, outgoing_refs=outgoing_refs,
-            types=types, imports=imports,
+            focal=focal,
+            ancestors=ancestors,
+            children=children,
+            incoming_refs=incoming_refs,
+            outgoing_refs=outgoing_refs,
+            types=types,
+            imports=imports,
         )
 
     def get_file_dependencies(self, file_path: str) -> list[str]:
@@ -75,7 +81,9 @@ class GraphQueryManager:
             return []
 
         dependencies: set[str] = set()
-        for edge in self._queries.get_outgoing_edges(file_node.id, [EdgeKind.IMPORTS.value]):
+        for edge in self._queries.get_outgoing_edges(
+            file_node.id, [EdgeKind.IMPORTS.value]
+        ):
             target = self._queries.get_node_by_id(edge.target)
             if target and target.file_path != file_path:
                 dependencies.add(target.file_path)
@@ -90,7 +98,9 @@ class GraphQueryManager:
         # File-level incoming imports
         file_node = next((n for n in nodes if n.kind == NodeKind.FILE), None)
         if file_node:
-            for edge in self._queries.get_incoming_edges(file_node.id, [EdgeKind.IMPORTS.value]):
+            for edge in self._queries.get_incoming_edges(
+                file_node.id, [EdgeKind.IMPORTS.value]
+            ):
                 source = self._queries.get_node_by_id(edge.source)
                 if source and source.file_path != file_path:
                     dependents.add(source.file_path)
@@ -98,7 +108,9 @@ class GraphQueryManager:
         # Node-level imports of exported symbols
         for node in nodes:
             if node.is_exported:
-                for edge in self._queries.get_incoming_edges(node.id, [EdgeKind.IMPORTS.value]):
+                for edge in self._queries.get_incoming_edges(
+                    node.id, [EdgeKind.IMPORTS.value]
+                ):
                     source = self._queries.get_node_by_id(edge.source)
                     if source and source.file_path != file_path:
                         dependents.add(source.file_path)
@@ -112,8 +124,7 @@ class GraphQueryManager:
     def find_by_qualified_name(self, pattern: str) -> list[Node]:
         """Find symbols by qualified name pattern (supports * wildcard)."""
         regex_pattern = (
-            pattern
-            .replace(".", r"\.")
+            pattern.replace(".", r"\.")
             .replace("+", r"\+")
             .replace("^", r"\^")
             .replace("$", r"\$")
@@ -131,8 +142,12 @@ class GraphQueryManager:
 
         result: list[Node] = []
         target_kinds = [
-            NodeKind.CLASS, NodeKind.FUNCTION, NodeKind.METHOD,
-            NodeKind.INTERFACE, NodeKind.TYPE_ALIAS, NodeKind.VARIABLE,
+            NodeKind.CLASS,
+            NodeKind.FUNCTION,
+            NodeKind.METHOD,
+            NodeKind.INTERFACE,
+            NodeKind.TYPE_ALIAS,
+            NodeKind.VARIABLE,
             NodeKind.CONSTANT,
         ]
         for kind in target_kinds:
@@ -171,7 +186,7 @@ class GraphQueryManager:
             recursion_stack.add(file_path)
 
             for dep in self.get_file_dependencies(file_path):
-                dfs(dep, path + [file_path])
+                dfs(dep, [*path, file_path])
 
             recursion_stack.discard(file_path)
 
@@ -200,7 +215,7 @@ class GraphQueryManager:
             "depth": len(ancestors),
         }
 
-    def find_dead_code(self, kinds: Optional[list[NodeKind]] = None) -> list[Node]:
+    def find_dead_code(self, kinds: list[NodeKind] | None = None) -> list[Node]:
         """Find unreferenced nodes (potential dead code)."""
         target_kinds = kinds or [NodeKind.FUNCTION, NodeKind.METHOD, NodeKind.CLASS]
         dead_code: list[Node] = []
@@ -217,16 +232,27 @@ class GraphQueryManager:
         return dead_code
 
     def get_filtered_subgraph(
-        self, filter_fn: Callable[[Node], bool], include_edges: bool = True,
+        self,
+        filter_fn: Callable[[Node], bool],
+        include_edges: bool = True,
     ) -> Subgraph:
         """Get subgraph of nodes matching a filter."""
         nodes: dict[str, Node] = {}
         edges: list[Edge] = []
 
         target_kinds = [
-            NodeKind.FILE, NodeKind.MODULE, NodeKind.CLASS, NodeKind.STRUCT,
-            NodeKind.INTERFACE, NodeKind.TRAIT, NodeKind.FUNCTION, NodeKind.METHOD,
-            NodeKind.VARIABLE, NodeKind.CONSTANT, NodeKind.ENUM, NodeKind.TYPE_ALIAS,
+            NodeKind.FILE,
+            NodeKind.MODULE,
+            NodeKind.CLASS,
+            NodeKind.STRUCT,
+            NodeKind.INTERFACE,
+            NodeKind.TRAIT,
+            NodeKind.FUNCTION,
+            NodeKind.METHOD,
+            NodeKind.VARIABLE,
+            NodeKind.CONSTANT,
+            NodeKind.ENUM,
+            NodeKind.TYPE_ALIAS,
         ]
 
         for kind in target_kinds:

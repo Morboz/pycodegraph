@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from tree_sitter import Node as TSNode
 
+from ...extraction.helpers import get_child_by_field, get_node_text
 from .base import LanguageExtractor
-from ...extraction.helpers import get_node_text, get_child_by_field
 
 
 def _python_get_signature(node: TSNode, source: bytes) -> str | None:
@@ -27,7 +27,6 @@ def _python_is_async(node: TSNode) -> bool:
 def _python_is_static(node: TSNode) -> bool:
     prev = node.prev_named_sibling
     if prev and prev.type == "decorator":
-        text = get_node_text(prev, b"")  # Can't reliably check without source
         return False
     return False
 

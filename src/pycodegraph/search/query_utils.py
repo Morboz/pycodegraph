@@ -4,28 +4,121 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Optional
 
-
-STOP_WORDS: frozenset[str] = frozenset({
-    # English
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "it", "that", "this", "are", "was",
-    "be", "has", "had", "have", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "can", "shall", "not", "no", "all", "each",
-    "every", "how", "what", "where", "when", "who", "which", "why",
-    "i", "me", "my", "we", "our", "you", "your", "he", "she", "they",
-    "show", "give", "tell",
-    "been", "done", "made", "used", "using", "work", "works", "found",
-    "also", "into", "then", "than", "just", "more", "some", "such",
-    "over", "only", "out", "its", "so", "up", "as", "if",
-    "look", "need", "needs", "want", "happen", "happens",
-    "affect", "affected", "break", "breaks", "failing",
-    "implemented", "implement",
-    # Code-specific noise
-    "code", "file", "files", "function", "method", "class", "type",
-    "fix", "bug", "called",
-})
+STOP_WORDS: frozenset[str] = frozenset(
+    {
+        # English
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "with",
+        "by",
+        "from",
+        "is",
+        "it",
+        "that",
+        "this",
+        "are",
+        "was",
+        "be",
+        "has",
+        "had",
+        "have",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "can",
+        "shall",
+        "not",
+        "no",
+        "all",
+        "each",
+        "every",
+        "how",
+        "what",
+        "where",
+        "when",
+        "who",
+        "which",
+        "why",
+        "i",
+        "me",
+        "my",
+        "we",
+        "our",
+        "you",
+        "your",
+        "he",
+        "she",
+        "they",
+        "show",
+        "give",
+        "tell",
+        "been",
+        "done",
+        "made",
+        "used",
+        "using",
+        "work",
+        "works",
+        "found",
+        "also",
+        "into",
+        "then",
+        "than",
+        "just",
+        "more",
+        "some",
+        "such",
+        "over",
+        "only",
+        "out",
+        "its",
+        "so",
+        "up",
+        "as",
+        "if",
+        "look",
+        "need",
+        "needs",
+        "want",
+        "happen",
+        "happens",
+        "affect",
+        "affected",
+        "break",
+        "breaks",
+        "failing",
+        "implemented",
+        "implement",
+        # Code-specific noise
+        "code",
+        "file",
+        "files",
+        "function",
+        "method",
+        "class",
+        "type",
+        "fix",
+        "bug",
+        "called",
+    }
+)
 
 
 def get_stem_variants(term: str) -> list[str]:
@@ -143,20 +236,42 @@ def score_path_relevance(file_path: str, query: str) -> float:
 
 
 _NON_PROD_DIRS = (
-    "integration", "sample", "samples", "example", "examples",
-    "fixture", "fixtures", "benchmark", "benchmarks", "demo", "demos",
+    "integration",
+    "sample",
+    "samples",
+    "example",
+    "examples",
+    "fixture",
+    "fixtures",
+    "benchmark",
+    "benchmarks",
+    "demo",
+    "demos",
 )
 
 _TEST_SUFFIXES = (
-    ".test.ts", ".test.js", ".test.tsx", ".test.jsx",
-    ".spec.ts", ".spec.js",
-    "_test.go", "_test.py", "_test.rs",
-    "Tests.java", "Test.java", "Tester.java", "TestCase.java",
+    ".test.ts",
+    ".test.js",
+    ".test.tsx",
+    ".test.jsx",
+    ".spec.ts",
+    ".spec.js",
+    "_test.go",
+    "_test.py",
+    "_test.rs",
+    "Tests.java",
+    "Test.java",
+    "Tester.java",
+    "TestCase.java",
 )
 
 _TEST_DIRS = (
-    "/tests/", "/test/", "/__tests__/", "/spec/",
-    "/testlib/", "/testing/",
+    "/tests/",
+    "/test/",
+    "/__tests__/",
+    "/spec/",
+    "/testlib/",
+    "/testing/",
 )
 
 
@@ -177,11 +292,7 @@ def is_test_file(file_path: str) -> bool:
             return True
 
     # Non-production dirs
-    for d in _NON_PROD_DIRS:
-        if f"/{d}/" in lower or lower.startswith(f"{d}/"):
-            return True
-
-    return False
+    return any(f"/{d}/" in lower or lower.startswith(f"{d}/") for d in _NON_PROD_DIRS)
 
 
 def name_match_bonus(node_name: str, query: str) -> float:
@@ -211,12 +322,28 @@ def name_match_bonus(node_name: str, query: str) -> float:
 
 
 _KIND_BONUSES: dict[str, float] = {
-    "function": 10, "method": 10, "class": 8, "interface": 9,
-    "type_alias": 6, "struct": 6, "trait": 9, "enum": 5,
-    "component": 8, "route": 9, "module": 4, "property": 3,
-    "field": 3, "variable": 2, "constant": 3, "import": 1,
-    "export": 1, "parameter": 0, "namespace": 4, "file": 0,
-    "protocol": 9, "enum_member": 3,
+    "function": 10,
+    "method": 10,
+    "class": 8,
+    "interface": 9,
+    "type_alias": 6,
+    "struct": 6,
+    "trait": 9,
+    "enum": 5,
+    "component": 8,
+    "route": 9,
+    "module": 4,
+    "property": 3,
+    "field": 3,
+    "variable": 2,
+    "constant": 3,
+    "import": 1,
+    "export": 1,
+    "parameter": 0,
+    "namespace": 4,
+    "file": 0,
+    "protocol": 9,
+    "enum_member": 3,
 }
 
 

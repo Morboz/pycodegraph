@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections import OrderedDict
-from typing import Optional, Callable
+from collections.abc import Callable
 
-from ..types import Edge, EdgeKind, Node, NodeKind, UnresolvedReference
 from ..db.queries import QueryBuilder
-from .types import UnresolvedRef, ResolvedRef, ResolutionResult, ImportMapping
+from ..types import Edge, EdgeKind, Node, NodeKind, UnresolvedReference
 from .builtins import is_builtin_or_external
-from .import_resolver import resolve_via_import, extract_import_mappings
+from .import_resolver import extract_import_mappings, resolve_via_import
 from .name_matcher import match_reference
+from .types import ImportMapping, ResolutionResult, ResolvedRef, UnresolvedRef
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +88,7 @@ class ResolutionContext:
 
     # --- Node lookups (all in-memory, zero DB queries) ---
 
-    def get_node_by_id(self, node_id: str) -> Optional[Node]:
+    def get_node_by_id(self, node_id: str) -> Node | None:
         return self._id_index.get(node_id)
 
     def get_nodes_by_name(self, name: str) -> list[Node]:
@@ -119,7 +118,7 @@ class ResolutionContext:
         self._import_mappings.put(key, result)
         return result
 
-    def read_file(self, file_path: str) -> Optional[str]:
+    def read_file(self, file_path: str) -> str | None:
         cached = self._file_contents.get(file_path)
         if cached is not None:
             return cached or None
@@ -155,7 +154,7 @@ class ReferenceResolver:
     def resolve_all(
         self,
         refs: list[UnresolvedRef],
-        on_progress: Optional[Callable] = None,
+        on_progress: Callable | None = None,
     ) -> ResolutionResult:
         result = ResolutionResult()
         total = len(refs)
@@ -178,7 +177,7 @@ class ReferenceResolver:
         }
         return result
 
-    def resolve_one(self, ref: UnresolvedRef) -> Optional[ResolvedRef]:
+    def resolve_one(self, ref: UnresolvedRef) -> ResolvedRef | None:
         if not ref.reference_name or len(ref.reference_name) < 2:
             return None
 
@@ -193,7 +192,9 @@ class ReferenceResolver:
         # Fast pre-filter: skip if no symbol with any part of this name
         # exists in the codebase, unless it matches a local import
         # (import aliases / re-exports may rename symbols).
-        if not self._has_any_possible_match(ref.reference_name) and not self._matches_any_import(ref):
+        if not self._has_any_possible_match(
+            ref.reference_name
+        ) and not self._matches_any_import(ref):
             return None
 
         # Try import-based resolution first
@@ -204,7 +205,7 @@ class ReferenceResolver:
         # Then name-based strategies
         return match_reference(ref, self._context)
 
-    def _resolve_imports_ref(self, ref: UnresolvedRef) -> Optional[ResolvedRef]:
+    def _resolve_imports_ref(self, ref: UnresolvedRef) -> ResolvedRef | None:
         """Resolve an IMPORTS reference to the import node in the same file."""
         nodes_in_file = self._context.get_nodes_in_file(ref.file_path)
         for node in nodes_in_file:
@@ -229,7 +230,7 @@ class ReferenceResolver:
             idx = name.find(sep)
             if idx > 0:
                 receiver = name[:idx]
-                member = name[idx + len(sep):]
+                member = name[idx + len(sep) :]
                 if receiver in known or member in known:
                     return True
                 # Capitalized receiver for instance-method resolution
@@ -240,7 +241,7 @@ class ReferenceResolver:
         # Path-like: "snippets/drawer-menu.liquid"
         slash_idx = name.rfind("/")
         if slash_idx > 0:
-            file_name = name[slash_idx + 1:]
+            file_name = name[slash_idx + 1 :]
             if file_name in known:
                 return True
 
@@ -250,7 +251,9 @@ class ReferenceResolver:
         """Check if the reference name matches any import in its file."""
         imports = self._context.get_import_mappings(ref.file_path, ref.language)
         for imp in imports:
-            if imp.local_name == ref.reference_name or ref.reference_name.startswith(imp.local_name + "."):
+            if imp.local_name == ref.reference_name or ref.reference_name.startswith(
+                imp.local_name + "."
+            ):
                 return True
         return False
 
@@ -258,20 +261,22 @@ class ReferenceResolver:
         edges: list[Edge] = []
         for r in resolved:
             kind = self._promote_edge_kind(r.original.reference_kind, r.target_node_id)
-            edges.append(Edge(
-                source=r.original.from_node_id,
-                target=r.target_node_id,
-                kind=kind,
-                metadata=None,
-                line=r.original.line,
-                col=r.original.column,
-                provenance=f"resolution:{r.resolved_by}:{r.confidence:.2f}",
-            ))
+            edges.append(
+                Edge(
+                    source=r.original.from_node_id,
+                    target=r.target_node_id,
+                    kind=kind,
+                    metadata=None,
+                    line=r.original.line,
+                    col=r.original.column,
+                    provenance=f"resolution:{r.resolved_by}:{r.confidence:.2f}",
+                )
+            )
         return edges
 
     def resolve_and_persist(
         self,
-        on_progress: Optional[Callable] = None,
+        on_progress: Callable | None = None,
     ) -> ResolutionResult:
         self.warm_caches()
 
@@ -309,9 +314,17 @@ class ReferenceResolver:
         if original_kind == EdgeKind.CALLS:
             if target and target.kind in (NodeKind.CLASS, NodeKind.STRUCT):
                 return EdgeKind.INSTANTIATES
-        elif original_kind == EdgeKind.EXTENDS:
-            if target and target.kind in (NodeKind.INTERFACE, NodeKind.PROTOCOL, NodeKind.TRAIT):
-                return EdgeKind.IMPLEMENTS
+        elif (
+            original_kind == EdgeKind.EXTENDS
+            and target
+            and target.kind
+            in (
+                NodeKind.INTERFACE,
+                NodeKind.PROTOCOL,
+                NodeKind.TRAIT,
+            )
+        ):
+            return EdgeKind.IMPLEMENTS
         return original_kind
 
     @staticmethod

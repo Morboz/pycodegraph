@@ -19,7 +19,7 @@ import pytest
 from sqlalchemy import text
 
 from pycodegraph import CodeGraph
-from pycodegraph.types import NodeKind, EdgeKind, Language, SearchOptions, Node, Edge
+from pycodegraph.types import Edge, EdgeKind, Language, Node, NodeKind, SearchOptions
 
 # ---------------------------------------------------------------------------
 # Config
@@ -52,6 +52,7 @@ TEST_DB_URL = _build_sa_url(PG_DSN, TEST_DB)
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _pg_available() -> bool:
     try:
         with psycopg.connect(PG_DSN, autocommit=True) as conn:
@@ -61,7 +62,9 @@ def _pg_available() -> bool:
         return False
 
 
-pg_available = pytest.mark.skipif(not _pg_available(), reason="PostgreSQL not available")
+pg_available = pytest.mark.skipif(
+    not _pg_available(), reason="PostgreSQL not available"
+)
 
 
 @pytest.fixture(scope="module")
@@ -82,7 +85,7 @@ def codegraph():
     cg._project_root = PROJECT_SRC
     cg._orchestrator.root_dir = PROJECT_SRC
 
-    result = cg.index_all(lambda *a, **kw: None)
+    cg.index_all(lambda *a, **kw: None)
     stats = cg.get_stats()
     assert stats["node_count"] > 0, f"No nodes indexed: {stats}"
 
@@ -93,7 +96,8 @@ def codegraph():
     with psycopg.connect(PG_DSN, autocommit=True) as conn:
         conn.execute(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            "WHERE datname = %s AND pid <> pg_backend_pid()", [TEST_DB],
+            "WHERE datname = %s AND pid <> pg_backend_pid()",
+            [TEST_DB],
         )
         conn.execute(f"DROP DATABASE IF EXISTS {TEST_DB}")
 
@@ -101,6 +105,7 @@ def codegraph():
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @pg_available
 class TestStatsConsistency:
@@ -323,13 +328,17 @@ class TestSearchCorrectness:
 
     def test_kind_filter(self, codegraph):
         q = codegraph._queries
-        results = q.search_nodes("QueryBuilder", SearchOptions(kinds=[NodeKind.CLASS], limit=5))
+        results = q.search_nodes(
+            "QueryBuilder", SearchOptions(kinds=[NodeKind.CLASS], limit=5)
+        )
         assert len(results) > 0
         assert all(r.node.kind == NodeKind.CLASS for r in results)
 
     def test_language_filter(self, codegraph):
         q = codegraph._queries
-        results = q.search_nodes("function", SearchOptions(languages=[Language.PYTHON], limit=5))
+        results = q.search_nodes(
+            "function", SearchOptions(languages=[Language.PYTHON], limit=5)
+        )
         assert isinstance(results, list)
 
 
@@ -379,9 +388,13 @@ class TestGraphTraversalCorrectness:
             pytest.skip("insert_nodes not found")
         deep = codegraph.get_callees_deep(insert_nodes[0].id, max_depth=2)
         if deep:
-            assert all(isinstance(item, tuple) and len(item) == 2
-                        and isinstance(item[0], Node) and isinstance(item[1], Edge)
-                        for item in deep)
+            assert all(
+                isinstance(item, tuple)
+                and len(item) == 2
+                and isinstance(item[0], Node)
+                and isinstance(item[1], Edge)
+                for item in deep
+            )
 
     def test_call_graph(self, codegraph):
         q = codegraph._queries
@@ -477,14 +490,18 @@ class TestPgSpecificFts:
     def test_gin_index_exists(self, codegraph):
         q = codegraph._queries
         idx = q._conn.execute(
-            text("SELECT indexname FROM pg_indexes WHERE tablename = 'nodes' AND indexname = 'idx_nodes_fts'")
+            text(
+                "SELECT indexname FROM pg_indexes WHERE tablename = 'nodes' AND indexname = 'idx_nodes_fts'"
+            )
         ).fetchone()
         assert idx is not None
 
     def test_trgm_index_exists(self, codegraph):
         q = codegraph._queries
         idx = q._conn.execute(
-            text("SELECT indexname FROM pg_indexes WHERE tablename = 'nodes' AND indexname = 'idx_nodes_name_trgm'")
+            text(
+                "SELECT indexname FROM pg_indexes WHERE tablename = 'nodes' AND indexname = 'idx_nodes_name_trgm'"
+            )
         ).fetchone()
         assert idx is not None
 

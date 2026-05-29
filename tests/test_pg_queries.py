@@ -20,7 +20,7 @@ import psycopg
 import pytest
 
 from pycodegraph import CodeGraph
-from pycodegraph.types import NodeKind, EdgeKind, Language
+from pycodegraph.types import Language, NodeKind
 
 # ---------------------------------------------------------------------------
 # Config
@@ -53,6 +53,7 @@ TEST_DB_URL = _build_sa_url(PG_DSN, TEST_DB)
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _pg_available() -> bool:
     try:
         with psycopg.connect(PG_DSN, autocommit=True) as conn:
@@ -62,7 +63,9 @@ def _pg_available() -> bool:
         return False
 
 
-pg_available = pytest.mark.skipif(not _pg_available(), reason="PostgreSQL not available")
+pg_available = pytest.mark.skipif(
+    not _pg_available(), reason="PostgreSQL not available"
+)
 
 
 @pytest.fixture(scope="module")
@@ -83,7 +86,7 @@ def codegraph():
     cg._project_root = PROJECT_SRC
     cg._orchestrator.root_dir = PROJECT_SRC
 
-    result = cg.index_all(lambda phase, cur, total, f="", **_: None)
+    cg.index_all(lambda phase, cur, total, f="", **_: None)
     stats = cg.get_stats()
     assert stats["node_count"] > 0, f"No nodes indexed: {stats}"
 
@@ -93,8 +96,9 @@ def codegraph():
     shutil.rmtree(tmp_root, ignore_errors=True)
     with psycopg.connect(PG_DSN, autocommit=True) as conn:
         conn.execute(
-            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            f"WHERE datname = %s AND pid <> pg_backend_pid()", [TEST_DB],
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = %s AND pid <> pg_backend_pid()",
+            [TEST_DB],
         )
         conn.execute(f"DROP DATABASE IF EXISTS {TEST_DB}")
 
@@ -102,6 +106,7 @@ def codegraph():
 # ---------------------------------------------------------------------------
 # Node Query Operations
 # ---------------------------------------------------------------------------
+
 
 @pg_available
 class TestNodeQueries:
@@ -119,15 +124,21 @@ class TestNodeQueries:
         assert isinstance(results, list)
 
     def test_get_callers(self, codegraph):
-        func_nodes = [n for n in codegraph.get_all_nodes(limit=100)
-                       if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)]
+        func_nodes = [
+            n
+            for n in codegraph.get_all_nodes(limit=100)
+            if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)
+        ]
         if func_nodes:
             edges = codegraph.get_callers(func_nodes[0].id)
             assert isinstance(edges, list)
 
     def test_get_callees(self, codegraph):
-        func_nodes = [n for n in codegraph.get_all_nodes(limit=100)
-                       if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)]
+        func_nodes = [
+            n
+            for n in codegraph.get_all_nodes(limit=100)
+            if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)
+        ]
         if func_nodes:
             edges = codegraph.get_callees(func_nodes[0].id)
             assert isinstance(edges, list)
@@ -150,52 +161,73 @@ class TestNodeQueries:
 # Graph Traversal Operations
 # ---------------------------------------------------------------------------
 
+
 @pg_available
 class TestGraphTraversal:
     def test_get_context(self, codegraph):
-        func_nodes = [n for n in codegraph.get_all_nodes(limit=100)
-                       if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)]
+        func_nodes = [
+            n
+            for n in codegraph.get_all_nodes(limit=100)
+            if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)
+        ]
         if func_nodes:
             ctx = codegraph.get_context(func_nodes[0].id)
             assert ctx.focal is not None
 
     def test_get_callers_deep(self, codegraph):
-        func_nodes = [n for n in codegraph.get_all_nodes(limit=100)
-                       if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)]
+        func_nodes = [
+            n
+            for n in codegraph.get_all_nodes(limit=100)
+            if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)
+        ]
         if func_nodes:
             result = codegraph.get_callers_deep(func_nodes[0].id, max_depth=2)
             assert isinstance(result, list)
 
     def test_get_callees_deep(self, codegraph):
-        func_nodes = [n for n in codegraph.get_all_nodes(limit=100)
-                       if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)]
+        func_nodes = [
+            n
+            for n in codegraph.get_all_nodes(limit=100)
+            if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)
+        ]
         if func_nodes:
             result = codegraph.get_callees_deep(func_nodes[0].id, max_depth=2)
             assert isinstance(result, list)
 
     def test_get_call_graph(self, codegraph):
-        func_nodes = [n for n in codegraph.get_all_nodes(limit=100)
-                       if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)]
+        func_nodes = [
+            n
+            for n in codegraph.get_all_nodes(limit=100)
+            if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)
+        ]
         if func_nodes:
             sg = codegraph.get_call_graph(func_nodes[0].id, depth=2)
             assert len(sg.nodes) > 0
 
     def test_get_type_hierarchy(self, codegraph):
-        class_nodes = [n for n in codegraph.get_all_nodes(limit=100) if n.kind == NodeKind.CLASS]
+        class_nodes = [
+            n for n in codegraph.get_all_nodes(limit=100) if n.kind == NodeKind.CLASS
+        ]
         if class_nodes:
             sg = codegraph.get_type_hierarchy(class_nodes[0].id)
             assert isinstance(sg.nodes, dict)
 
     def test_find_usages(self, codegraph):
-        func_nodes = [n for n in codegraph.get_all_nodes(limit=100)
-                       if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)]
+        func_nodes = [
+            n
+            for n in codegraph.get_all_nodes(limit=100)
+            if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)
+        ]
         if func_nodes:
             result = codegraph.find_usages(func_nodes[0].id)
             assert isinstance(result, list)
 
     def test_get_impact_radius(self, codegraph):
-        func_nodes = [n for n in codegraph.get_all_nodes(limit=100)
-                       if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)]
+        func_nodes = [
+            n
+            for n in codegraph.get_all_nodes(limit=100)
+            if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)
+        ]
         if func_nodes:
             sg = codegraph.get_impact_radius(func_nodes[0].id, max_depth=2)
             assert len(sg.nodes) > 0
@@ -204,6 +236,7 @@ class TestGraphTraversal:
 # ---------------------------------------------------------------------------
 # File Dependency Operations
 # ---------------------------------------------------------------------------
+
 
 @pg_available
 class TestFileDependencies:
@@ -221,6 +254,7 @@ class TestFileDependencies:
 # ---------------------------------------------------------------------------
 # QueryBuilder Direct Operations
 # ---------------------------------------------------------------------------
+
 
 @pg_available
 class TestQueryBuilderDirect:
@@ -259,15 +293,21 @@ class TestQueryBuilderDirect:
         assert isinstance(results, list)
 
     def test_get_outgoing_edges_with_kind_filter(self, codegraph):
-        func_nodes = [n for n in codegraph.get_all_nodes(limit=100)
-                       if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)]
+        func_nodes = [
+            n
+            for n in codegraph.get_all_nodes(limit=100)
+            if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)
+        ]
         if func_nodes:
             results = codegraph._queries.get_outgoing_edges(func_nodes[0].id, ["calls"])
             assert isinstance(results, list)
 
     def test_get_incoming_edges_with_kind_filter(self, codegraph):
-        func_nodes = [n for n in codegraph.get_all_nodes(limit=100)
-                       if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)]
+        func_nodes = [
+            n
+            for n in codegraph.get_all_nodes(limit=100)
+            if n.kind in (NodeKind.FUNCTION, NodeKind.METHOD)
+        ]
         if func_nodes:
             results = codegraph._queries.get_incoming_edges(func_nodes[0].id, ["calls"])
             assert isinstance(results, list)
@@ -287,6 +327,7 @@ class TestQueryBuilderDirect:
 # Search Operations
 # ---------------------------------------------------------------------------
 
+
 @pg_available
 class TestSearchOperations:
     def test_search_nodes_fts(self, codegraph):
@@ -295,7 +336,10 @@ class TestSearchOperations:
 
     def test_search_nodes_with_kind_filter(self, codegraph):
         from pycodegraph.types import SearchOptions
-        results = codegraph._queries.search_nodes("init", SearchOptions(kinds=[NodeKind.METHOD], limit=5))
+
+        results = codegraph._queries.search_nodes(
+            "init", SearchOptions(kinds=[NodeKind.METHOD], limit=5)
+        )
         assert isinstance(results, list)
 
     def test_find_nodes_by_exact_name(self, codegraph):
@@ -324,13 +368,17 @@ class TestSearchOperations:
 
     def test_search_nodes_with_language_filter(self, codegraph):
         from pycodegraph.types import SearchOptions
-        results = codegraph._queries.search_nodes("function", SearchOptions(languages=[Language.PYTHON], limit=5))
+
+        results = codegraph._queries.search_nodes(
+            "function", SearchOptions(languages=[Language.PYTHON], limit=5)
+        )
         assert isinstance(results, list)
 
 
 # ---------------------------------------------------------------------------
 # File Operations
 # ---------------------------------------------------------------------------
+
 
 @pg_available
 class TestFileOperations:
@@ -355,6 +403,7 @@ class TestFileOperations:
 # ---------------------------------------------------------------------------
 # Unresolved Reference Operations
 # ---------------------------------------------------------------------------
+
 
 @pg_available
 class TestUnresolvedRefs:
