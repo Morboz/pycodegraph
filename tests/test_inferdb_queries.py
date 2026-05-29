@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.dialects import mysql
 
-from pycodegraph import CodeGraph, InferDBCodeGraphBackend, create_resolver
+from pycodegraph import CodeGraph, InferDBCodeGraphBackend
 from pycodegraph.types import Edge, EdgeKind, FileRecord, Language, Node, NodeKind, UnresolvedReference
 from pycodegraph.db import _init_inferdb_schema, prepare_engine_url, resolve_backend_name
 from pycodegraph.db.dialects import InferDBQueryDialect, get_query_dialect

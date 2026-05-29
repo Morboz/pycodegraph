@@ -151,10 +151,10 @@ class CodeGraph:
         """Apply incremental changes: index changed files, delete removed files, then resolve.
 
         Indexes all ``changed_files`` first, then deletes all ``removed_files``.
-        If no extraction errors occur, ``resolve_and_persist`` is called once to
-        rebuild cross-file reference edges.  If any file fails to index, resolution
-        is skipped entirely and the returned ``IndexResult`` will have
-        ``success=False`` and a non-empty ``errors`` list.
+        If no fatal extraction errors (``severity=="error"``) occur,
+        ``resolve_and_persist`` is called once to rebuild cross-file reference
+        edges.  Non-fatal errors (e.g. ``severity=="warning"``) are collected and
+        returned but do not prevent resolution or flip ``success`` to ``False``.
 
         Args:
             changed_files: Relative paths of files that were added or modified.
@@ -163,15 +163,19 @@ class CodeGraph:
 
         Returns:
             IndexResult with:
-              - ``success``: True when all files indexed without errors.
+              - ``success``: True when no fatal (severity=="error") extraction errors occurred.
               - ``files_indexed``: Number of entries in ``changed_files``.
               - ``nodes_created``: Total nodes extracted from changed files.
               - ``edges_created``: Structural edges extracted plus resolved reference edges.
-              - ``errors``: List of ExtractionError for any files that failed.
+              - ``refs_resolved``: Number of cross-file references resolved.
+              - ``refs_unresolved``: Number of cross-file references left unresolved.
+              - ``errors``: List of all ExtractionErrors (including warnings) for any files.
         """
         total_nodes = 0
         total_edges = 0
         errors = []
+        refs_resolved = 0
+        refs_unresolved = 0
 
         for path in changed_files:
             result = self._orchestrator.index_file(path)
@@ -183,16 +187,21 @@ class CodeGraph:
         for path in removed_files:
             self._queries.delete_file(path)
 
-        if not errors:
+        fatal_errors = [e for e in errors if e.severity == "error"]
+        if not fatal_errors:
             resolver = create_resolver(self._project_root, self._queries)
             resolution_result = resolver.resolve_and_persist(on_progress)
             total_edges += resolution_result.stats.get("resolved", 0)
+            refs_resolved = resolution_result.stats.get("resolved", 0)
+            refs_unresolved = resolution_result.stats.get("unresolved", 0)
 
         return IndexResult(
-            success=not errors,
+            success=not fatal_errors,
             files_indexed=len(changed_files),
             nodes_created=total_nodes,
             edges_created=total_edges,
+            refs_resolved=refs_resolved,
+            refs_unresolved=refs_unresolved,
             errors=errors,
         )
 
