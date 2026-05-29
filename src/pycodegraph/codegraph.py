@@ -19,6 +19,7 @@ from .db.queries import QueryBuilder
 from .extraction.orchestrator import ExtractionOrchestrator
 from .graph import GraphTraverser, GraphQueryManager
 from .context.builder import ContextBuilder
+from .resolution import create_resolver
 
 
 class CodeGraph:
@@ -124,7 +125,6 @@ class CodeGraph:
         result = self._orchestrator.index_all(on_progress)
 
         if result.success:
-            from .resolution import create_resolver
             resolver = create_resolver(self._project_root, self._queries)
             resolution_result = resolver.resolve_and_persist(on_progress)
             result.edges_created += resolution_result.stats.get("resolved", 0)
@@ -136,6 +136,65 @@ class CodeGraph:
     def index_file(self, file_path: str) -> None:
         """Index a single file (relative path)."""
         self._orchestrator.index_file(file_path)
+
+    def delete_file(self, file_path: str) -> None:
+        """Remove a file and all its nodes, edges, unresolved references, and file record from the graph."""
+        self._queries.delete_file(file_path)
+
+    def apply_delta(
+        self,
+        changed_files: list[str],
+        removed_files: list[str],
+        *,
+        on_progress: Optional[Callable] = None,
+    ) -> IndexResult:
+        """Apply incremental changes: index changed files, delete removed files, then resolve.
+
+        Indexes all ``changed_files`` first, then deletes all ``removed_files``.
+        If no extraction errors occur, ``resolve_and_persist`` is called once to
+        rebuild cross-file reference edges.  If any file fails to index, resolution
+        is skipped entirely and the returned ``IndexResult`` will have
+        ``success=False`` and a non-empty ``errors`` list.
+
+        Args:
+            changed_files: Relative paths of files that were added or modified.
+            removed_files: Relative paths of files that were deleted.
+            on_progress: Optional callback(phase, current, total, current_file) for progress.
+
+        Returns:
+            IndexResult with:
+              - ``success``: True when all files indexed without errors.
+              - ``files_indexed``: Number of entries in ``changed_files``.
+              - ``nodes_created``: Total nodes extracted from changed files.
+              - ``edges_created``: Structural edges extracted plus resolved reference edges.
+              - ``errors``: List of ExtractionError for any files that failed.
+        """
+        total_nodes = 0
+        total_edges = 0
+        errors = []
+
+        for path in changed_files:
+            result = self._orchestrator.index_file(path)
+            total_nodes += len(result.nodes)
+            total_edges += len(result.edges)
+            if result.errors:
+                errors.extend(result.errors)
+
+        for path in removed_files:
+            self._queries.delete_file(path)
+
+        if not errors:
+            resolver = create_resolver(self._project_root, self._queries)
+            resolution_result = resolver.resolve_and_persist(on_progress)
+            total_edges += resolution_result.stats.get("resolved", 0)
+
+        return IndexResult(
+            success=not errors,
+            files_indexed=len(changed_files),
+            nodes_created=total_nodes,
+            edges_created=total_edges,
+            errors=errors,
+        )
 
     # =========================================================================
     # Queries
