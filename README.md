@@ -295,7 +295,7 @@ print(cg.get_file_dependents("src/pycodegraph/context/builder.py"))
 
 1. extract likely identifiers from the prompt (`CamelCase`, `snake_case`, acronyms, dotted names)
 2. exact symbol-name lookup
-3. definition prefix matching with stem/title-case variants
+3. definition prefix matching (for example matching `BuildContext` against symbols whose names start with the same stem/title-case prefix)
 4. full-text search through the backend FTS index
 5. type-hierarchy expansion for class-like symbols
 6. BFS traversal around the best entry points
@@ -343,7 +343,7 @@ payload = cg.build_context(
 
 - `format="markdown"` — best for LLM prompts, chat replies, and developer-facing summaries
 - `format="json"` — best for IDE extensions, automation, and transport over APIs
-- any other `format` value — returns the raw `TaskContext` dataclass for in-process Python integrations
+- any other `format` value (for example `format="raw"`) — returns the raw `TaskContext` dataclass for in-process Python integrations
 
 Raw object example:
 
@@ -352,7 +352,7 @@ from pycodegraph.types import BuildContextOptions
 
 obj = cg.build_context(
     "Where is CodeGraph.build_context implemented?",
-    BuildContextOptions(format="object", include_code=False),
+    BuildContextOptions(format="raw", include_code=False),
 )
 print(type(obj).__name__)   # TaskContext
 print(obj.stats)
