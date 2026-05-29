@@ -103,7 +103,7 @@ cg = CodeGraph.init(
 Notes:
 
 - `?backend=inferdb` is required so pycodegraph selects the InferDB dialect.
-- Expected URL shape: `******host:3307/database?backend=inferdb`
+- Expected URL shape: a MySQL SQLAlchemy URL that ends with `?backend=inferdb`
 - Plain MySQL without the InferDB backend marker is not a supported write backend.
 - InferDB stores the main tables in MySQL-compatible storage and maintains a DuckDB shadow FTS index for search.
 - In real integrations, prefer environment variables or a secrets manager over hardcoding credentials in code.
@@ -351,7 +351,7 @@ Raw object example:
 from pycodegraph.types import BuildContextOptions
 
 obj = cg.build_context(
-    "Where is QueryBuilder.search_nodes implemented?",
+    "Where is CodeGraph.build_context implemented?",
     BuildContextOptions(format="object", include_code=False),
 )
 print(type(obj).__name__)   # TaskContext
