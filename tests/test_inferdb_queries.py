@@ -385,3 +385,224 @@ class TestInferDBMysqlStatementShapes:
             "size": 1, "modified_at": 1.0, "indexed_at": 1, "node_count": 1, "errors": None,
         }).compile(dialect=mysql_dialect))
         assert "ON DUPLICATE KEY UPDATE" in upsert_sql
+
+
+class TestCreateResolverTopLevelExport:
+    """Verify create_resolver is accessible from the top-level package (issue gap #4)."""
+
+    def test_create_resolver_importable_from_top_level(self):
+        # Before the fix, this would raise ImportError.
+        from pycodegraph import create_resolver as cr
+        assert callable(cr)
+
+    def test_create_resolver_in_dunder_all(self):
+        import pycodegraph
+        assert "create_resolver" in pycodegraph.__all__
+
+    def test_create_resolver_is_same_as_resolution_module(self):
+        from pycodegraph import create_resolver as cr
+        from pycodegraph.resolution import create_resolver as cr2
+        assert cr is cr2
+
+
+class TestCodeGraphDeleteFile:
+    """Verify CodeGraph.delete_file() is a public method (issue gap #3)."""
+
+    def _make_codegraph(self, queries, conn, tmp_dir: str = "/tmp"):
+        from pycodegraph.config import CodeGraphConfig
+        from types import SimpleNamespace
+        from pycodegraph.extraction.orchestrator import ExtractionOrchestrator
+        from pycodegraph.graph import GraphTraverser, GraphQueryManager
+        from pycodegraph.context.builder import ContextBuilder
+
+        config = CodeGraphConfig()
+        cg = CodeGraph.__new__(CodeGraph)
+        cg._db = SimpleNamespace(get_connection=lambda: conn, close=lambda: None)
+        cg._conn = conn
+        cg._queries = queries
+        cg._config = config
+        cg._project_root = tmp_dir
+        cg._orchestrator = ExtractionOrchestrator(tmp_dir, config, queries)
+        cg._traverser = GraphTraverser(queries)
+        cg._graph_manager = GraphQueryManager(queries)
+        cg._context_builder = ContextBuilder(tmp_dir, queries, cg._traverser)
+        return cg
+
+    def test_delete_file_is_public_method_on_codegraph_class(self):
+        # Before the fix, there was no public delete_file on CodeGraph.
+        assert callable(getattr(CodeGraph, "delete_file", None))
+        assert not getattr(CodeGraph.delete_file, "__name__", "").startswith("_")
+
+    def test_delete_file_removes_nodes_and_file_record(self):
+        """CodeGraph.delete_file() removes data without reaching into _queries."""
+        queries, conn, engine = _sqlite_queries()
+        try:
+            queries.insert_nodes([_test_node("a1", "a.py", "a_one")])
+            queries.upsert_file(_test_file("a.py", 1))
+
+            cg = self._make_codegraph(queries, conn)
+
+            assert queries.get_nodes_by_file("a.py") != []
+            # Call the public method — no access to _queries required.
+            cg.delete_file("a.py")
+            assert queries.get_nodes_by_file("a.py") == []
+            assert queries.get_file_by_path("a.py") is None
+        finally:
+            conn.close()
+            engine.dispose()
+
+    def test_delete_file_delegates_to_queries_delete_file(self):
+        """CodeGraph.delete_file() must call the underlying QueryBuilder.delete_file."""
+        from unittest.mock import patch
+        queries, conn, engine = _sqlite_queries()
+        try:
+            cg = self._make_codegraph(queries, conn)
+            with patch.object(queries, "delete_file") as mock_del:
+                cg.delete_file("some/file.py")
+                mock_del.assert_called_once_with("some/file.py")
+        finally:
+            conn.close()
+            engine.dispose()
+
+
+class TestCodeGraphApplyDelta:
+    """Verify CodeGraph.apply_delta() (issue gap #1 and #2)."""
+
+    def _make_codegraph(self, queries, conn, tmp_dir: str):
+        from pycodegraph.config import CodeGraphConfig
+        from types import SimpleNamespace
+        from pycodegraph.extraction.orchestrator import ExtractionOrchestrator
+        from pycodegraph.graph import GraphTraverser, GraphQueryManager
+        from pycodegraph.context.builder import ContextBuilder
+
+        config = CodeGraphConfig()
+        cg = CodeGraph.__new__(CodeGraph)
+        cg._db = SimpleNamespace(get_connection=lambda: conn, close=lambda: None)
+        cg._conn = conn
+        cg._queries = queries
+        cg._config = config
+        cg._project_root = tmp_dir
+        cg._orchestrator = ExtractionOrchestrator(tmp_dir, config, queries)
+        cg._traverser = GraphTraverser(queries)
+        cg._graph_manager = GraphQueryManager(queries)
+        cg._context_builder = ContextBuilder(tmp_dir, queries, cg._traverser)
+        return cg
+
+    def test_apply_delta_is_public_method_on_codegraph_class(self):
+        assert callable(getattr(CodeGraph, "apply_delta", None))
+
+    def test_apply_delta_indexes_changed_files(self):
+        """apply_delta must index the listed changed files."""
+        queries, conn, engine = _sqlite_queries()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                (Path(tmp_dir) / "new_file.py").write_text("def hello(): pass\n")
+                cg = self._make_codegraph(queries, conn, tmp_dir)
+                result = cg.apply_delta(changed_files=["new_file.py"], removed_files=[])
+                assert result.success
+                assert queries.get_file_by_path("new_file.py") is not None
+        finally:
+            conn.close()
+            engine.dispose()
+
+    def test_apply_delta_removes_deleted_files(self):
+        """apply_delta must delete nodes/records for removed files."""
+        queries, conn, engine = _sqlite_queries()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                queries.insert_nodes([_test_node("old1", "old.py", "old_func")])
+                queries.upsert_file(_test_file("old.py", 1))
+
+                cg = self._make_codegraph(queries, conn, tmp_dir)
+                result = cg.apply_delta(changed_files=[], removed_files=["old.py"])
+
+                assert result.success
+                assert queries.get_nodes_by_file("old.py") == []
+                assert queries.get_file_by_path("old.py") is None
+        finally:
+            conn.close()
+            engine.dispose()
+
+    def test_apply_delta_runs_resolution_on_success(self):
+        """apply_delta must call resolve_and_persist — this was the key missing step
+        in the old index_file() and the main reason apply_delta was requested."""
+        from unittest.mock import patch, MagicMock
+        queries, conn, engine = _sqlite_queries()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                (Path(tmp_dir) / "mod.py").write_text("def foo(): pass\n")
+                cg = self._make_codegraph(queries, conn, tmp_dir)
+
+                fake_resolution = MagicMock()
+                fake_resolution.stats = {"resolved": 3, "unresolved": 0}
+                fake_resolver = MagicMock()
+                fake_resolver.resolve_and_persist.return_value = fake_resolution
+
+                with patch("pycodegraph.codegraph.create_resolver", return_value=fake_resolver) as mock_cr:
+                    result = cg.apply_delta(changed_files=["mod.py"], removed_files=[])
+
+                mock_cr.assert_called_once()
+                fake_resolver.resolve_and_persist.assert_called_once()
+                assert result.success
+        finally:
+            conn.close()
+            engine.dispose()
+
+    def test_apply_delta_skips_resolution_on_errors(self):
+        """apply_delta must NOT run resolution when extraction errors occurred,
+        matching the documented behaviour."""
+        from unittest.mock import patch
+        queries, conn, engine = _sqlite_queries()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                # "nonexistent.py" will cause a read error
+                cg = self._make_codegraph(queries, conn, tmp_dir)
+                with patch("pycodegraph.codegraph.create_resolver") as mock_cr:
+                    result = cg.apply_delta(
+                        changed_files=["nonexistent.py"], removed_files=[]
+                    )
+                mock_cr.assert_not_called()
+                assert not result.success
+                assert result.errors
+        finally:
+            conn.close()
+            engine.dispose()
+
+    def test_apply_delta_returns_index_result_type(self):
+        from pycodegraph.types import IndexResult
+        queries, conn, engine = _sqlite_queries()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                cg = self._make_codegraph(queries, conn, tmp_dir)
+                result = cg.apply_delta(changed_files=[], removed_files=[])
+                assert isinstance(result, IndexResult)
+                assert result.success
+                assert result.files_indexed == 0
+        finally:
+            conn.close()
+            engine.dispose()
+
+    def test_apply_delta_combined_changed_and_removed(self):
+        """apply_delta handles both changed and removed files in one call."""
+        queries, conn, engine = _sqlite_queries()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                # Pre-existing file to be removed
+                queries.insert_nodes([_test_node("old1", "old.py", "old_func")])
+                queries.upsert_file(_test_file("old.py", 1))
+                # New file to be indexed
+                (Path(tmp_dir) / "new_file.py").write_text("def hello(): pass\n")
+
+                cg = self._make_codegraph(queries, conn, tmp_dir)
+                result = cg.apply_delta(
+                    changed_files=["new_file.py"],
+                    removed_files=["old.py"],
+                )
+
+                assert result.success
+                assert queries.get_nodes_by_file("old.py") == []
+                assert queries.get_file_by_path("old.py") is None
+                assert queries.get_file_by_path("new_file.py") is not None
+        finally:
+            conn.close()
+            engine.dispose()
