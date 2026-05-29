@@ -91,7 +91,7 @@ from pycodegraph import CodeGraph
 cg = CodeGraph.init(
     "/repo",
     {
-        "db_url": "mysql+pymysql://<user>:<password>@<host>:3307/codegraph_demo?backend=inferdb",
+        "db_url": "mysql+pymysql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:3307/codegraph_demo?backend=inferdb",
     },
 )
 ```
@@ -211,7 +211,6 @@ Then call `CodeGraph.init("/path/to/project")` again and re-run `index_all()`.
 ### Search index maintenance
 
 - SQLite: FTS5 triggers keep `nodes_fts` in sync after inserts/updates/deletes.
-- PostgreSQL: generated `tsvector` + GIN/trigram indexes are initialized automatically.
 - InferDB: after node writes, pycodegraph rebuilds the DuckDB shadow FTS table and runs `PRAGMA create_fts_index(...)`.
 
 ## Query API Reference
