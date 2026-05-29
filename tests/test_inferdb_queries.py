@@ -186,7 +186,7 @@ class TestBackendResolution:
 
 class TestEngineUrlSanitization:
     def test_backend_resolves_to_inferdb(self):
-        engine_url, backend_name = prepare_engine_url(
+        _engine_url, backend_name = prepare_engine_url(
             "mysql+pymysql://u:p@localhost/db?backend=inferdb&charset=utf8mb4"
         )
         assert backend_name == "inferdb"

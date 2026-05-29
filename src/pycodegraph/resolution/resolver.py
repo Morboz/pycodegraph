@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections import OrderedDict
 from collections.abc import Callable
+from typing import Generic, TypeVar
 
 from ..db.queries import QueryBuilder
 from ..types import Edge, EdgeKind, Node, NodeKind, UnresolvedReference
@@ -15,21 +16,23 @@ from .types import ImportMapping, ResolutionResult, ResolvedRef, UnresolvedRef
 
 logger = logging.getLogger(__name__)
 
+_T = TypeVar("_T")
 
-class _LRUCache:
+
+class _LRUCache(Generic[_T]):
     """Simple LRU cache backed by OrderedDict."""
 
     def __init__(self, max_size: int = 5000) -> None:
-        self._cache: OrderedDict = OrderedDict()
+        self._cache: OrderedDict[str, _T] = OrderedDict()
         self._max_size = max_size
 
-    def get(self, key: str):
+    def get(self, key: str) -> _T | None:
         if key in self._cache:
             self._cache.move_to_end(key)
             return self._cache[key]
         return None
 
-    def put(self, key: str, value) -> None:
+    def put(self, key: str, value: _T) -> None:
         if key in self._cache:
             self._cache.move_to_end(key)
         else:
@@ -58,8 +61,8 @@ class ResolutionContext:
         self._lower_name_index: dict[str, list[Node]] = {}
 
         # Per-file data (LRU-bounded to limit memory)
-        self._import_mappings = _LRUCache(5000)
-        self._file_contents = _LRUCache(1000)
+        self._import_mappings: _LRUCache[list[ImportMapping]] = _LRUCache(5000)
+        self._file_contents: _LRUCache[str] = _LRUCache(1000)
 
         self._known_files: set[str] = set()
         self._known_names: set[str] = set()

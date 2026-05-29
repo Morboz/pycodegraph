@@ -20,6 +20,7 @@ from ..types import (
     FindRelevantContextOptions,
     Node,
     NodeKind,
+    SearchOptions,
     SearchResult,
     Subgraph,
     TaskContext,
@@ -362,7 +363,7 @@ class ContextBuilder:
             exact_matches = (
                 self._queries.find_nodes_by_exact_name(
                     symbols,
-                    kinds=[NodeKind(k) for k in kind_filter] if kind_filter else None,
+                    options=SearchOptions(kinds=[NodeKind(k) for k in kind_filter]),
                 )
                 if kind_filter
                 else self._queries.find_nodes_by_exact_name(symbols)

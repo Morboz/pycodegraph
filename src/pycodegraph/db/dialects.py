@@ -29,7 +29,7 @@ class QueryDialect:
         conn: Connection,
         node_ids: list[str],
         kinds: list[str] | None = None,
-    ) -> list[tuple]:
+    ) -> list[Any]:
         raise NotImplementedError(
             f"{self.name} does not support find_edges_between_nodes"
         )
@@ -42,7 +42,7 @@ class QueryDialect:
         languages: list[str] | None,
         limit: int,
         offset: int,
-    ) -> list[tuple]:
+    ) -> list[Any]:
         return []
 
     def after_nodes_changed(self, conn: Connection) -> None:
@@ -78,7 +78,7 @@ class SQLiteQueryDialect(QueryDialect):
         conn: Connection,
         node_ids: list[str],
         kinds: list[str] | None = None,
-    ) -> list[tuple]:
+    ) -> list[Any]:
         ids_json = json.dumps(node_ids)
         sql = (
             "SELECT source, target, kind, metadata, line, col, provenance FROM edges "
@@ -91,7 +91,7 @@ class SQLiteQueryDialect(QueryDialect):
             sql += f" AND kind IN ({placeholders})"
             for i, kind in enumerate(kinds):
                 params[f"k{i}"] = kind
-        return conn.execute(text(sql), params).fetchall()
+        return list(conn.execute(text(sql), params).fetchall())
 
     def search_nodes_fts(
         self,
@@ -101,7 +101,7 @@ class SQLiteQueryDialect(QueryDialect):
         languages: list[str] | None,
         limit: int,
         offset: int,
-    ) -> list[tuple]:
+    ) -> list[Any]:
         fts_terms = " OR ".join(
             f'"{term}"*'
             for term in query_text.split()
@@ -126,7 +126,7 @@ class SQLiteQueryDialect(QueryDialect):
         params["lim"] = fts_limit
         params["off"] = offset
 
-        return conn.execute(text(sql), params).fetchall()
+        return list(conn.execute(text(sql), params).fetchall())
 
 
 class PostgreSQLQueryDialect(QueryDialect):
@@ -150,7 +150,7 @@ class PostgreSQLQueryDialect(QueryDialect):
         conn: Connection,
         node_ids: list[str],
         kinds: list[str] | None = None,
-    ) -> list[tuple]:
+    ) -> list[Any]:
         sql = (
             "SELECT source, target, kind, metadata, line, col, provenance FROM edges "
             "WHERE source = ANY(:ids) AND target = ANY(:ids2)"
@@ -161,7 +161,7 @@ class PostgreSQLQueryDialect(QueryDialect):
             sql += f" AND kind IN ({placeholders})"
             for i, kind in enumerate(kinds):
                 params[f"k{i}"] = kind
-        return conn.execute(text(sql), params).fetchall()
+        return list(conn.execute(text(sql), params).fetchall())
 
     def search_nodes_fts(
         self,
@@ -171,7 +171,7 @@ class PostgreSQLQueryDialect(QueryDialect):
         languages: list[str] | None,
         limit: int,
         offset: int,
-    ) -> list[tuple]:
+    ) -> list[Any]:
         fts_limit = max(limit * 5, 100)
         sql = (
             "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path, n.language, "
@@ -189,7 +189,7 @@ class PostgreSQLQueryDialect(QueryDialect):
         params["lim"] = fts_limit
         params["off"] = offset
 
-        return conn.execute(text(sql), params).fetchall()
+        return list(conn.execute(text(sql), params).fetchall())
 
 
 class InferDBQueryDialect(QueryDialect):
@@ -224,7 +224,7 @@ class InferDBQueryDialect(QueryDialect):
         conn: Connection,
         node_ids: list[str],
         kinds: list[str] | None = None,
-    ) -> list[tuple]:
+    ) -> list[Any]:
         ids_placeholders = ",".join(f":id{i}" for i in range(len(node_ids)))
         sql = (
             "SELECT source, target, kind, metadata, line, col, provenance FROM edges "
@@ -238,7 +238,7 @@ class InferDBQueryDialect(QueryDialect):
             sql += f" AND kind IN ({placeholders})"
             for i, kind in enumerate(kinds):
                 params[f"k{i}"] = kind
-        return conn.execute(text(sql), params).fetchall()
+        return list(conn.execute(text(sql), params).fetchall())
 
     def search_nodes_fts(
         self,
@@ -248,7 +248,7 @@ class InferDBQueryDialect(QueryDialect):
         languages: list[str] | None,
         limit: int,
         offset: int,
-    ) -> list[tuple]:
+    ) -> list[Any]:
         database = conn.engine.url.database
         if not database:
             return []
@@ -393,5 +393,7 @@ def _sql_string_literal(value: str) -> str:
 
 def _exec_raw_driver_sql(conn: Connection, sql: str) -> None:
     """Execute SQL without SQLAlchemy or DBAPI parameter parsing."""
-    with conn.connection.driver_connection.cursor() as cursor:
+    raw = conn.connection.driver_connection
+    assert raw is not None
+    with raw.cursor() as cursor:
         cursor.execute(sql)

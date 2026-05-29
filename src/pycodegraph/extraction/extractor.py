@@ -940,7 +940,7 @@ class TreeSitterExtractor:
 
         # Go imports
         if self.language == Language.GO:
-            parent_id = self.node_stack[-1] if self.node_stack else None
+            go_parent_id: str | None = self.node_stack[-1] if self.node_stack else None
             specs = [c for c in node.named_children if c.type == "import_spec"]
             spec_list = next(
                 (c for c in node.named_children if c.type == "import_spec_list"), None
@@ -965,10 +965,10 @@ class TreeSitterExtractor:
                             spec,
                             signature=get_node_text(spec, self.source_bytes).strip(),
                         )
-                        if parent_id:
+                        if go_parent_id:
                             self.unresolved_refs.append(
                                 UnresolvedReference(
-                                    from_node_id=parent_id,
+                                    from_node_id=go_parent_id,
                                     reference_name=path,
                                     reference_kind=EdgeKind.IMPORTS,
                                     line=spec.start_point[0] + 1,

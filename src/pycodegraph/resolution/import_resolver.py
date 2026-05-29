@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..types import Node
 from .types import ImportMapping, ResolvedRef, UnresolvedRef
 
 if TYPE_CHECKING:
@@ -215,7 +216,7 @@ def _find_exported_symbol(
     member_name: str | None,
     language: str,
     context: ResolutionContext,
-) -> object | None:
+) -> Node | None:
     """Find an exported symbol in a file."""
     from ..types import NodeKind
 

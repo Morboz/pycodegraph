@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import OrderedDict
+from typing import Any
 
 from sqlalchemy import Connection, case, delete, func, insert, or_, select, tuple_
 
@@ -955,7 +956,7 @@ class QueryBuilder:
     # =========================================================================
 
     @staticmethod
-    def _row_to_node(row: tuple) -> Node:
+    def _row_to_node(row: Any) -> Node:
         return Node(
             id=row[0],
             kind=NodeKind(row[1]) if isinstance(row[1], str) else row[1],
@@ -980,7 +981,7 @@ class QueryBuilder:
         )
 
     @staticmethod
-    def _row_to_edge(row: tuple) -> Edge:
+    def _row_to_edge(row: Any) -> Edge:
         return Edge(
             source=row[0],
             target=row[1],
@@ -992,7 +993,7 @@ class QueryBuilder:
         )
 
     @staticmethod
-    def _row_to_ref(row: tuple) -> UnresolvedReference:
+    def _row_to_ref(row: Any) -> UnresolvedReference:
         return UnresolvedReference(
             from_node_id=row[0],
             reference_name=row[1],

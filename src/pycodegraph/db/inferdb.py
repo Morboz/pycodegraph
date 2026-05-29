@@ -20,6 +20,7 @@ def _duck_identifier(identifier: str) -> str:
 def _raw_driver_execute(engine: Engine, sql: str) -> None:
     with engine.connect() as conn:
         raw = conn.connection.driver_connection
+        assert raw is not None
         with raw.cursor() as cursor:
             cursor.execute(sql)
 
