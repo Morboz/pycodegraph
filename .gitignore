@@ -6,3 +6,7 @@ __pycache__/
 dist/
 build/
 .codegraph/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.so
