@@ -101,6 +101,7 @@ Notes:
 - `?backend=inferdb` is required so pycodegraph selects the InferDB dialect.
 - Plain MySQL without the InferDB backend marker is not a supported write backend.
 - InferDB stores the main tables in MySQL-compatible storage and maintains a DuckDB shadow FTS index for search.
+- In real integrations, prefer environment variables or a secrets manager over hardcoding credentials in code.
 
 If your integration owns database provisioning, use `InferDBCodeGraphBackend`:
 
