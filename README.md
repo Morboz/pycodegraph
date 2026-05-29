@@ -86,12 +86,17 @@ uv sync --extra inferdb
 Then pass a MySQL SQLAlchemy URL with the logical backend marker:
 
 ```python
+import os
+
 from pycodegraph import CodeGraph
 
 cg = CodeGraph.init(
     "/repo",
     {
-        "db_url": "mysql+pymysql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:3307/codegraph_demo?backend=inferdb",
+        "db_url": (
+            f"mysql+pymysql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}"
+            f"@{os.environ['DB_HOST']}:3307/codegraph_demo?backend=inferdb"
+        ),
     },
 )
 ```
@@ -108,11 +113,7 @@ If your integration owns database provisioning, use `InferDBCodeGraphBackend`:
 ```python
 from pycodegraph import CodeGraph, InferDBCodeGraphBackend
 
-backend = InferDBCodeGraphBackend(
-    host="127.0.0.1",
-    port=3307,
-    user="test",
-)
+backend = InferDBCodeGraphBackend.from_env()
 
 db_url = backend.ensure_database("cg_1234abcd")
 cg = CodeGraph.init("/repo", {"db_url": db_url})
