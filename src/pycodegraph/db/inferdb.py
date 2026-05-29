@@ -8,8 +8,6 @@ from collections.abc import Callable
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import URL
 
-from pycodegraph.config import CodeGraphConfig
-
 
 def _mysql_identifier(identifier: str) -> str:
     return "`" + identifier.replace("`", "``") + "`"

@@ -114,7 +114,19 @@ class CodeGraph:
 
         Unlike open(), this does not require a .codegraph/ directory on disk.
         Useful for connecting to externally-managed databases.
+
+        Args:
+            db_url: The database URL to connect to.
+            project_root: Root directory of the project. Defaults to ``""`` (empty
+                string), which resolves to the current working directory when
+                ``index_*`` methods are called. Pass an explicit path if you intend
+                to use any indexing methods.
         """
+        if db_url.startswith("sqlite:///"):
+            db_path = Path(db_url[len("sqlite:///"):])
+            if not db_path.exists():
+                raise FileNotFoundError(f"SQLite database not found: {db_path}")
+
         db = DatabaseConnection.open(db_url)
         queries = QueryBuilder(db.get_connection())
         config = CodeGraphConfig(db_url=db_url)
