@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections import OrderedDict
 from typing import Any
 
 from sqlalchemy import Connection, case, delete, func, insert, or_, select, tuple_
@@ -21,6 +20,7 @@ from ..types import (
     SearchResult,
     UnresolvedReference,
 )
+from ._cache import LRUCache
 from .dialects import get_query_dialect
 from .tables import edges, files, nodes, unresolved_refs
 
@@ -108,46 +108,13 @@ def _node_row(node: Node) -> dict:
     }
 
 
-class _LRUNodeCache:
-    """Simple LRU cache for nodes."""
-
-    def __init__(self, max_size: int = 1000) -> None:
-        self._cache: OrderedDict[str, Node] = OrderedDict()
-        self._max_size = max_size
-
-    def get(self, key: str) -> Node | None:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-            return self._cache[key]
-        return None
-
-    def put(self, key: str, node: Node) -> None:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-        else:
-            if len(self._cache) >= self._max_size:
-                self._cache.popitem(last=False)
-        self._cache[key] = node
-
-    def invalidate(self, key: str) -> None:
-        self._cache.pop(key, None)
-
-    def invalidate_file(self, file_path: str) -> None:
-        keys_to_remove = [k for k, v in self._cache.items() if v.file_path == file_path]
-        for k in keys_to_remove:
-            del self._cache[k]
-
-    def clear(self) -> None:
-        self._cache.clear()
-
-
 class QueryBuilder:
     def __init__(self, conn: Connection):
         self._conn = conn
         self._dialect = get_query_dialect(
             conn.info.get("pycodegraph_backend", conn.engine.dialect.name)
         )
-        self._node_cache = _LRUNodeCache()
+        self._node_cache = LRUCache[Node]()
 
     # =========================================================================
     # Node write operations
@@ -307,7 +274,7 @@ class QueryBuilder:
             )
             self._conn.execute(delete(nodes).where(nodes.c.file_path == file_path))
         self._conn.execute(delete(files).where(files.c.path == file_path))
-        self._node_cache.invalidate_file(file_path)
+        self._node_cache.invalidate_by_attr("file_path", file_path)
         self._dialect.after_nodes_changed(self._conn)
         self._conn.commit()
 
@@ -732,8 +699,7 @@ class QueryBuilder:
                 )
                 self._conn.execute(delete(nodes).where(nodes.c.file_path.in_(chunk)))
             self._conn.execute(delete(files).where(files.c.path.in_(chunk)))
-            for file_path in chunk:
-                self._node_cache.invalidate_file(file_path)
+            self._node_cache.invalidate_by_attr_in("file_path", set(chunk))
         self._dialect.after_nodes_changed(self._conn)
         self._conn.commit()
 
