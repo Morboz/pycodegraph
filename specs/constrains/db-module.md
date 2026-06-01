@@ -93,21 +93,7 @@ forbidden_modules =
 
 历史债务：`queries.py` 曾经导入 `..search`，已在 808bb07 中通过引入 `NodeSearcher` 消除。
 
-### C2: db.__init__.py 的公开接口由 __all__ 控制
-
-```python
-__all__ = [
-    "DatabaseConnection",
-    "ensure_inferdb_duck_schema",
-    "metadata",
-    "prepare_engine_url",
-    "resolve_backend_name",
-]
-```
-
-新增公开导出必须同步更新 `__all__`。带 `_` 前缀的函数（如 `backends/inferdb.py` 中的 `_duck_identifier`、`_raw_driver_execute` 等私有工具函数）是内部实现，不属于稳定接口。
-
-### C3: QueryBuilder 只提供数据原语，不承担搜索编排
+### C2: QueryBuilder 只提供数据原语，不承担搜索编排
 
 `QueryBuilder` 的搜索相关方法仅返回原始数据，不做策略选择和评分：
 
@@ -122,11 +108,7 @@ __all__ = [
 
 搜索编排（FTS→LIKE→fuzzy 回退、多信号评分）由 `search.NodeSearcher` 承担，它持有 `QueryBuilder` 引用来调用上述原语。
 
-### C4: _cache.py 是包内私有模块
-
-`_cache.py` 以 `_` 前缀命名，表示包内私有。外部模块不应直接导入 `LRUCache`。如需在 db 包外使用 LRU 缓存，应将其提升为公开模块或独立包。
-
-### C5: Backend 子类统一管理后端特化行为
+### C3: Backend 子类统一管理后端特化行为
 
 扩展新后端只需：
 
@@ -137,7 +119,7 @@ __all__ = [
 
 `ensure_inferdb_duck_schema` 是纯 schema 操作，作为 `InferDBBackend` 的 `@staticmethod` 实现，通过 `db.__init__.py` re-export 维持向后兼容。
 
-### C6: backends/inferdb.py 中的私有工具函数
+### C4: backends/inferdb.py 中的私有工具函数
 
 `backends/inferdb.py` 中以 `_` 前缀命名的函数（`_duck_identifier`、`_raw_driver_execute`、`_exec_raw_driver_sql`、`_sql_string_literal`）是 InferDB 后端的内部实现，不属于稳定接口。`integrations/inferdb.py` 因与 InferDB 后端共享相同的底层操作，可通过 `db.backends.inferdb` 导入这些函数。
 
