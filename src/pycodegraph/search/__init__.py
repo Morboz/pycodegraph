@@ -1,4 +1,4 @@
-"""Search module - query parsing and scoring utilities."""
+"""Search module - query parsing, scoring, and node search orchestration."""
 
 from .query_parser import ParsedQuery, bounded_edit_distance, parse_query
 from .query_utils import (
@@ -10,9 +10,11 @@ from .query_utils import (
     name_match_bonus,
     score_path_relevance,
 )
+from .searcher import NodeSearcher
 
 __all__ = [
     "STOP_WORDS",
+    "NodeSearcher",
     "ParsedQuery",
     "bounded_edit_distance",
     "extract_search_terms",

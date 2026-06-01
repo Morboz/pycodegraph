@@ -19,6 +19,7 @@ from .db.queries import QueryBuilder
 from .extraction.orchestrator import ExtractionOrchestrator
 from .graph import GraphQueryManager, GraphTraverser
 from .resolution import create_resolver
+from .search.searcher import NodeSearcher
 from .types import (
     BuildContextOptions,
     Context,
@@ -42,6 +43,7 @@ class CodeGraph:
         self._db = db
         self._conn = db.get_connection()
         self._queries = queries
+        self._searcher = NodeSearcher(queries)
         self._config = config
         self._project_root = project_root
         self._orchestrator = ExtractionOrchestrator(project_root, config, queries)
@@ -259,7 +261,7 @@ class CodeGraph:
 
         return [
             r.node
-            for r in self._queries.search_nodes(query, SearchOptions(limit=limit))
+            for r in self._searcher.search_nodes(query, SearchOptions(limit=limit))
         ]
 
     def get_callers(self, node_id: str) -> list[Edge]:

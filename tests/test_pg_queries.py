@@ -332,45 +332,45 @@ class TestQueryBuilderDirect:
 @pg_available
 class TestSearchOperations:
     def test_search_nodes_fts(self, codegraph):
-        results = codegraph._queries.search_nodes("CodeGraph")
+        results = codegraph._searcher.search_nodes("CodeGraph")
         assert len(results) > 0
 
     def test_search_nodes_with_kind_filter(self, codegraph):
         from pycodegraph.types import SearchOptions
 
-        results = codegraph._queries.search_nodes(
+        results = codegraph._searcher.search_nodes(
             "init", SearchOptions(kinds=[NodeKind.METHOD], limit=5)
         )
         assert isinstance(results, list)
 
     def test_find_nodes_by_exact_name(self, codegraph):
-        results = codegraph._queries.find_nodes_by_exact_name(["QueryBuilder"])
+        results = codegraph._searcher.find_nodes_by_exact_name(["QueryBuilder"])
         assert len(results) > 0
 
     def test_find_nodes_by_name_substring(self, codegraph):
-        results = codegraph._queries.find_nodes_by_name_substring("insert")
+        results = codegraph._searcher.find_nodes_by_name_substring("insert")
         assert len(results) > 0
 
     def test_search_nodes_like_fallback(self, codegraph):
-        results = codegraph._queries._search_nodes_like("ZzzNotExist", None, None, 5, 0)
+        results = codegraph._searcher._search_like("ZzzNotExist", None, None, 5, 0)
         assert isinstance(results, list)
 
     def test_search_nodes_like_with_match(self, codegraph):
-        results = codegraph._queries._search_nodes_like("Graph", None, None, 5, 0)
+        results = codegraph._searcher._search_like("Graph", None, None, 5, 0)
         assert len(results) > 0
 
     def test_search_nodes_fuzzy(self, codegraph):
-        results = codegraph._queries._search_nodes_fuzzy("QueriBilder", None, None, 5)
+        results = codegraph._searcher._search_fuzzy("QueriBilder", None, None, 5)
         assert isinstance(results, list)
 
     def test_search_all_by_filters(self, codegraph):
-        results = codegraph._queries._search_all_by_filters(["class"], None, 5)
+        results = codegraph._searcher._search_all_by_filters(["class"], None, 5)
         assert isinstance(results, list)
 
     def test_search_nodes_with_language_filter(self, codegraph):
         from pycodegraph.types import SearchOptions
 
-        results = codegraph._queries.search_nodes(
+        results = codegraph._searcher.search_nodes(
             "function", SearchOptions(languages=[Language.PYTHON], limit=5)
         )
         assert isinstance(results, list)

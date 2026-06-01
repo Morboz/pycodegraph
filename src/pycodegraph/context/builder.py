@@ -12,6 +12,7 @@ from ..search.query_utils import (
     get_stem_variants,
     is_test_file,
 )
+from ..search.searcher import NodeSearcher
 from ..types import (
     BuildContextOptions,
     CodeBlock,
@@ -262,6 +263,7 @@ class ContextBuilder:
     ) -> None:
         self._project_root = project_root
         self._queries = queries
+        self._searcher = NodeSearcher(queries)
         self._traverser = traverser
 
     def build_context(
@@ -361,12 +363,12 @@ class ContextBuilder:
                 [k.value for k in opts.node_kinds] if opts.node_kinds else None
             )
             exact_matches = (
-                self._queries.find_nodes_by_exact_name(
+                self._searcher.find_nodes_by_exact_name(
                     symbols,
                     options=SearchOptions(kinds=[NodeKind(k) for k in kind_filter]),
                 )
                 if kind_filter
-                else self._queries.find_nodes_by_exact_name(symbols)
+                else self._searcher.find_nodes_by_exact_name(symbols)
             )
 
             # Co-location boost
@@ -404,7 +406,7 @@ class ContextBuilder:
                 if title_cased == sym:
                     continue
                 kind_strs = [k.value for k in definition_kinds]
-                prefix_results = self._queries.find_nodes_by_name_substring(
+                prefix_results = self._searcher.find_nodes_by_name_substring(
                     title_cased,
                     kinds=kind_strs,
                     limit=30,
@@ -440,7 +442,7 @@ class ContextBuilder:
                 else [k.value for k in _HIGH_VALUE_NODE_KINDS]
             )
             for term in search_terms:
-                term_results = self._queries.search_nodes(
+                term_results = self._searcher.search_nodes(
                     term,
                     SO(
                         kinds=[NodeKind(k) for k in search_kinds],

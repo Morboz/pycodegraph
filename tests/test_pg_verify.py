@@ -308,43 +308,43 @@ class TestOutgoingIncomingEdges:
 @pg_available
 class TestSearchCorrectness:
     def test_fts_search(self, codegraph):
-        q = codegraph._queries
-        results = q.search_nodes("QueryBuilder")
+        s = codegraph._searcher
+        results = s.search_nodes("QueryBuilder")
         assert len(results) > 0
         names = {r.node.name for r in results}
         assert "QueryBuilder" in names
         assert all(r.score > 0 for r in results)
 
     def test_like_fallback(self, codegraph):
-        q = codegraph._queries
-        results = q._search_nodes_like("insert", None, None, 10, 0)
+        s = codegraph._searcher
+        results = s._search_like("insert", None, None, 10, 0)
         assert len(results) > 0
         names = {r.node.name for r in results}
         assert any("insert" in n.lower() for n in names)
 
     def test_exact_name_search(self, codegraph):
-        q = codegraph._queries
-        results = q.find_nodes_by_exact_name(["QueryBuilder"])
+        s = codegraph._searcher
+        results = s.find_nodes_by_exact_name(["QueryBuilder"])
         assert len(results) > 0
         assert all(r.node.name == "QueryBuilder" for r in results)
 
     def test_substring_search(self, codegraph):
-        q = codegraph._queries
-        results = q.find_nodes_by_name_substring("Graph")
+        s = codegraph._searcher
+        results = s.find_nodes_by_name_substring("Graph")
         assert len(results) > 0
         assert any("Graph" in r.node.name for r in results)
 
     def test_kind_filter(self, codegraph):
-        q = codegraph._queries
-        results = q.search_nodes(
+        s = codegraph._searcher
+        results = s.search_nodes(
             "QueryBuilder", SearchOptions(kinds=[NodeKind.CLASS], limit=5)
         )
         assert len(results) > 0
         assert all(r.node.kind == NodeKind.CLASS for r in results)
 
     def test_language_filter(self, codegraph):
-        q = codegraph._queries
-        results = q.search_nodes(
+        s = codegraph._searcher
+        results = s.search_nodes(
             "function", SearchOptions(languages=[Language.PYTHON], limit=5)
         )
         assert isinstance(results, list)

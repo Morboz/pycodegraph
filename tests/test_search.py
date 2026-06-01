@@ -125,8 +125,8 @@ class TestSearchLike:
         cg = CodeGraph.init(root)
         cg.index_all()
         try:
-            # Direct query to the internal _search_nodes_like method
-            results = cg._queries._search_nodes_like("run", None, None, 10, 0)
+            # Direct query to the internal _search_like method
+            results = cg._searcher._search_like("run", None, None, 10, 0)
             names = {r.node.name for r in results}
             assert "run" in names
         finally:
@@ -137,7 +137,7 @@ class TestSearchLike:
         cg = CodeGraph.init(root)
         cg.index_all()
         try:
-            results = cg._queries.find_nodes_by_name_substring("user")
+            results = cg._searcher.find_nodes_by_name_substring("user")
             names = {r.node.name for r in results}
             # Should match User, create_user, notify_user
             assert any("user" in n.lower() for n in names)
@@ -154,7 +154,7 @@ class TestSearchFuzzy:
         cg = CodeGraph.init(root)
         cg.index_all()
         try:
-            results = cg._queries._search_nodes_fuzzy("User", None, None, 5)
+            results = cg._searcher._search_fuzzy("User", None, None, 5)
             assert isinstance(results, list)
             if results:
                 names = {r.node.name for r in results}
