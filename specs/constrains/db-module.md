@@ -91,20 +91,9 @@ forbidden_modules =
 
 运行：`lint-imports`
 
-此契约隐含覆盖 C2（db 不得导入 SearchOptions/SearchResult）、C6（db 不得导入 integrations）、C7（db 不得导入 search），因为这些模块整体被禁止。
-
 历史债务：`queries.py` 曾经导入 `..search`，已在 808bb07 中通过引入 `NodeSearcher` 消除。
 
-### C2: db 对 types 的依赖限于数据模型 🔒（被 C1 隐含覆盖）
-
-`..types` 中的纯数据类（Node, Edge, FileRecord 等）是 db 行↔对象转换的必要依赖。但以下类型**不应出现在 db 层**：
-
-- `SearchOptions` — 搜索编排参数，属于 search 层
-- `SearchResult` — 搜索评分结果，属于 search 层
-
-当前 `queries.py` 已不导入这两个类型，此约束已满足。
-
-### C3: db.__init__.py 的公开接口由 __all__ 控制
+### C2: db.__init__.py 的公开接口由 __all__ 控制
 
 ```python
 __all__ = [
@@ -118,7 +107,7 @@ __all__ = [
 
 新增公开导出必须同步更新 `__all__`。带 `_` 前缀的函数（如 `backends/inferdb.py` 中的 `_duck_identifier`、`_raw_driver_execute` 等私有工具函数）是内部实现，不属于稳定接口。
 
-### C4: QueryBuilder 只提供数据原语，不承担搜索编排
+### C3: QueryBuilder 只提供数据原语，不承担搜索编排
 
 `QueryBuilder` 的搜索相关方法仅返回原始数据，不做策略选择和评分：
 
@@ -133,25 +122,22 @@ __all__ = [
 
 搜索编排（FTS→LIKE→fuzzy 回退、多信号评分）由 `search.NodeSearcher` 承担，它持有 `QueryBuilder` 引用来调用上述原语。
 
-### C5: _cache.py 是包内私有模块
+### C4: _cache.py 是包内私有模块
 
 `_cache.py` 以 `_` 前缀命名，表示包内私有。外部模块不应直接导入 `LRUCache`。如需在 db 包外使用 LRU 缓存，应将其提升为公开模块或独立包。
 
-### C6: InferDB 集成逻辑不属于 db 🔒（被 C1 隐含覆盖）
-
-`InferDBCodeGraphBackend` 位于 `integrations/inferdb.py`，不在 db 包内。它通过 `from ..db import ensure_inferdb_duck_schema` 调用 db 的公开接口。`ensure_inferdb_duck_schema` 是纯 schema 操作，作为 `InferDBBackend` 的 `@staticmethod` 实现，通过 `db.__init__.py` re-export 维持向后兼容。
-
-### C7: Backend 子类统一管理后端特化行为 🔒（被 C1 隐含覆盖）
-
-`InferDBBackend`（在 `backends/inferdb.py` 中）统一封装 InferDB 的 schema 初始化和 SQL 方言生成，这是 db 层的职责。而 `InferDBCodeGraphBackend`（在 `integrations/` 中）负责 InferDB 的生命周期管理（建库、删库），是集成层的职责。两者通过 `?backend=inferdb` URL 参数关联，但不互相导入。
+### C5: Backend 子类统一管理后端特化行为
 
 扩展新后端只需：
 
 1. 继承 `Backend`，实现所有 `@abstractmethod`
 2. 用 `@register_backend` 注册
-3. 不需要修改 `__init__.py`、`queries.py` 中的任何分发逻辑
+3. 在 `backends/__init__.py` 中添加导入（触发注册）
+4. 不需要修改 `__init__.py`、`queries.py` 中的任何分发逻辑
 
-### C8: backends/inferdb.py 中的私有工具函数
+`ensure_inferdb_duck_schema` 是纯 schema 操作，作为 `InferDBBackend` 的 `@staticmethod` 实现，通过 `db.__init__.py` re-export 维持向后兼容。
+
+### C6: backends/inferdb.py 中的私有工具函数
 
 `backends/inferdb.py` 中以 `_` 前缀命名的函数（`_duck_identifier`、`_raw_driver_execute`、`_exec_raw_driver_sql`、`_sql_string_literal`）是 InferDB 后端的内部实现，不属于稳定接口。`integrations/inferdb.py` 因与 InferDB 后端共享相同的底层操作，可通过 `db.backends.inferdb` 导入这些函数。
 
