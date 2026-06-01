@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections import OrderedDict
 from collections.abc import Callable
+from typing import Generic, TypeVar
 
 from ..db.queries import QueryBuilder
 from ..types import Edge, EdgeKind, Node, NodeKind, UnresolvedReference
@@ -16,7 +17,10 @@ from .types import ImportMapping, ResolutionResult, ResolvedRef, UnresolvedRef
 logger = logging.getLogger(__name__)
 
 
-class _LRUCache[T]:
+T = TypeVar("T")
+
+
+class _LRUCache(Generic[T]):
     """Simple LRU cache backed by OrderedDict."""
 
     def __init__(self, max_size: int = 5000) -> None:
