@@ -15,22 +15,11 @@ from sqlalchemy.engine import URL
 
 from ..codegraph import CodeGraph
 from ..db import ensure_inferdb_duck_schema
+from ..db.backends.inferdb import _duck_identifier, _raw_driver_execute
 
 
 def _mysql_identifier(identifier: str) -> str:
     return "`" + identifier.replace("`", "``") + "`"
-
-
-def _duck_identifier(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
-def _raw_driver_execute(engine: Engine, sql: str) -> None:
-    with engine.connect() as conn:
-        raw = conn.connection.driver_connection
-        assert raw is not None
-        with raw.cursor() as cursor:
-            cursor.execute(sql)
 
 
 class InferDBCodeGraphBackend:

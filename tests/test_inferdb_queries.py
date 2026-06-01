@@ -15,11 +15,11 @@ from sqlalchemy.dialects import mysql
 
 from pycodegraph import CodeGraph
 from pycodegraph.db import (
-    _init_inferdb_schema,
     prepare_engine_url,
     resolve_backend_name,
 )
-from pycodegraph.db.dialects import InferDBQueryDialect, get_query_dialect
+from pycodegraph.db.backend import get_backend
+from pycodegraph.db.backends.inferdb import InferDBBackend
 from pycodegraph.db.queries import QueryBuilder, _node_row, _node_search_text
 from pycodegraph.db.tables import metadata
 from pycodegraph.integrations.inferdb import InferDBCodeGraphBackend
@@ -265,7 +265,7 @@ class TestInferDBBackendLifecycle:
 class TestInferDBSchema:
     def test_keeps_long_reference_names(self):
         engine = _FakeEngine()
-        _init_inferdb_schema(engine)
+        InferDBBackend.initialize_schema(engine)
         unresolved_sql = next(
             stmt
             for stmt in engine.conn.sql
@@ -279,22 +279,22 @@ class TestInferDBSchema:
         assert "reference_name TEXT NOT NULL" in unresolved_sql
 
 
-class TestInferDBQueryDialect:
+class TestInferDBBackend:
     def test_resolves_to_inferdb(self):
-        assert get_query_dialect("inferdb").name == "inferdb"
+        assert get_backend("inferdb").name == "inferdb"
 
 
 class TestPrepareNodeRows:
-    @pytest.mark.parametrize("dialect_name", ["sqlite", "postgresql", "unknown"])
-    def test_strips_fts_text(self, dialect_name):
+    @pytest.mark.parametrize("backend_name", ["sqlite", "postgresql"])
+    def test_strips_fts_text(self, backend_name):
         row = {"id": "node-1", "name": "Widget", "fts_text": "Widget docs"}
-        prepared = get_query_dialect(dialect_name).prepare_node_rows([row])
+        prepared = get_backend(backend_name).prepare_node_rows([row])
         assert prepared == [{"id": "node-1", "name": "Widget"}]
         assert row["fts_text"] == "Widget docs"
 
     def test_inferdb_keeps_fts_text(self):
         row = {"id": "node-1", "name": "Widget", "fts_text": "Widget docs"}
-        prepared = get_query_dialect("inferdb").prepare_node_rows([row])
+        prepared = get_backend("inferdb").prepare_node_rows([row])
         assert prepared == [row]
 
 
@@ -401,7 +401,7 @@ class TestDeleteFilesBatch:
 class TestInferDBFtsSql:
     def test_fts_search_sql_shape(self):
         conn = _FakeConnection()
-        InferDBQueryDialect().search_nodes_fts(
+        InferDBBackend().search_nodes_fts(
             conn,
             "QueryBuilder",
             kinds=["class"],
@@ -420,7 +420,7 @@ class TestInferDBFtsSql:
 
     def test_after_nodes_changed_sql_shape(self):
         conn = _FakeConnection()
-        InferDBQueryDialect().after_nodes_changed(conn)
+        InferDBBackend().after_nodes_changed(conn)
         sql = conn.sql[-1]
         assert "PRAGMA create_fts_index" in sql
         assert "/*+ duck_execute */" in sql
@@ -431,7 +431,7 @@ class TestInferDBFtsSql:
 
     def test_after_nodes_changed_escapes_database_string(self):
         conn = _FakeConnection("code'graph")
-        InferDBQueryDialect().after_nodes_changed(conn)
+        InferDBBackend().after_nodes_changed(conn)
         sql = conn.sql[-1]
         assert "code''graph" in sql
 
@@ -450,21 +450,21 @@ class TestInferDBFtsSql:
             return _FakeResult()
 
         conn.execute = execute
-        InferDBQueryDialect().after_nodes_changed(conn)
+        InferDBBackend().after_nodes_changed(conn)
         insert_sql = next(stmt for stmt in conn.sql if "INSERT INTO ltmdb_sql" in stmt)
         assert insert_sql in conn.raw_sql
 
 
 class TestInferDBMysqlStatementShapes:
     def test_insert_nodes_ignore(self):
-        dialect = InferDBQueryDialect()
+        dialect = InferDBBackend()
         mysql_dialect = mysql.dialect()
         insert_sql = str(dialect.insert_nodes_ignore().compile(dialect=mysql_dialect))
         assert "INSERT IGNORE" in insert_sql
         assert "fts_text" in insert_sql
 
     def test_upsert_file(self):
-        dialect = InferDBQueryDialect()
+        dialect = InferDBBackend()
         mysql_dialect = mysql.dialect()
         upsert_sql = str(
             dialect.upsert_file(
