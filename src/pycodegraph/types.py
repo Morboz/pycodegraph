@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 # =============================================================================
 # Enum-like constants
 # =============================================================================
 
 
-class NodeKind(str, Enum):
+class NodeKind(StrEnum):
     FILE = "file"
     MODULE = "module"
     CLASS = "class"
@@ -35,7 +35,7 @@ class NodeKind(str, Enum):
     COMPONENT = "component"
 
 
-class EdgeKind(str, Enum):
+class EdgeKind(StrEnum):
     CONTAINS = "contains"
     CALLS = "calls"
     IMPORTS = "imports"
@@ -50,7 +50,7 @@ class EdgeKind(str, Enum):
     DECORATES = "decorates"
 
 
-class Language(str, Enum):
+class Language(StrEnum):
     TYPESCRIPT = "typescript"
     JAVASCRIPT = "javascript"
     TSX = "tsx"
