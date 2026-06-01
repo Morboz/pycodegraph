@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.dialects import mysql
 
-from pycodegraph import CodeGraph, InferDBCodeGraphBackend
+from pycodegraph import CodeGraph
 from pycodegraph.db import (
     _init_inferdb_schema,
     prepare_engine_url,
@@ -22,6 +22,7 @@ from pycodegraph.db import (
 from pycodegraph.db.dialects import InferDBQueryDialect, get_query_dialect
 from pycodegraph.db.queries import QueryBuilder, _node_row, _node_search_text
 from pycodegraph.db.tables import metadata
+from pycodegraph.integrations.inferdb import InferDBCodeGraphBackend
 from pycodegraph.types import (
     Edge,
     EdgeKind,
@@ -485,22 +486,21 @@ class TestInferDBMysqlStatementShapes:
 class TestCreateResolverTopLevelExport:
     """Verify create_resolver is accessible from the top-level package (issue gap #4)."""
 
-    def test_create_resolver_importable_from_top_level(self):
-        # Before the fix, this would raise ImportError.
-        from pycodegraph import create_resolver as cr
+    def test_create_resolver_importable_from_resolution_module(self):
+        from pycodegraph.resolution import create_resolver as cr
 
         assert callable(cr)
 
-    def test_create_resolver_in_dunder_all(self):
+    def test_create_resolver_not_in_top_level_dunder_all(self):
         import pycodegraph
 
-        assert "create_resolver" in pycodegraph.__all__
+        assert "create_resolver" not in pycodegraph.__all__
 
     def test_create_resolver_is_same_as_resolution_module(self):
-        from pycodegraph import create_resolver as cr
+        from pycodegraph.resolution import create_resolver as cr1
         from pycodegraph.resolution import create_resolver as cr2
 
-        assert cr is cr2
+        assert cr1 is cr2
 
 
 class TestCodeGraphDeleteFile:

@@ -1,4 +1,9 @@
-"""InferDB lifecycle helpers for CodeGraph databases."""
+"""InferDB integration helper for CodeGraph.
+
+Provides lifecycle management (create/drop/verify databases) for CodeGraph
+on InferDB, plus convenience methods that bridge InferDB infrastructure
+with CodeGraph's ``init`` / ``open_from_url`` entry points.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,9 @@ from collections.abc import Callable
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import URL
+
+from ..codegraph import CodeGraph
+from ..db import ensure_inferdb_duck_schema
 
 
 def _mysql_identifier(identifier: str) -> str:
@@ -25,25 +33,12 @@ def _raw_driver_execute(engine: Engine, sql: str) -> None:
             cursor.execute(sql)
 
 
-def ensure_inferdb_duck_schema(engine: Engine, database: str | None = None) -> None:
-    """Ensure InferDB's DuckDB catalog has ltmdb_sql.<database>."""
-    if database is None:
-        with engine.connect() as conn:
-            database = conn.engine.url.database
-    if not database:
-        return
-    _raw_driver_execute(
-        engine,
-        f"/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql.{_duck_identifier(database)}",
-    )
-
-
 class InferDBCodeGraphBackend:
     """Prepare InferDB databases for pycodegraph's InferDB backend.
 
     The helper owns the lifecycle details that callers otherwise need to know:
-    MySQL database creation, DuckDB `ltmdb_sql.<database>` schema creation, and
-    pycodegraph's `?backend=inferdb` URL marker.
+    MySQL database creation, DuckDB ``ltmdb_sql.<database>`` schema creation, and
+    pycodegraph's ``?backend=inferdb`` URL marker.
     """
 
     def __init__(
@@ -117,15 +112,11 @@ class InferDBCodeGraphBackend:
 
     def init_codegraph(self, project_root: str, database: str):
         """Initialize CodeGraph in an InferDB database."""
-        from pycodegraph import CodeGraph
-
         db_url = self.ensure_database(database)
         return CodeGraph.init(project_root, config_overrides={"db_url": db_url})
 
     def open_codegraph(self, database: str):
         """Open CodeGraph directly from an existing InferDB database."""
-        from pycodegraph import CodeGraph
-
         db_url = self.existing_database_url(database)
         if db_url is None:
             return None

@@ -6,8 +6,40 @@ from sqlalchemy import Connection as SAConnection
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import make_url
 
-from .inferdb import ensure_inferdb_duck_schema
 from .tables import metadata
+
+__all__ = [
+    "DatabaseConnection",
+    "ensure_inferdb_duck_schema",
+    "metadata",
+    "prepare_engine_url",
+    "resolve_backend_name",
+]
+
+
+def _duck_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _raw_driver_execute(engine: Engine, sql: str) -> None:
+    with engine.connect() as conn:
+        raw = conn.connection.driver_connection
+        assert raw is not None
+        with raw.cursor() as cursor:
+            cursor.execute(sql)
+
+
+def ensure_inferdb_duck_schema(engine: Engine, database: str | None = None) -> None:
+    """Ensure InferDB's DuckDB catalog has ltmdb_sql.<database>."""
+    if database is None:
+        with engine.connect() as conn:
+            database = conn.engine.url.database
+    if not database:
+        return
+    _raw_driver_execute(
+        engine,
+        f"/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql.{_duck_identifier(database)}",
+    )
 
 
 def _apply_sqlite_pragmas(dbapi_connection, connection_record):
