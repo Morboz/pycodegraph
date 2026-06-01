@@ -34,9 +34,20 @@ def register_backend(cls: type[Backend]) -> type[Backend]:
 def get_backend(name: str) -> Backend:
     """Instantiate a registered :class:`Backend` by name.
 
-    Raises :class:`ValueError` if *name* is not in the registry.
+    If *name* is not yet in the registry, attempt to lazily import
+    ``pycodegraph.db.backends.<name>`` which triggers ``@register_backend``.
+
+    Raises :class:`ValueError` if *name* is not in the registry after
+    the import attempt.
     """
     cls = _BACKEND_REGISTRY.get(name)
+    if cls is None:
+        import contextlib
+        import importlib
+
+        with contextlib.suppress(ImportError):
+            importlib.import_module(f".backends.{name}", __package__)
+        cls = _BACKEND_REGISTRY.get(name)
     if cls is None:
         raise ValueError(
             f"Unknown backend: {name!r}. Registered: {list(_BACKEND_REGISTRY)}"

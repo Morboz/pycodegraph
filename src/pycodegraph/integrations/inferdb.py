@@ -14,8 +14,7 @@ from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import URL
 
 from ..codegraph import CodeGraph
-from ..db import ensure_inferdb_duck_schema
-from ..db.backends.inferdb import _duck_identifier, _raw_driver_execute
+from ..db.backends.inferdb import drop_inferdb_duck_schema, ensure_inferdb_duck_schema
 
 
 def _mysql_identifier(identifier: str) -> str:
@@ -66,10 +65,7 @@ class InferDBCodeGraphBackend:
             conn.execute(
                 text(f"CREATE DATABASE IF NOT EXISTS {_mysql_identifier(database)}")
             )
-        _raw_driver_execute(
-            self._admin_engine,
-            f"/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql.{_duck_identifier(database)}",
-        )
+        ensure_inferdb_duck_schema(self._admin_engine, database)
         return self.database_url(database)
 
     def existing_database_url(self, database: str) -> str | None:
@@ -90,10 +86,7 @@ class InferDBCodeGraphBackend:
         """Drop a pycodegraph InferDB database and its DuckDB schema."""
         with self._admin_engine.connect() as conn:
             conn.execute(text(f"DROP DATABASE IF EXISTS {_mysql_identifier(database)}"))
-        _raw_driver_execute(
-            self._admin_engine,
-            f"/*+ duck_execute */ DROP SCHEMA IF EXISTS ltmdb_sql.{_duck_identifier(database)} CASCADE",
-        )
+        drop_inferdb_duck_schema(self._admin_engine, database)
 
     def database_url(self, database: str) -> str:
         """Return a db_url that selects pycodegraph's InferDB dialect."""

@@ -6,15 +6,10 @@ from sqlalchemy import Connection as SAConnection
 from sqlalchemy import Engine, create_engine
 
 from .backend import get_backend, prepare_engine_url, resolve_backend_name
-from .backends import InferDBBackend  # triggers registration
 from .tables import metadata
-
-# Backward-compatible re-export: integrations/inferdb.py imports this.
-ensure_inferdb_duck_schema = InferDBBackend.ensure_inferdb_duck_schema
 
 __all__ = [
     "DatabaseConnection",
-    "ensure_inferdb_duck_schema",
     "metadata",
     "prepare_engine_url",
     "resolve_backend_name",

@@ -33,13 +33,18 @@ class InferDBBackend(Backend):
         _init_inferdb_schema(engine)
 
     # -------------------------------------------------------------------
-    # Public API (re-exported from db.__init__ for backward compatibility)
+    # Public API
     # -------------------------------------------------------------------
 
     @staticmethod
     def ensure_inferdb_duck_schema(engine: Engine, database: str | None = None) -> None:
         """Ensure InferDB's DuckDB catalog has ``ltmdb_sql.<database>``."""
         ensure_inferdb_duck_schema(engine, database)
+
+    @staticmethod
+    def drop_inferdb_duck_schema(engine: Engine, database: str) -> None:
+        """Drop InferDB's DuckDB catalog ``ltmdb_sql.<database>``."""
+        drop_inferdb_duck_schema(engine, database)
 
     # -------------------------------------------------------------------
     # Query dialect
@@ -247,6 +252,14 @@ def ensure_inferdb_duck_schema(engine: Engine, database: str | None = None) -> N
     _raw_driver_execute(
         engine,
         f"/*+ duck_execute */ CREATE SCHEMA IF NOT EXISTS ltmdb_sql.{_duck_identifier(database)}",
+    )
+
+
+def drop_inferdb_duck_schema(engine: Engine, database: str) -> None:
+    """Drop InferDB's DuckDB catalog ``ltmdb_sql.<database>``."""
+    _raw_driver_execute(
+        engine,
+        f"/*+ duck_execute */ DROP SCHEMA IF EXISTS ltmdb_sql.{_duck_identifier(database)} CASCADE",
     )
 
 
