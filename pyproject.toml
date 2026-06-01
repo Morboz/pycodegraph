@@ -2,7 +2,7 @@
 name = "pycodegraph"
 version = "0.1.0"
 description = "Semantic code knowledge graph builder using tree-sitter and SQLite"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "sqlalchemy>=2.0",
     "tree-sitter>=0.24.0",
@@ -32,7 +32,7 @@ inferdb = [
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -59,7 +59,7 @@ testpaths = ["tests"]
 addopts = "-v --tb=short"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
