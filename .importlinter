@@ -1,0 +1,16 @@
+[importlinter]
+root_package = pycodegraph
+include_external_packages = False
+
+[importlinter:db-no-business-imports]
+name = C1: db must not import business modules
+type = forbidden
+source_modules =
+    pycodegraph.db
+forbidden_modules =
+    pycodegraph.search
+    pycodegraph.context
+    pycodegraph.extraction
+    pycodegraph.graph
+    pycodegraph.resolution
+    pycodegraph.integrations

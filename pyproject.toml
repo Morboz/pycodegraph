@@ -70,3 +70,8 @@ packages = ["src/pycodegraph"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.11",
+]
