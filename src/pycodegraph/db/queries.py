@@ -17,7 +17,7 @@ from ..types import (
     UnresolvedReference,
 )
 from ._cache import LRUCache
-from .dialects import get_query_dialect
+from .backend import get_backend
 from .tables import edges, files, nodes, unresolved_refs
 
 _NODE_COLUMNS = (
@@ -107,7 +107,7 @@ def _node_row(node: Node) -> dict:
 class QueryBuilder:
     def __init__(self, conn: Connection):
         self._conn = conn
-        self._dialect = get_query_dialect(
+        self._backend = get_backend(
             conn.info.get("pycodegraph_backend", conn.engine.dialect.name)
         )
         self._node_cache = LRUCache[Node]()
@@ -119,10 +119,10 @@ class QueryBuilder:
     def insert_nodes(self, nodes_data: list[Node]) -> None:
         if not nodes_data:
             return
-        rows = self._dialect.prepare_node_rows([_node_row(n) for n in nodes_data])
-        stmt = self._dialect.insert_nodes_ignore()
+        rows = self._backend.prepare_node_rows([_node_row(n) for n in nodes_data])
+        stmt = self._backend.insert_nodes_ignore()
         self._conn.execute(stmt, rows)
-        self._dialect.after_nodes_changed(self._conn)
+        self._backend.after_nodes_changed(self._conn)
         self._conn.commit()
 
     # =========================================================================
@@ -243,7 +243,7 @@ class QueryBuilder:
             "node_count": record.node_count,
             "errors": record.errors,
         }
-        stmt = self._dialect.upsert_file(row)
+        stmt = self._backend.upsert_file(row)
         self._conn.execute(stmt)
         self._conn.commit()
 
@@ -271,7 +271,7 @@ class QueryBuilder:
             self._conn.execute(delete(nodes).where(nodes.c.file_path == file_path))
         self._conn.execute(delete(files).where(files.c.path == file_path))
         self._node_cache.invalidate_by_attr("file_path", file_path)
-        self._dialect.after_nodes_changed(self._conn)
+        self._backend.after_nodes_changed(self._conn)
         self._conn.commit()
 
     # =========================================================================
@@ -369,7 +369,7 @@ class QueryBuilder:
     ) -> list[Edge]:
         if not node_ids:
             return []
-        rows = self._dialect.find_edges_between_nodes(self._conn, node_ids, kinds)
+        rows = self._backend.find_edges_between_nodes(self._conn, node_ids, kinds)
         return [self._row_to_edge(r) for r in rows]
 
     # =========================================================================
@@ -390,7 +390,7 @@ class QueryBuilder:
         Returns an empty list on any error (e.g. missing FTS index).
         """
         try:
-            return self._dialect.search_nodes_fts(
+            return self._backend.search_nodes_fts(
                 self._conn,
                 text,
                 kinds,
@@ -594,7 +594,7 @@ class QueryBuilder:
                 self._conn.execute(delete(nodes).where(nodes.c.file_path.in_(chunk)))
             self._conn.execute(delete(files).where(files.c.path.in_(chunk)))
             self._node_cache.invalidate_by_attr_in("file_path", set(chunk))
-        self._dialect.after_nodes_changed(self._conn)
+        self._backend.after_nodes_changed(self._conn)
         self._conn.commit()
 
     def bulk_insert(
@@ -607,8 +607,8 @@ class QueryBuilder:
         """Bulk insert nodes, edges, refs, and file records in a single transaction."""
         # Nodes
         if nodes_data:
-            rows = self._dialect.prepare_node_rows([_node_row(n) for n in nodes_data])
-            stmt = self._dialect.insert_nodes_ignore()
+            rows = self._backend.prepare_node_rows([_node_row(n) for n in nodes_data])
+            stmt = self._backend.insert_nodes_ignore()
             self._conn.execute(stmt, rows)
 
         # Edges
@@ -669,11 +669,11 @@ class QueryBuilder:
                     "node_count": rec.node_count,
                     "errors": rec.errors,
                 }
-                stmt = self._dialect.upsert_file(row)
+                stmt = self._backend.upsert_file(row)
                 self._conn.execute(stmt)
 
         if nodes_data:
-            self._dialect.after_nodes_changed(self._conn)
+            self._backend.after_nodes_changed(self._conn)
         self._conn.commit()
 
     def get_all_node_names(self) -> list[str]:
