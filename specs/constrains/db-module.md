@@ -12,7 +12,6 @@
 - 内置后端实现 — SQLite / PostgreSQL / InferDB（`backends/`）
 - 通用数据查询与写入（`QueryBuilder`）
 - LRU 缓存（`_cache.py`）
-- 共享私有工具函数（`_internal.py`）
 
 **db 不负责**：搜索策略选择、评分算法、查询文本解析。这些由 `pycodegraph.search` 模块承担。
 
@@ -22,7 +21,6 @@
 db/
 ├── __init__.py       # DatabaseConnection, ensure_inferdb_duck_schema, metadata（re-exports）
 ├── _cache.py         # LRUCache[T]（包内私有）
-├── _internal.py      # 共享私有工具（_duck_identifier, _raw_driver_execute 等）
 ├── backend.py        # Backend ABC + 注册表 + resolve/prepare
 ├── tables.py         # 表定义，无内部导入
 ├── queries.py        # 导入 _cache, backend, tables, ..types
@@ -30,7 +28,7 @@ db/
     ├── __init__.py   # 导入并注册三个内置后端
     ├── sqlite.py     # SQLiteBackend（schema + query dialect）
     ├── postgresql.py # PostgreSQLBackend
-    └── inferdb.py    # InferDBBackend + ensure_inferdb_duck_schema
+    └── inferdb.py    # InferDBBackend + ensure_inferdb_duck_schema + 私有工具函数
 ```
 
 内部依赖方向（必须单向，禁止循环）：
@@ -39,7 +37,6 @@ db/
 backend.py ──→ backends/* ──→ queries.py（通过 get_backend）
     │                              ↑
 tables ────────────────────────────┘
-_internal ──→ backends/*
 _cache ──→ queries
 __init__ ──→ backend, backends（触发注册）, tables
 ```
@@ -119,7 +116,7 @@ __all__ = [
 ]
 ```
 
-新增公开导出必须同步更新 `__all__`。带 `_` 前缀的函数（如 `_internal` 中的工具函数）是内部实现，不属于稳定接口。
+新增公开导出必须同步更新 `__all__`。带 `_` 前缀的函数（如 `backends/inferdb.py` 中的 `_duck_identifier`、`_raw_driver_execute` 等私有工具函数）是内部实现，不属于稳定接口。
 
 ### C4: QueryBuilder 只提供数据原语，不承担搜索编排
 
@@ -154,9 +151,9 @@ __all__ = [
 2. 用 `@register_backend` 注册
 3. 不需要修改 `__init__.py`、`queries.py` 中的任何分发逻辑
 
-### C8: _internal.py 是包内私有模块
+### C8: backends/inferdb.py 中的私有工具函数
 
-`_internal.py` 以 `_` 前缀命名，包含跨后端共享的底层工具函数（`_duck_identifier`、`_raw_driver_execute` 等）。外部模块不应直接导入这些函数。`integrations/` 包因与 InferDB 后端共享相同的底层操作，可通过 `db._internal` 导入。
+`backends/inferdb.py` 中以 `_` 前缀命名的函数（`_duck_identifier`、`_raw_driver_execute`、`_exec_raw_driver_sql`、`_sql_string_literal`）是 InferDB 后端的内部实现，不属于稳定接口。`integrations/inferdb.py` 因与 InferDB 后端共享相同的底层操作，可通过 `db.backends.inferdb` 导入这些函数。
 
 ## 6. 依赖图（当前状态）
 
