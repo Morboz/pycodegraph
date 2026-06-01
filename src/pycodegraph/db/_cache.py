@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
 
-class LRUCache[T]:
+class LRUCache(Generic[T]):
     """Simple LRU cache keyed by string."""
 
     def __init__(self, max_size: int = 1000) -> None:
