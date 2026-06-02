@@ -513,6 +513,7 @@ class TestCodeGraphDeleteFile:
         from pycodegraph.context.builder import ContextBuilder
         from pycodegraph.extraction import ExtractionOrchestrator
         from pycodegraph.graph import GraphQueryManager, GraphTraverser
+        from pycodegraph.search.searcher import NodeSearcher
 
         config = CodeGraphConfig()
         cg = CodeGraph.__new__(CodeGraph)
@@ -521,10 +522,12 @@ class TestCodeGraphDeleteFile:
         cg._queries = queries
         cg._config = config
         cg._project_root = tmp_dir
+        searcher = NodeSearcher(queries)
+        cg._searcher = searcher
         cg._orchestrator = ExtractionOrchestrator(tmp_dir, config, queries)
         cg._traverser = GraphTraverser(queries)
         cg._graph_manager = GraphQueryManager(queries)
-        cg._context_builder = ContextBuilder(tmp_dir, queries, cg._traverser)
+        cg._context_builder = ContextBuilder(tmp_dir, queries, cg._traverser, searcher)
         return cg
 
     def test_delete_file_is_public_method_on_codegraph_class(self):
@@ -575,6 +578,7 @@ class TestCodeGraphApplyDelta:
         from pycodegraph.context.builder import ContextBuilder
         from pycodegraph.extraction import ExtractionOrchestrator
         from pycodegraph.graph import GraphQueryManager, GraphTraverser
+        from pycodegraph.search.searcher import NodeSearcher
 
         config = CodeGraphConfig()
         cg = CodeGraph.__new__(CodeGraph)
@@ -583,10 +587,12 @@ class TestCodeGraphApplyDelta:
         cg._queries = queries
         cg._config = config
         cg._project_root = tmp_dir
+        searcher = NodeSearcher(queries)
+        cg._searcher = searcher
         cg._orchestrator = ExtractionOrchestrator(tmp_dir, config, queries)
         cg._traverser = GraphTraverser(queries)
         cg._graph_manager = GraphQueryManager(queries)
-        cg._context_builder = ContextBuilder(tmp_dir, queries, cg._traverser)
+        cg._context_builder = ContextBuilder(tmp_dir, queries, cg._traverser, searcher)
         return cg
 
     def test_apply_delta_is_public_method_on_codegraph_class(self):

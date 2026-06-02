@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from typing import TYPE_CHECKING
 
 from ..db.queries import QueryBuilder
 from ..graph.traversal import GraphTraverser
@@ -12,7 +13,9 @@ from ..search import (
     get_stem_variants,
     is_test_file,
 )
-from ..search.searcher import NodeSearcher
+
+if TYPE_CHECKING:
+    from ..search.searcher import NodeSearcher
 from ..types import (
     BuildContextOptions,
     CodeBlock,
@@ -260,11 +263,15 @@ class ContextBuilder:
     """Coordinates semantic search and graph traversal to build context."""
 
     def __init__(
-        self, project_root: str, queries: QueryBuilder, traverser: GraphTraverser
+        self,
+        project_root: str,
+        queries: QueryBuilder,
+        traverser: GraphTraverser,
+        searcher: NodeSearcher,
     ) -> None:
         self._project_root = project_root
         self._queries = queries
-        self._searcher = NodeSearcher(queries)
+        self._searcher = searcher
         self._traverser = traverser
 
     def build_context(
@@ -752,5 +759,6 @@ def create_context_builder(
     project_root: str,
     queries: QueryBuilder,
     traverser: GraphTraverser,
+    searcher: NodeSearcher,
 ) -> ContextBuilder:
-    return ContextBuilder(project_root, queries, traverser)
+    return ContextBuilder(project_root, queries, traverser, searcher)
