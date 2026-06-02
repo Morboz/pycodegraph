@@ -2,6 +2,68 @@
 root_package = pycodegraph
 include_external_packages = False
 
+[importlinter:types-no-internal-imports]
+name = C1: types must not import any pycodegraph module
+type = forbidden
+source_modules =
+    pycodegraph.types
+forbidden_modules =
+    pycodegraph.db
+    pycodegraph.config
+    pycodegraph.codegraph
+    pycodegraph.context
+    pycodegraph.extraction
+    pycodegraph.graph
+    pycodegraph.resolution
+    pycodegraph.search
+    pycodegraph.integrations
+
+[importlinter:config-no-internal-imports]
+name = C1: config must not import any pycodegraph module
+type = forbidden
+source_modules =
+    pycodegraph.config
+forbidden_modules =
+    pycodegraph.db
+    pycodegraph.types
+    pycodegraph.codegraph
+    pycodegraph.context
+    pycodegraph.extraction
+    pycodegraph.graph
+    pycodegraph.resolution
+    pycodegraph.search
+    pycodegraph.integrations
+
+[importlinter:codegraph-no-reverse-deps]
+name = C1: core modules must not import codegraph
+type = forbidden
+source_modules =
+    pycodegraph.db
+    pycodegraph.config
+    pycodegraph.types
+    pycodegraph.context
+    pycodegraph.extraction
+    pycodegraph.graph
+    pycodegraph.resolution
+    pycodegraph.search
+forbidden_modules =
+    pycodegraph.codegraph
+
+[importlinter:integrations-no-reverse-deps]
+name = C1: core modules must not import integrations
+type = forbidden
+source_modules =
+    pycodegraph.db
+    pycodegraph.config
+    pycodegraph.types
+    pycodegraph.context
+    pycodegraph.extraction
+    pycodegraph.graph
+    pycodegraph.resolution
+    pycodegraph.search
+forbidden_modules =
+    pycodegraph.integrations
+
 [importlinter:db-no-business-imports]
 name = C1: db must not import business modules
 type = forbidden
@@ -9,6 +71,70 @@ source_modules =
     pycodegraph.db
 forbidden_modules =
     pycodegraph.search
+    pycodegraph.context
+    pycodegraph.extraction
+    pycodegraph.graph
+    pycodegraph.resolution
+    pycodegraph.integrations
+
+[importlinter:context-no-business-imports]
+name = C1: context must not import business modules
+type = forbidden
+source_modules =
+    pycodegraph.context
+forbidden_modules =
+    pycodegraph.codegraph
+    pycodegraph.extraction
+    pycodegraph.resolution
+    pycodegraph.integrations
+
+[importlinter:extraction-no-business-imports]
+name = C1: extraction must not import business modules
+type = forbidden
+source_modules =
+    pycodegraph.extraction
+forbidden_modules =
+    pycodegraph.codegraph
+    pycodegraph.context
+    pycodegraph.graph
+    pycodegraph.resolution
+    pycodegraph.search
+    pycodegraph.integrations
+
+[importlinter:graph-no-business-imports]
+name = C1: graph must not import business modules
+type = forbidden
+source_modules =
+    pycodegraph.graph
+forbidden_modules =
+    pycodegraph.codegraph
+    pycodegraph.context
+    pycodegraph.extraction
+    pycodegraph.resolution
+    pycodegraph.search
+    pycodegraph.integrations
+    pycodegraph.config
+
+[importlinter:resolution-no-business-imports]
+name = C1: resolution must not import business modules
+type = forbidden
+source_modules =
+    pycodegraph.resolution
+forbidden_modules =
+    pycodegraph.codegraph
+    pycodegraph.context
+    pycodegraph.extraction
+    pycodegraph.graph
+    pycodegraph.search
+    pycodegraph.integrations
+
+[importlinter:search-no-business-imports]
+name = C1: search must not import business modules
+type = forbidden
+source_modules =
+    pycodegraph.search
+forbidden_modules =
+    pycodegraph.codegraph
     pycodegraph.context
     pycodegraph.extraction
     pycodegraph.graph
