@@ -30,6 +30,26 @@ from .types import (
 )
 
 
+def _create_components(
+    project_root: str,
+    config: CodeGraphConfig,
+    queries: QueryBuilder,
+) -> tuple[
+    NodeSearcher,
+    ExtractionOrchestrator,
+    GraphTraverser,
+    GraphQueryManager,
+    ContextBuilder,
+]:
+    """Build all collaborator objects for CodeGraph."""
+    searcher = NodeSearcher(queries)
+    orchestrator = ExtractionOrchestrator(project_root, config, queries)
+    traverser = GraphTraverser(queries)
+    graph_manager = GraphQueryManager(queries)
+    context_builder = ContextBuilder(project_root, queries, traverser, searcher)
+    return searcher, orchestrator, traverser, graph_manager, context_builder
+
+
 class CodeGraph:
     """Main CodeGraph class providing init, index, and query operations."""
 
@@ -39,17 +59,23 @@ class CodeGraph:
         queries: QueryBuilder,
         config: CodeGraphConfig,
         project_root: str,
+        *,
+        searcher: NodeSearcher,
+        orchestrator: ExtractionOrchestrator,
+        traverser: GraphTraverser,
+        graph_manager: GraphQueryManager,
+        context_builder: ContextBuilder,
     ):
         self._db = db
         self._conn = db.get_connection()
         self._queries = queries
-        self._searcher = NodeSearcher(queries)
+        self._searcher = searcher
         self._config = config
         self._project_root = project_root
-        self._orchestrator = ExtractionOrchestrator(project_root, config, queries)
-        self._traverser = GraphTraverser(queries)
-        self._graph_manager = GraphQueryManager(queries)
-        self._context_builder = ContextBuilder(project_root, queries, self._traverser)
+        self._orchestrator = orchestrator
+        self._traverser = traverser
+        self._graph_manager = graph_manager
+        self._context_builder = context_builder
 
     # =========================================================================
     # Lifecycle
@@ -99,7 +125,20 @@ class CodeGraph:
         db = DatabaseConnection.initialize(db_url)
         queries = QueryBuilder(db.get_connection())
 
-        return cls(db, queries, config, root)
+        searcher, orchestrator, traverser, graph_manager, context_builder = (
+            _create_components(root, config, queries)
+        )
+        return cls(
+            db,
+            queries,
+            config,
+            root,
+            searcher=searcher,
+            orchestrator=orchestrator,
+            traverser=traverser,
+            graph_manager=graph_manager,
+            context_builder=context_builder,
+        )
 
     @classmethod
     def open(cls, project_root: str) -> CodeGraph:
@@ -119,7 +158,20 @@ class CodeGraph:
         db = DatabaseConnection.open(db_url)
         queries = QueryBuilder(db.get_connection())
 
-        return cls(db, queries, config, root)
+        searcher, orchestrator, traverser, graph_manager, context_builder = (
+            _create_components(root, config, queries)
+        )
+        return cls(
+            db,
+            queries,
+            config,
+            root,
+            searcher=searcher,
+            orchestrator=orchestrator,
+            traverser=traverser,
+            graph_manager=graph_manager,
+            context_builder=context_builder,
+        )
 
     @classmethod
     def open_from_url(
@@ -147,7 +199,21 @@ class CodeGraph:
         db = DatabaseConnection.open(db_url)
         queries = QueryBuilder(db.get_connection())
         config = CodeGraphConfig(db_url=db_url)
-        return cls(db, queries, config, project_root)
+
+        searcher, orchestrator, traverser, graph_manager, context_builder = (
+            _create_components(project_root, config, queries)
+        )
+        return cls(
+            db,
+            queries,
+            config,
+            project_root,
+            searcher=searcher,
+            orchestrator=orchestrator,
+            traverser=traverser,
+            graph_manager=graph_manager,
+            context_builder=context_builder,
+        )
 
     def close(self) -> None:
         """Close the database connection."""
