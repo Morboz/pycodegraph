@@ -3,7 +3,7 @@ root_package = pycodegraph
 include_external_packages = False
 
 [importlinter:types-no-internal-imports]
-name = C1: types must not import any pycodegraph module
+name = types/C1: types must not import any pycodegraph module
 type = forbidden
 source_modules =
     pycodegraph.types
@@ -19,7 +19,7 @@ forbidden_modules =
     pycodegraph.integrations
 
 [importlinter:config-no-internal-imports]
-name = C1: config must not import any pycodegraph module
+name = config/C1: config must not import any pycodegraph module
 type = forbidden
 source_modules =
     pycodegraph.config
@@ -35,7 +35,7 @@ forbidden_modules =
     pycodegraph.integrations
 
 [importlinter:codegraph-no-reverse-deps]
-name = C1: core modules must not import codegraph
+name = codegraph/C1: core modules must not import codegraph
 type = forbidden
 source_modules =
     pycodegraph.db
@@ -50,7 +50,7 @@ forbidden_modules =
     pycodegraph.codegraph
 
 [importlinter:integrations-no-reverse-deps]
-name = C1: core modules must not import integrations
+name = integrations/C1: core modules must not import integrations
 type = forbidden
 source_modules =
     pycodegraph.db
@@ -65,7 +65,7 @@ forbidden_modules =
     pycodegraph.integrations
 
 [importlinter:db-no-business-imports]
-name = C1: db must not import business modules
+name = db/C1: db must not import business modules
 type = forbidden
 source_modules =
     pycodegraph.db
@@ -78,7 +78,7 @@ forbidden_modules =
     pycodegraph.integrations
 
 [importlinter:context-no-business-imports]
-name = C1: context must not import business modules
+name = context/C1: context must not import business modules
 type = forbidden
 source_modules =
     pycodegraph.context
@@ -89,7 +89,7 @@ forbidden_modules =
     pycodegraph.integrations
 
 [importlinter:extraction-no-business-imports]
-name = C1: extraction must not import business modules
+name = extraction/C1: extraction must not import business modules
 type = forbidden
 source_modules =
     pycodegraph.extraction
@@ -102,7 +102,7 @@ forbidden_modules =
     pycodegraph.integrations
 
 [importlinter:graph-no-business-imports]
-name = C1: graph must not import business modules
+name = graph/C1: graph must not import business modules
 type = forbidden
 source_modules =
     pycodegraph.graph
@@ -116,7 +116,7 @@ forbidden_modules =
     pycodegraph.config
 
 [importlinter:resolution-no-business-imports]
-name = C1: resolution must not import business modules
+name = resolution/C1: resolution must not import business modules
 type = forbidden
 source_modules =
     pycodegraph.resolution
@@ -129,7 +129,7 @@ forbidden_modules =
     pycodegraph.integrations
 
 [importlinter:search-no-business-imports]
-name = C1: search must not import business modules
+name = search/C1: search must not import business modules
 type = forbidden
 source_modules =
     pycodegraph.search
