@@ -6,7 +6,7 @@ import re
 from typing import TYPE_CHECKING
 
 from ..types import Node, NodeKind
-from .types import ResolvedRef, UnresolvedRef
+from ._types import ResolvedRef, UnresolvedRef
 
 if TYPE_CHECKING:
     from .resolver import ResolutionContext

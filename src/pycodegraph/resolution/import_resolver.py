@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..types import Node
-from .types import ImportMapping, ResolvedRef, UnresolvedRef
+from ._types import ImportMapping, ResolvedRef, UnresolvedRef
 
 if TYPE_CHECKING:
     from .resolver import ResolutionContext

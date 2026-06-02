@@ -9,10 +9,10 @@ from typing import Generic, TypeVar
 
 from ..db.queries import QueryBuilder
 from ..types import Edge, EdgeKind, Node, NodeKind, UnresolvedReference
+from ._types import ImportMapping, ResolutionResult, ResolvedRef, UnresolvedRef
 from .builtins import is_builtin_or_external
 from .import_resolver import extract_import_mappings, resolve_via_import
 from .name_matcher import match_reference
-from .types import ImportMapping, ResolutionResult, ResolvedRef, UnresolvedRef
 
 logger = logging.getLogger(__name__)
 
