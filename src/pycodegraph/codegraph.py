@@ -16,7 +16,7 @@ from .config import (
 from .context.builder import ContextBuilder
 from .db import DatabaseConnection
 from .db.queries import QueryBuilder
-from .extraction.orchestrator import ExtractionOrchestrator
+from .extraction import ExtractionOrchestrator
 from .graph import GraphQueryManager, GraphTraverser
 from .resolution import create_resolver
 from .search.searcher import NodeSearcher
