@@ -267,7 +267,3 @@ class GraphQueryManager:
                         edges.append(edge)
 
         return Subgraph(nodes=nodes, edges=edges, roots=[])
-
-    @property
-    def traverser(self) -> GraphTraverser:
-        return self._traverser
