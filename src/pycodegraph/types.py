@@ -259,4 +259,3 @@ class TaskContext:
     related_files: list[str] = field(default_factory=list)
     summary: str = ""
     stats: dict | None = None
-
