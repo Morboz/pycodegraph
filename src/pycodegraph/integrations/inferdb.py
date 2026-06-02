@@ -38,6 +38,7 @@ class InferDBCodeGraphBackend:
         password: str = "",
         drivername: str = "mysql+pymysql",
         engine_factory: Callable[[str], Engine] = create_engine,
+        codegraph_factory: type[CodeGraph] = CodeGraph,
     ) -> None:
         self.host = host
         self.port = port
@@ -45,6 +46,7 @@ class InferDBCodeGraphBackend:
         self.password = password
         self.drivername = drivername
         self._engine_factory = engine_factory
+        self._codegraph_factory = codegraph_factory
         self._admin_engine = engine_factory(
             self._url(database=None, backend_marker=False)
         )
@@ -95,14 +97,16 @@ class InferDBCodeGraphBackend:
     def init_codegraph(self, project_root: str, database: str):
         """Initialize CodeGraph in an InferDB database."""
         db_url = self.ensure_database(database)
-        return CodeGraph.init(project_root, config_overrides={"db_url": db_url})
+        return self._codegraph_factory.init(
+            project_root, config_overrides={"db_url": db_url}
+        )
 
     def open_codegraph(self, database: str):
         """Open CodeGraph directly from an existing InferDB database."""
         db_url = self.existing_database_url(database)
         if db_url is None:
             return None
-        return CodeGraph.open_from_url(db_url)
+        return self._codegraph_factory.open_from_url(db_url)
 
     def _url(self, *, database: str | None, backend_marker: bool) -> str:
         query = {"backend": "inferdb"} if backend_marker else {}
