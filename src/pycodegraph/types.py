@@ -260,11 +260,3 @@ class TaskContext:
     summary: str = ""
     stats: dict | None = None
 
-
-@dataclass
-class ParsedQuery:
-    text: str = ""
-    kinds: list[NodeKind] = field(default_factory=list)
-    languages: list[Language] = field(default_factory=list)
-    path_filters: list[str] = field(default_factory=list)
-    name_filters: list[str] = field(default_factory=list)
