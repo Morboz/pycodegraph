@@ -511,7 +511,7 @@ class TestCodeGraphDeleteFile:
 
         from pycodegraph.config import CodeGraphConfig
         from pycodegraph.context.builder import ContextBuilder
-        from pycodegraph.extraction.orchestrator import ExtractionOrchestrator
+        from pycodegraph.extraction import ExtractionOrchestrator
         from pycodegraph.graph import GraphQueryManager, GraphTraverser
 
         config = CodeGraphConfig()
@@ -573,7 +573,7 @@ class TestCodeGraphApplyDelta:
 
         from pycodegraph.config import CodeGraphConfig
         from pycodegraph.context.builder import ContextBuilder
-        from pycodegraph.extraction.orchestrator import ExtractionOrchestrator
+        from pycodegraph.extraction import ExtractionOrchestrator
         from pycodegraph.graph import GraphQueryManager, GraphTraverser
 
         config = CodeGraphConfig()
