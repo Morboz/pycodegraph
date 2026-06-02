@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from .types import UnresolvedRef
+from ._types import UnresolvedRef
 
 # --- Python built-ins ---
 
