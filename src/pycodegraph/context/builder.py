@@ -7,7 +7,7 @@ import re
 
 from ..db.queries import QueryBuilder
 from ..graph.traversal import GraphTraverser
-from ..search.query_utils import (
+from ..search import (
     extract_search_terms,
     get_stem_variants,
     is_test_file,
