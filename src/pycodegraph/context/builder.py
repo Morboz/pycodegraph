@@ -25,6 +25,7 @@ from ..types import (
     SearchResult,
     Subgraph,
     TaskContext,
+    TraversalOptions,
 )
 from .formatter import format_context_as_json, format_context_as_markdown
 
@@ -433,8 +434,6 @@ class ContextBuilder:
         text_results: list[SearchResult] = []
         search_terms = extract_search_terms(query)
         if search_terms:
-            from ..types import SearchOptions as SO
-
             term_results_map: dict[str, dict] = {}
             search_kinds = (
                 [k.value for k in opts.node_kinds]
@@ -444,7 +443,7 @@ class ContextBuilder:
             for term in search_terms:
                 term_results = self._searcher.search_nodes(
                     term,
-                    SO(
+                    SearchOptions(
                         kinds=[NodeKind(k) for k in search_kinds],
                         limit=opts.search_limit * 2,
                     ),
@@ -545,11 +544,9 @@ class ContextBuilder:
         node_kind_filter = opts.node_kinds if opts.node_kinds else None
 
         for r in filtered:
-            from ..types import TraversalOptions as TO
-
             traversal = self._traverser.traverse_bfs(
                 r.node.id,
-                TO(
+                TraversalOptions(
                     max_depth=opts.traversal_depth,
                     edge_kinds=opts.edge_kinds if opts.edge_kinds else [],
                     node_kinds=node_kind_filter or [],
