@@ -140,3 +140,8 @@ forbidden_modules =
     pycodegraph.graph
     pycodegraph.resolution
     pycodegraph.integrations
+
+[importlinter:acyclic-siblings]
+name = pycodegraph/C1: no cycles between sibling modules
+type = acyclic_siblings
+ancestors = pycodegraph

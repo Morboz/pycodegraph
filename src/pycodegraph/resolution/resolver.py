@@ -3,145 +3,17 @@
 from __future__ import annotations
 
 import logging
-from collections import OrderedDict
 from collections.abc import Callable
-from typing import Generic, TypeVar
 
 from ..db.queries import QueryBuilder
-from ..types import Edge, EdgeKind, Node, NodeKind, UnresolvedReference
-from ._types import ImportMapping, ResolutionResult, ResolvedRef, UnresolvedRef
+from ..types import Edge, EdgeKind, NodeKind, UnresolvedReference
+from ._context import ResolutionContext
+from ._types import ResolutionResult, ResolvedRef, UnresolvedRef
 from .builtins import is_builtin_or_external
 from .import_resolver import extract_import_mappings, resolve_via_import
 from .name_matcher import match_reference
 
 logger = logging.getLogger(__name__)
-
-
-T = TypeVar("T")
-
-
-class _LRUCache(Generic[T]):
-    """Simple LRU cache backed by OrderedDict."""
-
-    def __init__(self, max_size: int = 5000) -> None:
-        self._cache: OrderedDict[str, T] = OrderedDict()
-        self._max_size = max_size
-
-    def get(self, key: str) -> T | None:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-            return self._cache[key]
-        return None
-
-    def put(self, key: str, value: T) -> None:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-        else:
-            if len(self._cache) >= self._max_size:
-                self._cache.popitem(last=False)
-        self._cache[key] = value
-
-
-class ResolutionContext:
-    """In-memory index over all nodes for O(1) resolution lookups.
-
-    ``warm_caches()`` loads every node in a single SELECT and builds
-    dicts keyed by name, qualified_name, file_path, lower(name), and id.
-    All subsequent lookups are pure dict operations — zero DB queries.
-    """
-
-    def __init__(self, queries: QueryBuilder, project_root: str):
-        self._queries = queries
-        self._project_root = project_root
-
-        # Populated by warm_caches()
-        self._id_index: dict[str, Node] = {}
-        self._name_index: dict[str, list[Node]] = {}
-        self._qname_index: dict[str, list[Node]] = {}
-        self._file_index: dict[str, list[Node]] = {}
-        self._lower_name_index: dict[str, list[Node]] = {}
-
-        # Per-file data (LRU-bounded to limit memory)
-        self._import_mappings: _LRUCache[list[ImportMapping]] = _LRUCache(5000)
-        self._file_contents: _LRUCache[str] = _LRUCache(1000)
-
-        self._known_files: set[str] = set()
-        self._known_names: set[str] = set()
-        self._caches_warmed = False
-
-    def get_project_root(self) -> str:
-        return self._project_root
-
-    def warm_caches(self) -> None:
-        """Load all nodes into memory and build lookup indexes. Idempotent."""
-        if self._caches_warmed:
-            return
-
-        all_nodes = self._queries.get_all_nodes(limit=500000)
-        for node in all_nodes:
-            self._id_index[node.id] = node
-            self._name_index.setdefault(node.name, []).append(node)
-            if node.qualified_name:
-                self._qname_index.setdefault(node.qualified_name, []).append(node)
-            self._file_index.setdefault(node.file_path, []).append(node)
-            self._lower_name_index.setdefault(node.name.lower(), []).append(node)
-
-        self._known_names = set(self._name_index.keys())
-        self._known_files = set(self._file_index.keys())
-        self._caches_warmed = True
-
-    # --- Node lookups (all in-memory, zero DB queries) ---
-
-    def get_node_by_id(self, node_id: str) -> Node | None:
-        return self._id_index.get(node_id)
-
-    def get_nodes_by_name(self, name: str) -> list[Node]:
-        return self._name_index.get(name, [])
-
-    def get_nodes_by_qualified_name(self, qualified_name: str) -> list[Node]:
-        return self._qname_index.get(qualified_name, [])
-
-    def get_nodes_by_lower_name(self, lower_name: str) -> list[Node]:
-        return self._lower_name_index.get(lower_name, [])
-
-    def get_nodes_in_file(self, file_path: str) -> list[Node]:
-        return self._file_index.get(file_path, [])
-
-    # --- Per-file data (still LRU-cached) ---
-
-    def get_import_mappings(self, file_path: str, language: str) -> list[ImportMapping]:
-        key = f"{language}:{file_path}"
-        cached = self._import_mappings.get(key)
-        if cached is not None:
-            return cached
-        content = self.read_file(file_path)
-        if content:
-            result = extract_import_mappings(file_path, content, language)
-        else:
-            result = []
-        self._import_mappings.put(key, result)
-        return result
-
-    def read_file(self, file_path: str) -> str | None:
-        cached = self._file_contents.get(file_path)
-        if cached is not None:
-            return cached or None
-        try:
-            full = f"{self._project_root}/{file_path}"
-            with open(full) as f:
-                content = f.read()
-            self._file_contents.put(file_path, content)
-            return content
-        except (OSError, UnicodeDecodeError):
-            self._file_contents.put(file_path, "")
-            return None
-
-    def file_exists(self, rel_path: str) -> bool:
-        return rel_path in self._known_files
-
-    @property
-    def known_names(self) -> set[str]:
-        return self._known_names
 
 
 class ReferenceResolver:
@@ -150,7 +22,9 @@ class ReferenceResolver:
     def __init__(self, project_root: str, queries: QueryBuilder):
         self._project_root = project_root
         self._queries = queries
-        self._context = ResolutionContext(queries, project_root)
+        self._context = ResolutionContext(
+            queries, project_root, extract_import_mappings
+        )
 
     def warm_caches(self) -> None:
         self._context.warm_caches()

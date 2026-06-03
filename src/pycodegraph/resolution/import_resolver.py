@@ -11,7 +11,7 @@ from ..types import Node
 from ._types import ImportMapping, ResolvedRef, UnresolvedRef
 
 if TYPE_CHECKING:
-    from .resolver import ResolutionContext
+    from ._context import ResolutionContext
 
 # Extension resolution order by language
 EXTENSION_RESOLUTION: dict[str, list[str]] = {

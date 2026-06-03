@@ -20,11 +20,12 @@
 ```
 resolution/
 ├── __init__.py          # 公开 API：re-export ReferenceResolver, create_resolver
+├── _context.py          # 内存节点索引 + LRU 缓存：ResolutionContext, _LRUCache
 ├── _types.py            # 内部数据结构：UnresolvedRef, ResolvedRef, ResolutionResult, ImportMapping
 ├── builtins.py          # 语言特定内置符号检测 + is_builtin_or_external()
 ├── import_resolver.py   # 导入路径解析 + import 映射提取
 ├── name_matcher.py      # 五级名称匹配策略
-└── resolver.py          # 核心编排引擎：ResolutionContext + ReferenceResolver
+└── resolver.py          # 核心编排引擎：ReferenceResolver
 ```
 
 内部依赖方向（必须单向，禁止循环）：
@@ -32,22 +33,26 @@ resolution/
 ```
 __init__.py ──→ resolver.py（ReferenceResolver, create_resolver）
 
-resolver.py ──→ builtins.py（is_builtin_or_external）
-           ├────→ import_resolver.py（extract_import_mappings, resolve_via_import）
+resolver.py ──→ _context.py（ResolutionContext）
+           ├────→ builtins.py（is_builtin_or_external）
+           ├────→ import_resolver.py（resolve_via_import）
            ├────→ name_matcher.py（match_reference）
-           └────→ _types.py（ImportMapping, ResolutionResult, ResolvedRef, UnresolvedRef）
+           └────→ _types.py（ResolutionResult, ResolvedRef, UnresolvedRef）
+
+_context.py ──→ _types.py（ImportMapping）
+           └────→ db.queries（QueryBuilder）
 
 builtins.py ──→ _types.py（UnresolvedRef）
 import_resolver.py ──→ _types.py（ImportMapping, ResolvedRef, UnresolvedRef）
-                  └──[TYPE_CHECKING]──→ resolver.py（ResolutionContext）
+                  └──[TYPE_CHECKING]──→ _context.py（ResolutionContext）
                   └──[LAZY]──→ ..types.NodeKind（_find_exported_symbol 内部延迟导入）
 name_matcher.py ──→ _types.py（ResolvedRef, UnresolvedRef）
-               └──[TYPE_CHECKING]──→ resolver.py（ResolutionContext）
+               └──[TYPE_CHECKING]──→ _context.py（ResolutionContext）
 
 _types.py 无内部依赖（叶子节点，仅依赖 ..types.EdgeKind）
 ```
 
-`TYPE_CHECKING` 守卫防止循环导入：`import_resolver.py` 和 `name_matcher.py` 仅在类型检查时导入 `ResolutionContext`，运行时不导入。
+`ResolutionContext` 抽离到独立的 `_context.py`，消除了原本 `TYPE_CHECKING` 守卫下的循环依赖：`import_resolver.py` 和 `name_matcher.py` 现在从 `_context.py` 导入类型注解，而非从 `resolver.py`。
 
 `import_resolver.py` 中 `NodeKind` 采用延迟导入（在 `_find_exported_symbol` 函数体内部 `from ..types import NodeKind`），因为该函数仅在有命名空间导入匹配时才被调用，避免了模块级不必要的导入开销。
 
@@ -83,9 +88,11 @@ resolution 不得导入 codegraph, context, extraction, graph, search, integrati
 
 resolution 依赖 extraction 的输出（数据库中的 `UnresolvedReference` 行），永远不反馈到 extraction 或解析。
 
-### C3: TYPE_CHECKING 守卫防止循环导入
+### C3: ResolutionContext 独立模块 + 依赖注入消除循环依赖
 
-`import_resolver.py` 和 `name_matcher.py` 仅在 `if TYPE_CHECKING` 下导入 `ResolutionContext`，因为 `resolver.py` 在运行时从它们导入。这是防止循环导入的标准模式。
+`ResolutionContext` 定义在独立的 `_context.py` 中，而非 `resolver.py`。`import_resolver.py` 和 `name_matcher.py` 通过 `TYPE_CHECKING` 从 `_context.py` 导入其类型注解，彻底消除了兄弟模块间的循环导入。
+
+`_context.py` 不直接导入 `import_resolver.py`，而是通过构造函数注入 `extract_import_mappings` callable（由 `resolver.py` 在创建 `ResolutionContext` 时传入），避免反向依赖。
 
 ### C4: ResolutionContext 单次查询预热
 

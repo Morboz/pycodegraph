@@ -9,7 +9,7 @@ from ..types import Node, NodeKind
 from ._types import ResolvedRef, UnresolvedRef
 
 if TYPE_CHECKING:
-    from .resolver import ResolutionContext
+    from ._context import ResolutionContext
 
 
 def match_by_file_path(
