@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from pycodegraph import CodeGraph
-from pycodegraph.types import ExploreOptions
+from pycodegraph.explore.flow import find_flow_chain, format_flow_chain
+from pycodegraph.types import Edge, EdgeKind, ExploreOptions, Language, Node, NodeKind
 
 
 class TestExploreBasic:
@@ -105,6 +106,41 @@ class TestExploreFlow:
         finally:
             cg.close()
 
+    def test_flow_chain_includes_actual_seed_node(self):
+        def make_node(node_id: str, name: str) -> Node:
+            return Node(
+                id=node_id,
+                kind=NodeKind.FUNCTION,
+                name=name,
+                qualified_name=name,
+                file_path=f"{name}.py",
+                language=Language.PYTHON,
+                start_line=1,
+                end_line=2,
+                start_column=0,
+                end_column=0,
+                updated_at=0,
+            )
+
+        alpha = make_node("alpha", "alpha")
+        beta = make_node("beta", "beta")
+        gamma = make_node("gamma", "gamma")
+        alpha_beta = Edge(source="alpha", target="beta", kind=EdgeKind.CALLS)
+        beta_gamma = Edge(source="beta", target="gamma", kind=EdgeKind.CALLS)
+
+        class Traverser:
+            def get_callees(self, node_id: str, max_depth: int = 1):
+                return {
+                    "alpha": [(beta, alpha_beta)],
+                    "beta": [(gamma, beta_gamma)],
+                    "gamma": [],
+                }.get(node_id, [])
+
+        chain = find_flow_chain([alpha, gamma], Traverser())
+
+        assert [step["node"].name for step in chain] == ["alpha", "beta", "gamma"]
+        assert "1. alpha" in format_flow_chain(chain)
+
 
 class TestExploreOutput:
     """Tests for output format and structure."""
@@ -134,6 +170,18 @@ class TestExploreOutput:
             )
             assert isinstance(result, str)
             assert "User" in result
+        finally:
+            cg.close()
+
+    def test_explore_tiny_output_budget_stays_under_hard_ceiling(
+        self, create_python_project
+    ):
+        root = create_python_project()
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            result = cg.explore("User", ExploreOptions(max_output_chars=100))
+            assert len(result) <= 150
         finally:
             cg.close()
 

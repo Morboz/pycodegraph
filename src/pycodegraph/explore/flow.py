@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..types import EdgeKind
+from ..types import EdgeKind, Node
 
 if TYPE_CHECKING:
     from ..graph.traversal import GraphTraverser
 
 
 def find_flow_chain(
-    named_symbol_ids: set[str],
+    named_symbols: list[Node],
     traverser: GraphTraverser,
     max_depth: int = 8,
     max_bridge: int = 1,
@@ -26,6 +26,9 @@ def find_flow_chain(
     Returns a list of dicts ``{"node": Node, "edge": Edge | None}``
     representing the longest chain found.
     """
+    named_by_id = {node.id: node for node in named_symbols}
+    named_symbol_ids = set(named_by_id)
+
     if len(named_symbol_ids) < 2:
         return []
 
@@ -85,14 +88,7 @@ def find_flow_chain(
         while cur is not None:
             p = parent.get(cur)
             if p is None:
-                # Seed node
-                try:
-                    node = traverser.get_callees(cur, max_depth=1)
-                    seed_node = node[0][0] if node else None
-                except Exception:
-                    seed_node = None
-                if seed_node:
-                    chain.append({"node": seed_node, "edge": None})
+                chain.append({"node": named_by_id[cur], "edge": None})
                 break
             chain.append({"node": p["node"], "edge": p["edge"]})
             cur = p["prev"]
