@@ -483,6 +483,18 @@ class CodeGraph:
     def project_root(self) -> str:
         return self._project_root
 
+    def set_file_provider(self, file_provider: FileProvider) -> None:
+        """Replace the :class:`FileProvider` on all internal components.
+
+        Useful when a cached :class:`CodeGraph` instance was originally
+        opened without a provider and a later caller needs to inject one
+        (e.g. after an LRU-cache hit in a store).
+        """
+        self._file_provider = file_provider
+        self._explore_engine._file_provider = file_provider
+        self._explore_engine._context_builder._file_provider = file_provider
+        self._context_builder._file_provider = file_provider
+
     @property
     def config(self) -> CodeGraphConfig:
         return self._config
