@@ -16,6 +16,7 @@ from .config import (
 from .context.builder import ContextBuilder
 from .db import DatabaseConnection
 from .db.queries import QueryBuilder
+from .explore.engine import ExploreEngine
 from .extraction import ExtractionOrchestrator
 from .graph import GraphQueryManager, GraphTraverser
 from .resolution import create_resolver
@@ -24,6 +25,7 @@ from .types import (
     BuildContextOptions,
     Context,
     Edge,
+    ExploreOptions,
     IndexResult,
     Node,
     Subgraph,
@@ -40,6 +42,7 @@ def _create_components(
     GraphTraverser,
     GraphQueryManager,
     ContextBuilder,
+    ExploreEngine,
 ]:
     """Build all collaborator objects for CodeGraph."""
     searcher = NodeSearcher(queries)
@@ -47,7 +50,15 @@ def _create_components(
     traverser = GraphTraverser(queries)
     graph_manager = GraphQueryManager(queries)
     context_builder = ContextBuilder(project_root, queries, traverser, searcher)
-    return searcher, orchestrator, traverser, graph_manager, context_builder
+    explore_engine = ExploreEngine(project_root, queries, traverser, searcher)
+    return (
+        searcher,
+        orchestrator,
+        traverser,
+        graph_manager,
+        context_builder,
+        explore_engine,
+    )
 
 
 class CodeGraph:
@@ -65,6 +76,7 @@ class CodeGraph:
         traverser: GraphTraverser,
         graph_manager: GraphQueryManager,
         context_builder: ContextBuilder,
+        explore_engine: ExploreEngine,
     ):
         self._db = db
         self._conn = db.get_connection()
@@ -76,6 +88,7 @@ class CodeGraph:
         self._traverser = traverser
         self._graph_manager = graph_manager
         self._context_builder = context_builder
+        self._explore_engine = explore_engine
 
     # =========================================================================
     # Lifecycle
@@ -125,9 +138,14 @@ class CodeGraph:
         db = DatabaseConnection.initialize(db_url)
         queries = QueryBuilder(db.get_connection())
 
-        searcher, orchestrator, traverser, graph_manager, context_builder = (
-            _create_components(root, config, queries)
-        )
+        (
+            searcher,
+            orchestrator,
+            traverser,
+            graph_manager,
+            context_builder,
+            explore_engine,
+        ) = _create_components(root, config, queries)
         return cls(
             db,
             queries,
@@ -138,6 +156,7 @@ class CodeGraph:
             traverser=traverser,
             graph_manager=graph_manager,
             context_builder=context_builder,
+            explore_engine=explore_engine,
         )
 
     @classmethod
@@ -158,9 +177,14 @@ class CodeGraph:
         db = DatabaseConnection.open(db_url)
         queries = QueryBuilder(db.get_connection())
 
-        searcher, orchestrator, traverser, graph_manager, context_builder = (
-            _create_components(root, config, queries)
-        )
+        (
+            searcher,
+            orchestrator,
+            traverser,
+            graph_manager,
+            context_builder,
+            explore_engine,
+        ) = _create_components(root, config, queries)
         return cls(
             db,
             queries,
@@ -171,6 +195,7 @@ class CodeGraph:
             traverser=traverser,
             graph_manager=graph_manager,
             context_builder=context_builder,
+            explore_engine=explore_engine,
         )
 
     @classmethod
@@ -200,9 +225,14 @@ class CodeGraph:
         queries = QueryBuilder(db.get_connection())
         config = CodeGraphConfig(db_url=db_url)
 
-        searcher, orchestrator, traverser, graph_manager, context_builder = (
-            _create_components(project_root, config, queries)
-        )
+        (
+            searcher,
+            orchestrator,
+            traverser,
+            graph_manager,
+            context_builder,
+            explore_engine,
+        ) = _create_components(project_root, config, queries)
         return cls(
             db,
             queries,
@@ -213,6 +243,7 @@ class CodeGraph:
             traverser=traverser,
             graph_manager=graph_manager,
             context_builder=context_builder,
+            explore_engine=explore_engine,
         )
 
     def close(self) -> None:
@@ -396,6 +427,22 @@ class CodeGraph:
     ):
         """Build rich context for a task using hybrid search + graph traversal."""
         return self._context_builder.build_context(task_input, options)
+
+    # --- Exploration ---
+
+    def explore(
+        self,
+        query: str,
+        options: ExploreOptions | None = None,
+    ) -> str:
+        """Explore the codebase for a query using graph-based ranking.
+
+        Unlike ``build_context`` (which returns symbol-level code blocks),
+        ``explore`` groups source by file with line numbers, traces call
+        chains among named symbols, and respects adaptive output budgets.
+        Returns a formatted string suitable for LLM context windows.
+        """
+        return self._explore_engine.explore(query, options)
 
     # =========================================================================
     # Properties

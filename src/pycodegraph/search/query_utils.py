@@ -350,3 +350,222 @@ _KIND_BONUSES: dict[str, float] = {
 def kind_bonus(kind: str) -> float:
     """Kind-based bonus for search ranking."""
     return _KIND_BONUSES.get(kind, 0.0)
+
+
+# =============================================================================
+# Symbol extraction from natural language queries
+# =============================================================================
+
+
+_SYMBOL_COMMON_WORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "have",
+        "been",
+        "will",
+        "would",
+        "could",
+        "should",
+        "does",
+        "done",
+        "make",
+        "made",
+        "use",
+        "used",
+        "using",
+        "work",
+        "works",
+        "find",
+        "found",
+        "show",
+        "call",
+        "called",
+        "calling",
+        "get",
+        "set",
+        "add",
+        "all",
+        "any",
+        "how",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "not",
+        "but",
+        "are",
+        "was",
+        "were",
+        "has",
+        "had",
+        "its",
+        "can",
+        "did",
+        "may",
+        "also",
+        "into",
+        "than",
+        "then",
+        "them",
+        "each",
+        "other",
+        "some",
+        "such",
+        "only",
+        "same",
+        "about",
+        "after",
+        "before",
+        "between",
+        "through",
+        "during",
+        "without",
+        "again",
+        "further",
+        "once",
+        "here",
+        "there",
+        "both",
+        "just",
+        "more",
+        "most",
+        "very",
+        "being",
+        "having",
+        "doing",
+        "system",
+        "need",
+        "needs",
+        "want",
+        "wants",
+        "like",
+        "look",
+        "change",
+        "changes",
+        "changed",
+        "changing",
+        "layer",
+        "handle",
+        "handles",
+        "handling",
+        "incoming",
+        "outgoing",
+        "data",
+        "flow",
+        "flows",
+        "level",
+        "levels",
+        "request",
+        "requests",
+        "response",
+        "responses",
+        "implement",
+        "implements",
+        "implementation",
+        "interface",
+        "interfaces",
+        "class",
+        "classes",
+        "method",
+        "methods",
+        "trigger",
+        "triggers",
+        "affected",
+        "affect",
+        "affects",
+        "else",
+        "code",
+        "failing",
+        "failed",
+        "silently",
+        "decide",
+        "decides",
+        "return",
+        "returns",
+        "returned",
+        "take",
+        "takes",
+        "taken",
+        "check",
+        "checks",
+        "checked",
+        "create",
+        "creates",
+        "created",
+        "read",
+        "reads",
+        "write",
+        "writes",
+        "written",
+        "start",
+        "starts",
+        "stop",
+        "stops",
+        "run",
+        "runs",
+        "running",
+    }
+)
+
+
+def extract_symbols_from_query(query: str) -> list[str]:
+    """Extract likely symbol names from a natural language query.
+
+    Identifies potential code symbols using patterns:
+    - CamelCase: UserService, signInWithGoogle
+    - snake_case: user_service, sign_in
+    - SCREAMING_SNAKE: MAX_RETRIES
+    - dot.notation: app.isPackaged (extracts both sides)
+    - Acronyms: REST, HTTP
+    - Plain lowercase identifiers: undo, redo, history
+
+    Filters out common English words that aren't likely symbol names.
+    """
+    symbols: set[str] = set()
+
+    # CamelCase
+    for m in re.finditer(
+        r"\b([A-Z][a-z]+(?:[A-Z][a-z]*)*|[a-z]+(?:[A-Z][a-z]*)+)\b",
+        query,
+    ):
+        if len(m.group(1)) >= 2:
+            symbols.add(m.group(1))
+
+    # snake_case
+    for m in re.finditer(r"\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b", query, re.IGNORECASE):
+        if len(m.group(1)) >= 3:
+            symbols.add(m.group(1))
+
+    # SCREAMING_SNAKE
+    for m in re.finditer(r"\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)\b", query):
+        if m.group(1):
+            symbols.add(m.group(1))
+
+    # Acronyms
+    for m in re.finditer(r"\b([A-Z]{2,})\b", query):
+        if m.group(1):
+            symbols.add(m.group(1))
+
+    # dot.notation
+    for m in re.finditer(
+        r"\b([a-zA-Z][a-zA-Z0-9]*(?:\.[a-zA-Z][a-zA-Z0-9]*)+)\b", query
+    ):
+        parts = m.group(1).split(".")
+        for part in parts:
+            if len(part) >= 2:
+                symbols.add(part)
+        symbols.add(m.group(1))
+
+    # Plain lowercase identifiers
+    for m in re.finditer(r"\b([a-z][a-z0-9]{2,})\b", query):
+        symbols.add(m.group(1))
+
+    return [s for s in symbols if s.lower() not in _SYMBOL_COMMON_WORDS]

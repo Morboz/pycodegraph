@@ -259,3 +259,43 @@ class TaskContext:
     related_files: list[str] = field(default_factory=list)
     summary: str = ""
     stats: dict | None = None
+
+
+# =============================================================================
+# Explore Types
+# =============================================================================
+
+
+@dataclass
+class ExploreOptions:
+    """Options for the explore() method."""
+
+    max_files: int | None = None
+    max_output_chars: int | None = None
+    max_chars_per_file: int | None = None
+    include_relationships: bool = True
+    include_flow: bool = True
+    include_blast_radius: bool = False
+
+
+@dataclass
+class ExploreOutputBudget:
+    """Adaptive output budget determined by project size."""
+
+    max_output_chars: int
+    default_max_files: int
+    max_chars_per_file: int
+    gap_threshold: int
+    max_symbols_in_header: int
+
+    @classmethod
+    def from_file_count(cls, file_count: int) -> ExploreOutputBudget:
+        """Compute budget based on indexed file count."""
+        if file_count < 150:
+            return cls(13_000, 4, 3_800, 7, 5)
+        elif file_count < 500:
+            return cls(18_000, 5, 3_800, 8, 6)
+        elif file_count < 5_000:
+            return cls(24_000, 8, 6_500, 12, 10)
+        else:
+            return cls(24_000, 8, 7_000, 15, 15)
