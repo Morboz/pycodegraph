@@ -30,6 +30,7 @@ from .formatter import (
     format_remaining_files,
     format_source_section,
 )
+from .rwr import aggregate_to_file_level, compute_rwr
 from .seeding import seed_named_symbols
 
 if TYPE_CHECKING:
@@ -111,6 +112,9 @@ class ExploreEngine:
         named_node_ids = {n.id for n, _ in named_seeds}
         named_boosts = {n.id: boost for n, boost in named_seeds}
 
+        # Will merge RWR scores into clustering importance after Step 4
+        node_importance: dict[str, float] = dict(named_boosts)
+
         # ── Step 3: Get initial subgraph via existing pipeline ──────────
         subgraph = self._context_builder.find_relevant_context(
             query,
@@ -130,13 +134,64 @@ class ExploreEngine:
         if not subgraph.nodes:
             return f'No relevant code found for "{query}"'
 
-        # ── Step 4: Score files ─────────────────────────────────────────
+        # ── Step 4: RWR graph ranking ────────────────────────────────────
         entry_node_ids = set(subgraph.roots) | named_node_ids
-        file_scores = score_files(subgraph, named_node_ids, entry_node_ids)
 
-        # ── Step 5: Select files ────────────────────────────────────────
+        # Build seed scores: named symbols get high score, entry points
+        # get medium, roots get their search score
+        seed_scores: dict[str, float] = {}
+        for node, boost in named_seeds:
+            seed_scores[node.id] = boost
+        for rid in subgraph.roots:
+            if rid not in seed_scores:
+                seed_scores[rid] = 10.0
+
+        node_rwr = compute_rwr(
+            seed_scores,
+            subgraph.edges,
+            list(subgraph.nodes.keys()),
+        )
+
+        # Aggregate RWR to file level
+        file_rwr = aggregate_to_file_level(node_rwr, subgraph.nodes)
+
+        # Merge RWR scores into node importance for clustering
+        for nid, rwr_score in node_rwr.items():
+            # Named boosts (50/20) dominate; RWR adds differentiation
+            node_importance[nid] = node_importance.get(nid, 0.0) + rwr_score * 100.0
+
+        # ── Step 5: Score files (RWR + heuristic) ──────────────────────
+        # Combine RWR (primary) with heuristic scoring (named/entry/connected)
+        heuristic_scores = score_files(subgraph, named_node_ids, entry_node_ids)
+
+        max_rwr = max(file_rwr.values()) if file_rwr else 0.0
+        combined: dict[str, float] = {}
+        for fp in set(list(file_rwr.keys()) + list(heuristic_scores.keys())):
+            rwr_score = file_rwr.get(fp, 0.0)
+            heur_score = heuristic_scores.get(fp, 0.0)
+            # Named-symbol files always survive; RWR is the primary signal
+            combined[fp] = rwr_score + heur_score * 0.1
+
+        # Relevance gating: drop files with RWR < 6% of max, unless they
+        # define a named symbol or an entry point
+        if max_rwr > 0:
+            entry_files: set[str] = set()
+            for nid in entry_node_ids:
+                n = subgraph.nodes.get(nid)
+                if n:
+                    entry_files.add(n.file_path)
+
+            gated = {
+                fp: score
+                for fp, score in combined.items()
+                if file_rwr.get(fp, 0.0) >= max_rwr * 0.06 or fp in entry_files
+            }
+            if len(gated) >= 2:
+                combined = gated
+
+        # ── Step 5b: Select files ──────────────────────────────────────
         selected_files = select_files(
-            file_scores, subgraph, named_node_ids, max_files, query
+            combined, subgraph, named_node_ids, max_files, query
         )
 
         if not selected_files:
@@ -158,7 +213,7 @@ class ExploreEngine:
 
         # ── Step 8: Build output ────────────────────────────────────────
         lines: list[str] = [
-            format_header(query, len(subgraph.nodes), len(file_scores)),
+            format_header(query, len(subgraph.nodes), len(combined)),
         ]
 
         if blast_text:
@@ -251,7 +306,7 @@ class ExploreEngine:
                 # Cluster-based extraction
                 clusters = cluster_nodes_in_file(
                     file_nodes,
-                    named_boosts,
+                    node_importance,
                     gap_threshold=budget.gap_threshold,
                 )
 
