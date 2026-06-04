@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable
 
 from ..db.queries import QueryBuilder
+from ..fs import FileProvider
 from ..types import Edge, EdgeKind, NodeKind, UnresolvedReference
 from ._context import ResolutionContext
 from ._types import ResolutionResult, ResolvedRef, UnresolvedRef
@@ -19,11 +20,16 @@ logger = logging.getLogger(__name__)
 class ReferenceResolver:
     """Resolves UnresolvedReference records into Edge rows."""
 
-    def __init__(self, project_root: str, queries: QueryBuilder):
+    def __init__(
+        self,
+        project_root: str,
+        queries: QueryBuilder,
+        file_provider: FileProvider | None = None,
+    ):
         self._project_root = project_root
         self._queries = queries
         self._context = ResolutionContext(
-            queries, project_root, extract_import_mappings
+            queries, project_root, extract_import_mappings, file_provider
         )
 
     def warm_caches(self) -> None:
@@ -225,5 +231,9 @@ class ReferenceResolver:
         return counts
 
 
-def create_resolver(project_root: str, queries: QueryBuilder) -> ReferenceResolver:
-    return ReferenceResolver(project_root, queries)
+def create_resolver(
+    project_root: str,
+    queries: QueryBuilder,
+    file_provider: FileProvider | None = None,
+) -> ReferenceResolver:
+    return ReferenceResolver(project_root, queries, file_provider)

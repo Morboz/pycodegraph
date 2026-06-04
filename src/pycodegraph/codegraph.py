@@ -18,6 +18,7 @@ from .db import DatabaseConnection
 from .db.queries import QueryBuilder
 from .explore.engine import ExploreEngine
 from .extraction import ExtractionOrchestrator
+from .fs import FileProvider, LocalFileProvider
 from .graph import GraphQueryManager, GraphTraverser
 from .resolution import create_resolver
 from .search.searcher import NodeSearcher
@@ -36,6 +37,7 @@ def _create_components(
     project_root: str,
     config: CodeGraphConfig,
     queries: QueryBuilder,
+    file_provider: FileProvider | None = None,
 ) -> tuple[
     NodeSearcher,
     ExtractionOrchestrator,
@@ -45,12 +47,18 @@ def _create_components(
     ExploreEngine,
 ]:
     """Build all collaborator objects for CodeGraph."""
+    if file_provider is None:
+        file_provider = LocalFileProvider(project_root)
     searcher = NodeSearcher(queries)
     orchestrator = ExtractionOrchestrator(project_root, config, queries)
     traverser = GraphTraverser(queries)
     graph_manager = GraphQueryManager(queries)
-    context_builder = ContextBuilder(project_root, queries, traverser, searcher)
-    explore_engine = ExploreEngine(project_root, queries, traverser, searcher)
+    context_builder = ContextBuilder(
+        project_root, queries, traverser, searcher, file_provider
+    )
+    explore_engine = ExploreEngine(
+        project_root, queries, traverser, searcher, file_provider
+    )
     return (
         searcher,
         orchestrator,
@@ -77,6 +85,7 @@ class CodeGraph:
         graph_manager: GraphQueryManager,
         context_builder: ContextBuilder,
         explore_engine: ExploreEngine,
+        file_provider: FileProvider | None = None,
     ):
         self._db = db
         self._conn = db.get_connection()
@@ -89,6 +98,9 @@ class CodeGraph:
         self._graph_manager = graph_manager
         self._context_builder = context_builder
         self._explore_engine = explore_engine
+        self._file_provider: FileProvider = file_provider or LocalFileProvider(
+            project_root
+        )
 
     # =========================================================================
     # Lifecycle
@@ -203,6 +215,7 @@ class CodeGraph:
         cls,
         db_url: str,
         project_root: str = "",
+        file_provider: FileProvider | None = None,
     ) -> CodeGraph:
         """Open a CodeGraph from an explicit DB URL (e.g., a PostgreSQL schema URL).
 
@@ -215,6 +228,11 @@ class CodeGraph:
                 string), which resolves to the current working directory when
                 ``index_*`` methods are called. Pass an explicit path if you intend
                 to use any indexing methods.
+            file_provider: Optional :class:`FileProvider` for reading source files.
+                When ``None`` (default), a :class:`LocalFileProvider` is used,
+                which reads from the local filesystem at *project_root*. Pass a
+                custom provider (e.g. one that reads from a database table) when
+                source files are not available on the local filesystem.
         """
         if db_url.startswith("sqlite:///"):
             db_path = Path(db_url[len("sqlite:///") :])
@@ -232,7 +250,7 @@ class CodeGraph:
             graph_manager,
             context_builder,
             explore_engine,
-        ) = _create_components(project_root, config, queries)
+        ) = _create_components(project_root, config, queries, file_provider)
         return cls(
             db,
             queries,
@@ -244,6 +262,7 @@ class CodeGraph:
             graph_manager=graph_manager,
             context_builder=context_builder,
             explore_engine=explore_engine,
+            file_provider=file_provider,
         )
 
     def close(self) -> None:
@@ -266,7 +285,11 @@ class CodeGraph:
         result = self._orchestrator.index_all(on_progress)
 
         if result.success:
-            resolver = create_resolver(self._project_root, self._queries)
+            resolver = create_resolver(
+                self._project_root,
+                self._queries,
+                getattr(self, "_file_provider", None),
+            )
             resolution_result = resolver.resolve_and_persist(on_progress)
             result.edges_created += resolution_result.stats.get("resolved", 0)
             result.refs_resolved = resolution_result.stats.get("resolved", 0)
@@ -330,7 +353,11 @@ class CodeGraph:
 
         fatal_errors = [e for e in errors if e.severity == "error"]
         if not fatal_errors:
-            resolver = create_resolver(self._project_root, self._queries)
+            resolver = create_resolver(
+                self._project_root,
+                self._queries,
+                getattr(self, "_file_provider", None),
+            )
             resolution_result = resolver.resolve_and_persist(on_progress)
             total_edges += resolution_result.stats.get("resolved", 0)
             refs_resolved = resolution_result.stats.get("resolved", 0)

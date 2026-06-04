@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from ..context.builder import ContextBuilder
+from ..fs import FileProvider, LocalFileProvider
 from ..types import (
     ExploreOptions,
     ExploreOutputBudget,
@@ -52,14 +52,18 @@ class ExploreEngine:
         queries: QueryBuilder,
         traverser: GraphTraverser,
         searcher: NodeSearcher,
+        file_provider: FileProvider | None = None,
     ) -> None:
         self._project_root = project_root
         self._queries = queries
         self._traverser = traverser
         self._searcher = searcher
+        self._file_provider: FileProvider = file_provider or LocalFileProvider(
+            project_root
+        )
         # Reuse ContextBuilder for the initial subgraph
         self._context_builder = ContextBuilder(
-            project_root, queries, traverser, searcher
+            project_root, queries, traverser, searcher, self._file_provider
         )
 
     def explore(self, query: str, options: ExploreOptions | None = None) -> str:
@@ -252,14 +256,12 @@ class ExploreEngine:
             lang = get_file_language(subgraph, file_path)
 
             # Check if whole file fits
-            abs_path = os.path.join(self._project_root, file_path)
-            if os.path.exists(abs_path):
-                try:
-                    with open(abs_path) as f:
-                        content = f.read()
+            if self._file_provider.file_exists(file_path):
+                content = self._file_provider.read_file(file_path)
+                if content is not None:
                     file_line_count = len(content.split("\n"))
                     file_char_count = len(content)
-                except (OSError, UnicodeDecodeError):
+                else:
                     remaining_files.append((file_path, file_nodes))
                     continue
             else:
@@ -274,7 +276,7 @@ class ExploreEngine:
                 and file_char_count <= whole_file_max_chars
             ):
                 # Whole file shortcut
-                source = extract_whole_file(self._project_root, file_path)
+                source = extract_whole_file(self._file_provider, file_path)
                 if source is None:
                     remaining_files.append((file_path, file_nodes))
                     continue
@@ -331,7 +333,7 @@ class ExploreEngine:
                         projected += est
 
                 source = extract_source_with_line_numbers(
-                    self._project_root, file_path, selected_clusters
+                    self._file_provider, file_path, selected_clusters
                 )
                 if not source:
                     remaining_files.append((file_path, file_nodes))
