@@ -165,7 +165,7 @@ def extract_source_with_line_numbers(
 
     for cluster in sorted(clusters, key=lambda c: c.start_line):
         start_idx = max(0, cluster.start_line - 1 - context_padding)
-        end_idx = min(len(lines), cluster.end + context_padding)
+        end_idx = min(len(lines), cluster.end_line + context_padding)
         slice_lines = lines[start_idx:end_idx]
         # cat -n style: line_number\tcode
         numbered = "\n".join(
