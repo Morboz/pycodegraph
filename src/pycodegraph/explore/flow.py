@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from ..types import EdgeKind, Node
+from typing import TYPE_CHECKING
 
-if __name__ == "__type_checking__":
+from ..types import EdgeKind
+
+if TYPE_CHECKING:
     from ..graph.traversal import GraphTraverser
 
 
@@ -26,16 +28,6 @@ def find_flow_chain(
     """
     if len(named_symbol_ids) < 2:
         return []
-
-    # Collect named node data
-    named: dict[str, Node] = {}
-    for nid in named_symbol_ids:
-        try:
-            callees = traverser.get_callees(nid, max_depth=1)
-            if callees:
-                named[nid] = callees[0][0]  # just to verify the node exists
-        except Exception:
-            pass
 
     best_chain: list[dict] = []
 

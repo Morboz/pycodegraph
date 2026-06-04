@@ -568,4 +568,7 @@ def extract_symbols_from_query(query: str) -> list[str]:
     for m in re.finditer(r"\b([a-z][a-z0-9]{2,})\b", query):
         symbols.add(m.group(1))
 
-    return [s for s in symbols if s.lower() not in _SYMBOL_COMMON_WORDS]
+    return sorted(
+        (s for s in symbols if s.lower() not in _SYMBOL_COMMON_WORDS),
+        key=lambda s: (-len(s), s),
+    )

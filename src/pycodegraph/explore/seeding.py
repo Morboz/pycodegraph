@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ..search.query_utils import extract_symbols_from_query
 from ..types import Node, NodeKind, SearchOptions
 
-if __name__ == "__type_checking__":
+if TYPE_CHECKING:
     from ..search.searcher import NodeSearcher
 
 # Node kinds that are callable / high-value for explore
@@ -62,10 +64,10 @@ def seed_named_symbols(
             ),
         )
 
-        # Sort: non-test, larger body first (skip stubs)
+        # Sort: non-test first, then larger body (skip stubs)
         candidates.sort(
             key=lambda r: (
-                0 if "test" not in r.node.file_path.lower() else 1,
+                0 if "test" in r.node.file_path.lower() else 1,
                 r.node.end_line - r.node.start_line,
             ),
             reverse=True,

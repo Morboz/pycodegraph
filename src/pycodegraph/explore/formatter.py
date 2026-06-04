@@ -27,11 +27,11 @@ def format_source_section(
 ) -> str:
     """Format a single file's source section."""
     names = list(
-        {
+        dict.fromkeys(
             f"{n.name}({n.kind.value})"
             for n in symbols
             if n.kind.value not in ("import", "export")
-        }
+        )
     )
     header_names = names[:max_symbols_in_header]
     omitted = len(names) - len(header_names)

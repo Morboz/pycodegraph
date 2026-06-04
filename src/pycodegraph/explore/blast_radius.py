@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ..search.query_utils import is_test_file
 from ..types import Node
 
-if __name__ == "__type_checking__":
+if TYPE_CHECKING:
     from ..graph.traversal import GraphTraverser
 
 _ROOT_CAP = 5
