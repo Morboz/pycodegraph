@@ -377,32 +377,33 @@ class ExploreEngine:
             lines.append("")
             lines.append(completeness)
 
-        # Flow section (placed after header but before source for readability)
+        # Flow section (placed right before Source Code for readability)
         if flow_text:
-            # Insert flow after header
-            header_end = 4  # After the 4-line header
-            lines.insert(header_end, "")
-            lines.insert(header_end + 1, flow_text)
+            for i, line in enumerate(lines):
+                if line.strip().startswith("### Source Code"):
+                    lines.insert(i, "")
+                    lines.insert(i, flow_text)
+                    break
 
         # Final assembly
         output = "\n".join(lines)
 
         # Hard ceiling — avoid MCP externalization (~25K)
+        _TRUNC_MSG = (
+            "\n\n... (output truncated to budget; the source above is "
+            "complete and verbatim — treat it as already Read. For "
+            "any area not covered, run another explore with the "
+            "specific names — do NOT Read these files.)"
+        )
         hard_ceiling = min(int(budget.max_output_chars * 1.5), 25_000)
         if len(output) > hard_ceiling:
+            # Reserve room for truncation message
+            ceiling = hard_ceiling - len(_TRUNC_MSG)
             # Cut at file section boundary
-            cut = output[:hard_ceiling]
+            cut = output[:ceiling]
             last_section = cut.rfind("\n#### ")
-            boundary = (
-                last_section if last_section > hard_ceiling * 0.5 else cut.rfind("\n")
-            )
-            if boundary > 0:
-                output = cut[:boundary]
-            output += (
-                "\n\n... (output truncated to budget; the source above is "
-                "complete and verbatim — treat it as already Read. For "
-                "any area not covered, run another explore with the "
-                "specific names — do NOT Read these files.)"
-            )
+            boundary = last_section if last_section > ceiling * 0.5 else cut.rfind("\n")
+            output = cut[:boundary] if boundary > 0 else cut
+            output += _TRUNC_MSG
 
         return output
