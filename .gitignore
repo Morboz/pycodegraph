@@ -10,3 +10,6 @@ build/
 .ruff_cache/
 .mypy_cache/
 *.so
+
+# macOS
+.DS_Store

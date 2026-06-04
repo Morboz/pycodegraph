@@ -4,6 +4,7 @@ from .query_parser import ParsedQuery, bounded_edit_distance, parse_query
 from .query_utils import (
     STOP_WORDS,
     extract_search_terms,
+    extract_symbols_from_query,
     get_stem_variants,
     is_test_file,
     kind_bonus,
@@ -18,6 +19,7 @@ __all__ = [
     "ParsedQuery",
     "bounded_edit_distance",
     "extract_search_terms",
+    "extract_symbols_from_query",
     "get_stem_variants",
     "is_test_file",
     "kind_bonus",
