@@ -141,6 +141,32 @@ forbidden_modules =
     pycodegraph.resolution
     pycodegraph.integrations
 
+[importlinter:explore-no-business-imports]
+name = explore/C1: explore must not import business modules
+type = forbidden
+source_modules =
+    pycodegraph.explore
+forbidden_modules =
+    pycodegraph.codegraph
+    pycodegraph.extraction
+    pycodegraph.resolution
+    pycodegraph.integrations
+
+[importlinter:core-no-explore-imports]
+name = core/C1: core modules must not import explore
+type = forbidden
+source_modules =
+    pycodegraph.db
+    pycodegraph.config
+    pycodegraph.types
+    pycodegraph.context
+    pycodegraph.extraction
+    pycodegraph.graph
+    pycodegraph.resolution
+    pycodegraph.search
+forbidden_modules =
+    pycodegraph.explore
+
 [importlinter:acyclic-siblings]
 name = pycodegraph/C1: no cycles between sibling modules
 type = acyclic_siblings
