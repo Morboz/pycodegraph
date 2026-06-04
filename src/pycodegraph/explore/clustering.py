@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ..search.query_utils import is_test_file
 from ..types import Node, NodeKind, Subgraph
+
+if TYPE_CHECKING:
+    from ..fs import FileProvider
 
 
 @dataclass
@@ -144,21 +147,16 @@ def select_files(
 
 
 def extract_source_with_line_numbers(
-    project_root: str,
+    file_provider: FileProvider,
     file_path: str,
     clusters: list[FileCluster],
     context_padding: int = 3,
 ) -> str:
     """Read source file and extract cluster ranges with cat -n line numbers."""
-    abs_path = os.path.join(project_root, file_path)
-    if not os.path.exists(abs_path):
+    content = file_provider.read_file(file_path)
+    if content is None:
         return ""
-
-    try:
-        with open(abs_path) as f:
-            lines = f.read().split("\n")
-    except (OSError, UnicodeDecodeError):
-        return ""
+    lines = content.split("\n")
 
     sections: list[str] = []
     gap_marker = "\n... (gap) ...\n"
@@ -177,18 +175,12 @@ def extract_source_with_line_numbers(
 
 
 def extract_whole_file(
-    project_root: str,
+    file_provider: FileProvider,
     file_path: str,
 ) -> str | None:
-    """Read entire file with cat -n line numbers. Returns None if too large or missing."""
-    abs_path = os.path.join(project_root, file_path)
-    if not os.path.exists(abs_path):
-        return None
-
-    try:
-        with open(abs_path) as f:
-            content = f.read()
-    except (OSError, UnicodeDecodeError):
+    """Read entire file with cat -n line numbers. Returns None if missing or unreadable."""
+    content = file_provider.read_file(file_path)
+    if content is None:
         return None
 
     lines = content.split("\n")

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Generic, TypeVar
 
 from ..db.queries import QueryBuilder
+from ..fs import FileProvider, LocalFileProvider
 from ..types import Node
 from ._types import ImportMapping
 
@@ -48,10 +49,14 @@ class ResolutionContext:
         queries: QueryBuilder,
         project_root: str,
         import_mapping_fn: Callable[[str, str, str], list[ImportMapping]] | None = None,
+        file_provider: FileProvider | None = None,
     ):
         self._queries = queries
         self._project_root = project_root
         self._import_mapping_fn = import_mapping_fn
+        self._file_provider: FileProvider = file_provider or LocalFileProvider(
+            project_root
+        )
 
         # Populated by warm_caches()
         self._id_index: dict[str, Node] = {}
@@ -125,15 +130,9 @@ class ResolutionContext:
         cached = self._file_contents.get(file_path)
         if cached is not None:
             return cached or None
-        try:
-            full = f"{self._project_root}/{file_path}"
-            with open(full) as f:
-                content = f.read()
-            self._file_contents.put(file_path, content)
-            return content
-        except (OSError, UnicodeDecodeError):
-            self._file_contents.put(file_path, "")
-            return None
+        content = self._file_provider.read_file(file_path)
+        self._file_contents.put(file_path, content or "")
+        return content
 
     def file_exists(self, rel_path: str) -> bool:
         return rel_path in self._known_files

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from ..db.queries import QueryBuilder
+from ..fs import FileProvider, LocalFileProvider
 from ..graph.traversal import GraphTraverser
 from ..search import (
     extract_search_terms,
@@ -65,11 +65,15 @@ class ContextBuilder:
         queries: QueryBuilder,
         traverser: GraphTraverser,
         searcher: NodeSearcher,
+        file_provider: FileProvider | None = None,
     ) -> None:
         self._project_root = project_root
         self._queries = queries
         self._searcher = searcher
         self._traverser = traverser
+        self._file_provider: FileProvider = file_provider or LocalFileProvider(
+            project_root
+        )
 
     def build_context(
         self,
@@ -445,17 +449,13 @@ class ContextBuilder:
     # =========================================================================
 
     def _extract_node_code(self, node: Node) -> str | None:
-        file_path = os.path.join(self._project_root, node.file_path)
-        if not os.path.exists(file_path):
+        content = self._file_provider.read_file(node.file_path)
+        if content is None:
             return None
-        try:
-            with open(file_path) as f:
-                lines = f.read().split("\n")
-            start = max(0, node.start_line - 1)
-            end = min(len(lines), node.end_line)
-            return "\n".join(lines[start:end])
-        except (OSError, UnicodeDecodeError):
-            return None
+        lines = content.split("\n")
+        start = max(0, node.start_line - 1)
+        end = min(len(lines), node.end_line)
+        return "\n".join(lines[start:end])
 
     def _extract_code_blocks(
         self,
@@ -557,5 +557,6 @@ def create_context_builder(
     queries: QueryBuilder,
     traverser: GraphTraverser,
     searcher: NodeSearcher,
+    file_provider: FileProvider | None = None,
 ) -> ContextBuilder:
-    return ContextBuilder(project_root, queries, traverser, searcher)
+    return ContextBuilder(project_root, queries, traverser, searcher, file_provider)
