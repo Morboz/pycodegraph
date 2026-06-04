@@ -200,7 +200,7 @@ class ExploreEngine:
         # ── Step 6: Flow tracing ────────────────────────────────────────
         flow_text = ""
         if opts.include_flow and len(named_node_ids) >= 2:
-            chain = find_flow_chain(named_node_ids, self._traverser)
+            chain = find_flow_chain([node for node, _ in named_seeds], self._traverser)
             flow_text = format_flow_chain(chain)
 
         # ── Step 7: Blast radius ────────────────────────────────────────
@@ -397,13 +397,21 @@ class ExploreEngine:
         )
         hard_ceiling = min(int(budget.max_output_chars * 1.5), 25_000)
         if len(output) > hard_ceiling:
+            trunc_msg = (
+                _TRUNC_MSG
+                if len(_TRUNC_MSG) < hard_ceiling
+                else "\n... (output truncated to budget)"
+            )
+            if len(trunc_msg) >= hard_ceiling:
+                return trunc_msg[:hard_ceiling]
+
             # Reserve room for truncation message
-            ceiling = hard_ceiling - len(_TRUNC_MSG)
+            ceiling = hard_ceiling - len(trunc_msg)
             # Cut at file section boundary
             cut = output[:ceiling]
             last_section = cut.rfind("\n#### ")
             boundary = last_section if last_section > ceiling * 0.5 else cut.rfind("\n")
             output = cut[:boundary] if boundary > 0 else cut
-            output += _TRUNC_MSG
+            output += trunc_msg
 
         return output
