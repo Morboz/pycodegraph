@@ -51,22 +51,51 @@ class LocalFileProvider:
     """Reads source files from the local filesystem.
 
     Args:
-        project_root: Absolute path to the project root directory.
-            Relative ``file_path`` values are resolved against this
-            root via ``os.path.join``.
+        project_root: Path to the project root directory.  May be an
+            absolute path, a relative path, or an empty string (which
+            resolves to the current working directory).  Relative
+            ``file_path`` values are resolved against this root.
+            Path traversal outside *project_root* (e.g. ``../etc``)
+            is blocked.
     """
 
     def __init__(self, project_root: str) -> None:
         self._project_root = project_root
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_path(self, file_path: str) -> str | None:
+        """Resolve *file_path* against *project_root* and validate containment.
+
+        Returns the absolute, normalised path or ``None`` when the
+        resolved path escapes *project_root* (path-traversal attempt).
+        """
+        root = (
+            os.path.abspath(self._project_root)
+            if self._project_root
+            else os.path.abspath(".")
+        )
+        resolved = os.path.abspath(os.path.join(root, file_path))
+        if os.path.commonpath([root, resolved]) != root:
+            return None
+        return resolved
+
+    # ------------------------------------------------------------------
+    # FileProvider interface
+    # ------------------------------------------------------------------
 
     def read_file(self, file_path: str) -> str | None:
         """Read *file_path* from the local filesystem.
 
         Returns:
             File content as a string, or ``None`` if the file is
-            missing or unreadable.
+            missing, unreadable, or outside *project_root*.
         """
-        abs_path = os.path.join(self._project_root, file_path)
+        abs_path = self._resolve_path(file_path)
+        if abs_path is None:
+            return None
         try:
             with open(abs_path) as f:
                 return f.read()
@@ -74,6 +103,8 @@ class LocalFileProvider:
             return None
 
     def file_exists(self, file_path: str) -> bool:
-        """Check whether *file_path* exists on the local filesystem."""
-        abs_path = os.path.join(self._project_root, file_path)
-        return os.path.exists(abs_path)
+        """Check whether *file_path* is a regular file inside *project_root*."""
+        abs_path = self._resolve_path(file_path)
+        if abs_path is None:
+            return False
+        return os.path.isfile(abs_path)

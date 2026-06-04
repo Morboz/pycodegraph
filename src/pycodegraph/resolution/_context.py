@@ -13,6 +13,10 @@ from ._types import ImportMapping
 
 T = TypeVar("T")
 
+# Sentinel cached in place of ``None`` to distinguish "file not found"
+# from an empty (but valid) file.
+_FILE_MISSING = "\x00pycodegraph:missing\x00"
+
 
 class _LRUCache(Generic[T]):
     """Simple LRU cache backed by OrderedDict."""
@@ -129,9 +133,11 @@ class ResolutionContext:
     def read_file(self, file_path: str) -> str | None:
         cached = self._file_contents.get(file_path)
         if cached is not None:
-            return cached or None
+            return None if cached == _FILE_MISSING else cached
         content = self._file_provider.read_file(file_path)
-        self._file_contents.put(file_path, content or "")
+        self._file_contents.put(
+            file_path, content if content is not None else _FILE_MISSING
+        )
         return content
 
     def file_exists(self, rel_path: str) -> bool:

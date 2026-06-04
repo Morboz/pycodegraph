@@ -285,6 +285,8 @@ class CodeGraph:
         result = self._orchestrator.index_all(on_progress)
 
         if result.success:
+            # getattr for compat with callers that bypass __init__
+            # (e.g. tests that construct CodeGraph directly).
             resolver = create_resolver(
                 self._project_root,
                 self._queries,
@@ -353,6 +355,8 @@ class CodeGraph:
 
         fatal_errors = [e for e in errors if e.severity == "error"]
         if not fatal_errors:
+            # getattr for compat with callers that bypass __init__
+            # (e.g. tests that construct CodeGraph directly).
             resolver = create_resolver(
                 self._project_root,
                 self._queries,
