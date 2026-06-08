@@ -235,64 +235,47 @@ def score_path_relevance(file_path: str, query: str) -> float:
     return score
 
 
-_NON_PROD_DIRS = (
-    "integration",
-    "sample",
-    "samples",
-    "example",
-    "examples",
-    "fixture",
-    "fixtures",
-    "benchmark",
-    "benchmarks",
-    "demo",
-    "demos",
+# Regex matching the TS CodeGraph isTestPath pattern:
+#   /(^|\/)(tests?|specs?|__tests__|testdata|mocks?|fixtures?)\//i
+_TEST_DIR_RE = re.compile(
+    r"(?:^|/)(?:tests?|specs?|__tests__|testdata|mocks?|fixtures?)(?:/|$)",
+    re.IGNORECASE,
 )
 
-_TEST_SUFFIXES = (
-    ".test.ts",
-    ".test.js",
-    ".test.tsx",
-    ".test.jsx",
-    ".spec.ts",
-    ".spec.js",
-    "_test.go",
-    "_test.py",
-    "_test.rs",
-    "Tests.java",
-    "Test.java",
-    "Tester.java",
-    "TestCase.java",
+# File-name patterns: test_*.py, tests.py, *.test.ts, *.spec.js, etc.
+_TEST_FILE_RE = re.compile(
+    r"^(?:test_.*|tests?|.*[_.]test|.*[_.]spec|.*Test|.*Tests|.*Tester|.*TestCase)\.\w+$",
+    re.IGNORECASE,
 )
 
-_TEST_DIRS = (
-    "/tests/",
-    "/test/",
-    "/__tests__/",
-    "/spec/",
-    "/testlib/",
-    "/testing/",
+_NON_PROD_DIR_RE = re.compile(
+    r"(?:^|/)(?:integration|samples?|examples?|fixtures?|benchmarks?|demos?)(?:/|$)",
+    re.IGNORECASE,
 )
 
 
 def is_test_file(file_path: str) -> bool:
-    """Check if a file path looks like a test file."""
+    """Check if a file path looks like a test file.
+
+    Aligned with the TS CodeGraph ``isTestPath`` heuristic:
+    matches ``tests/``, ``test/``, ``__tests__/``, ``testdata/``,
+    ``mocks/``, ``fixtures/`` at any depth (including the project
+    root), and common test file names like ``test_foo.py``,
+    ``tests.py``, ``foo.test.ts``, ``foo.spec.js``.
+    """
     lower = file_path.lower()
     file_name = os.path.basename(lower)
 
-    if file_name.startswith("test_") or file_name.startswith("test."):
+    # File-name heuristics: test_*, tests.py, foo.test.ts, foo.spec.js
+    if _TEST_FILE_RE.match(file_name):
         return True
 
-    for suffix in _TEST_SUFFIXES:
-        if file_name.endswith(suffix.lower()):
-            return True
+    # Directory heuristics: any segment named tests/, test/, __tests__/, etc.
+    if _TEST_DIR_RE.search(lower):
+        return True
 
-    for td in _TEST_DIRS:
-        if td in lower:
-            return True
-
-    # Non-production dirs
-    return any(f"/{d}/" in lower or lower.startswith(f"{d}/") for d in _NON_PROD_DIRS)
+    # Non-production directories
+    return bool(_NON_PROD_DIR_RE.search(lower))
 
 
 def name_match_bonus(node_name: str, query: str) -> float:
