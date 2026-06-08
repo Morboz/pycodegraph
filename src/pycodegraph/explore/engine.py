@@ -32,6 +32,11 @@ from .formatter import (
 )
 from .rwr import aggregate_to_file_level, compute_rwr
 from .seeding import seed_named_symbols
+from .skeletonize import (
+    compute_unique_named_node_ids,
+    render_skeletonized,
+    should_skeletonize,
+)
 
 if TYPE_CHECKING:
     from ..db.queries import QueryBuilder
@@ -138,6 +143,12 @@ class ExploreEngine:
         if not subgraph.nodes:
             return f'No relevant code found for "{query}"'
 
+        # ── Step 3b: Compute unique named node IDs ─────────────────────
+        # Names with ≤3 global definitions are "specific" and can spare
+        # their file from skeletonization.  Overloaded names (>3 defs)
+        # cannot.  This must happen after subgraph is available.
+        unique_named_node_ids = compute_unique_named_node_ids(named_node_ids, subgraph)
+
         # ── Step 4: RWR graph ranking ────────────────────────────────────
         entry_node_ids = set(subgraph.roots) | named_node_ids
 
@@ -203,9 +214,13 @@ class ExploreEngine:
 
         # ── Step 6: Flow tracing ────────────────────────────────────────
         flow_text = ""
+        path_node_ids: set[str] = set()
         if opts.include_flow and len(named_node_ids) >= 2:
-            chain = find_flow_chain([node for node, _ in named_seeds], self._traverser)
-            flow_text = format_flow_chain(chain)
+            flow_result = find_flow_chain(
+                [node for node, _ in named_seeds], self._traverser
+            )
+            flow_text = format_flow_chain(flow_result.chain)
+            path_node_ids = flow_result.path_node_ids
 
         # ── Step 7: Blast radius ────────────────────────────────────────
         blast_text = ""
@@ -305,7 +320,63 @@ class ExploreEngine:
                 total_chars += len(section)
                 files_included += 1
             else:
-                # Cluster-based extraction
+                # Large file — check skeletonization first, then cluster
+                file_lines = content.split("\n") if content else []
+
+                # ── Skeletonization path ─────────────────────────────────
+                # When the file is a "god-file" (many named/entry methods
+                # whose bodies exceed per-file budget), switch to per-symbol
+                # rendering: priority methods get full body, rest get
+                # signature only.  This prevents large files from eating
+                # the entire output budget (issue #32).
+                if should_skeletonize(
+                    file_nodes,
+                    path_node_ids,
+                    unique_named_node_ids,
+                    entry_node_ids,
+                    file_lines,
+                    budget.max_chars_per_file,
+                ):
+                    source, tag = render_skeletonized(
+                        file_nodes,
+                        file_lines,
+                        path_node_ids,
+                        named_node_ids,
+                        unique_named_node_ids,
+                        entry_node_ids,
+                        budget.max_chars_per_file,
+                    )
+                    if not source:
+                        remaining_files.append((file_path, file_nodes))
+                        continue
+
+                    section = format_source_section(
+                        file_path,
+                        file_nodes,
+                        source,
+                        lang,
+                        budget.max_symbols_in_header,
+                        tag=tag,
+                    )
+
+                    is_necessary = any(
+                        n.id in entry_node_ids or n.id in named_node_ids
+                        for n in file_nodes
+                    )
+                    if (
+                        not is_necessary
+                        and total_chars + len(section) > budget.max_output_chars * 0.9
+                    ):
+                        remaining_files.append((file_path, file_nodes))
+                        any_trimmed = True
+                        continue
+
+                    lines.append(section)
+                    total_chars += len(section)
+                    files_included += 1
+                    continue
+
+                # ── Cluster-based extraction (default) ───────────────────
                 clusters = cluster_nodes_in_file(
                     file_nodes,
                     node_importance,
