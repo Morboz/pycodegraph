@@ -11,6 +11,24 @@ from ..types import Node, NodeKind, Subgraph
 if TYPE_CHECKING:
     from ..fs import FileProvider
 
+# Container node kinds that act as "envelopes" around their children.
+# When such a node spans >50% of its file, it is filtered out before
+# clustering so it doesn't merge all its children into one giant cluster.
+_ENVELOPE_KINDS: frozenset[NodeKind] = frozenset(
+    [
+        NodeKind.FILE,
+        NodeKind.MODULE,
+        NodeKind.CLASS,
+        NodeKind.STRUCT,
+        NodeKind.INTERFACE,
+        NodeKind.ENUM,
+        NodeKind.NAMESPACE,
+        NodeKind.PROTOCOL,
+        NodeKind.TRAIT,
+        NodeKind.COMPONENT,
+    ]
+)
+
 
 @dataclass
 class FileCluster:
@@ -27,14 +45,34 @@ def cluster_nodes_in_file(
     nodes: list[Node],
     scores: dict[str, float],
     gap_threshold: int = 15,
+    file_line_count: int = 0,
 ) -> list[FileCluster]:
     """Group nearby nodes in a file into contiguous clusters.
 
     Nodes whose line ranges overlap or are within *gap_threshold* blank
     lines of each other are merged into a single cluster.
+
+    Envelope (container) nodes that span more than 50% of the file are
+    filtered out before clustering so they do not merge all their children
+    into a single giant cluster.  Their children (methods, fields, etc.)
+    are still clustered individually.  If filtering would remove *all*
+    nodes, the original list is used as a safety fallback.
     """
     if not nodes:
         return []
+
+    # Filter out envelope nodes covering >50% of the file
+    if file_line_count > 0:
+        half_lines = file_line_count * 0.5
+        filtered = [
+            n
+            for n in nodes
+            if not (
+                n.kind in _ENVELOPE_KINDS
+                and (n.end_line - n.start_line + 1) > half_lines
+            )
+        ]
+        nodes = filtered if filtered else nodes
 
     sorted_nodes = sorted(nodes, key=lambda n: n.start_line)
     clusters: list[FileCluster] = []

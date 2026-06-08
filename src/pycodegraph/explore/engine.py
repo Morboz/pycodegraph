@@ -310,6 +310,7 @@ class ExploreEngine:
                     file_nodes,
                     node_importance,
                     gap_threshold=budget.gap_threshold,
+                    file_line_count=file_line_count,
                 )
 
                 if not clusters:
