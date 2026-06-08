@@ -235,17 +235,29 @@ def score_path_relevance(file_path: str, query: str) -> float:
     return score
 
 
-# Regex matching the TS CodeGraph isTestPath pattern:
-#   /(^|\/)(tests?|specs?|__tests__|testdata|mocks?|fixtures?)\//i
+# ── Test-file detection regexes (aligned with TS CodeGraph isTestPath) ──
+#
+# Directory heuristics: any path segment named tests/, test/, __tests__/ etc.
+# Case-insensitive to catch Tests/, TEST/ etc.
 _TEST_DIR_RE = re.compile(
-    r"(?:^|/)(?:tests?|specs?|__tests__|testdata|mocks?|fixtures?)(?:/|$)",
+    r"(?:^|/)(?:tests?|specs?|__tests__|testdata|testlib|testing|mocks?|fixtures?)(?:/|$)",
     re.IGNORECASE,
 )
 
-# File-name patterns: test_*.py, tests.py, *.test.ts, *.spec.js, etc.
-_TEST_FILE_RE = re.compile(
-    r"^(?:test_.*|tests?|.*[_.]test|.*[_.]spec|.*Test|.*Tests|.*Tester|.*TestCase)\.\w+$",
+# File-name heuristics — split into two patterns:
+#
+# 1. Separator-delimited patterns (case-insensitive):
+#    test_*.py, tests.py, foo.test.ts, foo.spec.js, foo_test.py, _test.go
+_TEST_FILE_SEP_RE = re.compile(
+    r"^(?:test_.*|tests?|.*[_.](?:test|spec)s?|.*[_.](?:test|spec))\.\w+$",
     re.IGNORECASE,
+)
+#
+# 2. CamelCase suffix patterns (case-sensitive — capital-led):
+#    FooTest.java, UserTests.scala, HandlerTester.java,
+#    TestCase.java, UserSpec.scala, IntegrationSpecs.scala
+_TEST_FILE_CAMEL_RE = re.compile(
+    r"^.*(?:Test|Tests|TestCase|Tester|Spec|Specs)\.\w+$",
 )
 
 _NON_PROD_DIR_RE = re.compile(
@@ -259,15 +271,22 @@ def is_test_file(file_path: str) -> bool:
 
     Aligned with the TS CodeGraph ``isTestPath`` heuristic:
     matches ``tests/``, ``test/``, ``__tests__/``, ``testdata/``,
-    ``mocks/``, ``fixtures/`` at any depth (including the project
-    root), and common test file names like ``test_foo.py``,
-    ``tests.py``, ``foo.test.ts``, ``foo.spec.js``.
+    ``testlib/``, ``testing/``, ``mocks/``, ``fixtures/`` at any
+    depth (including the project root), and common test file names
+    like ``test_foo.py``, ``tests.py``, ``foo.test.ts``,
+    ``foo.spec.js``, ``FooTest.java``, ``UserSpec.scala``.
     """
     lower = file_path.lower()
     file_name = os.path.basename(lower)
 
-    # File-name heuristics: test_*, tests.py, foo.test.ts, foo.spec.js
-    if _TEST_FILE_RE.match(file_name):
+    # Separator-delimited file-name heuristics (case-insensitive)
+    if _TEST_FILE_SEP_RE.match(file_name):
+        return True
+
+    # CamelCase suffix heuristics (case-sensitive — avoids false positives
+    # like latest.py, contest.py that would match .*Test + IGNORECASE)
+    original_name = os.path.basename(file_path)
+    if _TEST_FILE_CAMEL_RE.match(original_name):
         return True
 
     # Directory heuristics: any segment named tests/, test/, __tests__/, etc.

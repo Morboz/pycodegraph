@@ -332,3 +332,77 @@ def process():
             )
         finally:
             cg.close()
+
+
+class TestIsTestFile:
+    """Tests for is_test_file() — covers PR #37 review findings."""
+
+    def test_no_false_positive_on_test_substring(self):
+        """Filenames containing 'test' as substring should NOT be test files."""
+        from pycodegraph.search.query_utils import is_test_file
+
+        for path in [
+            "src/latest.py",
+            "src/contest.py",
+            "src/protest.py",
+            "src/attest.py",
+            "src/detest.py",
+            "src/intest.py",
+        ]:
+            assert not is_test_file(path), f"False positive: {path}"
+
+    def test_camelcase_suffix_case_sensitive(self):
+        """CamelCase suffixes (Test, Spec, etc.) must be capital-led."""
+        from pycodegraph.search.query_utils import is_test_file
+
+        # Should match — capital-led suffix
+        assert is_test_file("src/UserTest.java")
+        assert is_test_file("src/IntegrationSpec.scala")
+        assert is_test_file("src/HandlerTester.java")
+        assert is_test_file("src/BarTestCase.java")
+        assert is_test_file("src/FooTests.scala")
+        assert is_test_file("src/FooSpecs.scala")
+
+    def test_testlib_and_testing_dirs(self):
+        """testlib/ and testing/ directories should be detected."""
+        from pycodegraph.search.query_utils import is_test_file
+
+        assert is_test_file("testlib/helpers.py")
+        assert is_test_file("testing/conftest.py")
+        assert is_test_file("src/testlib/fixtures.py")
+        assert is_test_file("project/testing/utils.py")
+
+    def test_sort_prefers_non_test_when_test_query(self, tmp_path):
+        """When is_test_query=True, non-test candidates should still
+        sort before test candidates (production impl > test stub)."""
+        root = TestSeedingTestFilter()._write_project(
+            tmp_path,
+            {
+                "src/calculator.py": """\
+class Calculator:
+    def compute(self, x):
+        return x + 1
+""",
+                "tests/test_calculator.py": """\
+class TestCalculator:
+    def compute(self):
+        return 42
+""",
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            from pycodegraph.explore.seeding import seed_named_symbols
+
+            seeds = seed_named_symbols("compute test", cg._searcher)
+            # Both should appear (test query), but production impl should
+            # come first in the seed list
+            seed_files = [s[0].file_path for s in seeds if s[0].name == "compute"]
+            if len(seed_files) >= 2:
+                assert "test" not in seed_files[0].lower(), (
+                    f"Production 'compute' should sort before test version, "
+                    f"got order: {seed_files}"
+                )
+        finally:
+            cg.close()
