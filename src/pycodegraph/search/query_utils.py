@@ -249,7 +249,7 @@ _TEST_DIR_RE = re.compile(
 # 1. Separator-delimited patterns (case-insensitive):
 #    test_*.py, tests.py, foo.test.ts, foo.spec.js, foo_test.py, _test.go
 _TEST_FILE_SEP_RE = re.compile(
-    r"^(?:test_.*|tests?|.*[_.](?:test|spec)s?|.*[_.](?:test|spec))\.\w+$",
+    r"^(?:test_.*|tests?|.*[_.](?:test|spec)s?)\.\w+$",
     re.IGNORECASE,
 )
 #
