@@ -243,16 +243,21 @@ class TestEnvelopeImportanceRedistribution:
 
         # The class score (50) should be split between its two children
         # method_a: 2.0 + 25.0 = 27.0, method_b: 1.0 + 25.0 = 26.0
-        all_symbols = {s.id: s for c in clusters for s in c.symbols}
-        assert "ma" in all_symbols
-        assert "mb" in all_symbols
-        # Check that the scores dict was updated in-place
-        assert scores["ma"] == 27.0, f"Expected ma score 27.0, got {scores['ma']}"
-        assert scores["mb"] == 26.0, f"Expected mb score 26.0, got {scores['mb']}"
+        # Find clusters containing each method
+        for c in clusters:
+            ids = {n.id for n in c.symbols}
+            if "ma" in ids:
+                assert c.importance == 27.0, (
+                    f"Expected cluster with ma to have importance 27.0, got {c.importance}"
+                )
+            if "mb" in ids:
+                assert c.importance == 26.0, (
+                    f"Expected cluster with mb to have importance 26.0, got {c.importance}"
+                )
 
     def test_envelope_score_not_redistributed_when_no_children(self):
         """If an envelope has no children within its span, score is not redistributed."""
-        # 100-line file; class spans 10-90 but no child nodes
+        # 100-line file; class spans 10-90 but no child nodes within it
         big_class = _make_node(
             "cls", "Lonely", NodeKind.CLASS, start_line=10, end_line=90
         )
@@ -262,7 +267,7 @@ class TestEnvelopeImportanceRedistribution:
         nodes = [big_class, unrelated_fn]
         scores = {"cls": 50.0, "fn": 1.0}
 
-        cluster_nodes_in_file(
+        clusters = cluster_nodes_in_file(
             nodes,
             scores,
             gap_threshold=15,
@@ -270,14 +275,39 @@ class TestEnvelopeImportanceRedistribution:
         )
 
         # unrelated_fn is outside the envelope, so score is NOT redistributed
-        assert scores["fn"] == 1.0
+        # The function cluster should have importance 1.0 (no boost from envelope)
+        fn_cluster = [c for c in clusters if any(n.id == "fn" for n in c.symbols)]
+        assert len(fn_cluster) == 1
+        assert fn_cluster[0].importance == 1.0
+
+    def test_scores_dict_not_mutated(self):
+        """cluster_nodes_in_file should not mutate the caller's scores dict."""
+        big_class = _make_node(
+            "cls", "Service", NodeKind.CLASS, start_line=10, end_line=90
+        )
+        method = _make_node("m", "process", NodeKind.METHOD, start_line=15, end_line=25)
+        nodes = [big_class, method]
+        original_scores = {"cls": 50.0, "m": 2.0}
+        scores_copy = dict(original_scores)
+
+        cluster_nodes_in_file(
+            nodes,
+            scores_copy,
+            gap_threshold=15,
+            file_line_count=100,
+        )
+
+        # The caller's dict should not have been modified
+        assert scores_copy == original_scores, (
+            f"scores dict was mutated: expected {original_scores}, got {scores_copy}"
+        )
 
 
 class TestSafetyFallback:
     """Tests for the safety fallback when all nodes are envelopes."""
 
     def test_single_envelope_fallback(self):
-        """If only one envelope exists and it's filtered, it's kept individually."""
+        """If only one envelope exists and it's filtered, it forms a single-node cluster."""
         # 100-line file; only node is a class covering 90%
         big_class = _make_node(
             "cls", "BigClass", NodeKind.CLASS, start_line=5, end_line=90
@@ -292,12 +322,13 @@ class TestSafetyFallback:
             file_line_count=100,
         )
 
-        # Should still produce a cluster with the class
+        # Should produce one single-node cluster
         assert len(clusters) == 1
         assert big_class in clusters[0].symbols
+        assert len(clusters[0].symbols) == 1
 
-    def test_multiple_overlapping_envelopes_do_not_merge(self):
-        """Multiple overlapping envelopes in fallback should NOT merge into one cluster."""
+    def test_multiple_overlapping_envelopes_produce_separate_clusters(self):
+        """Multiple overlapping envelopes in fallback produce separate single-node clusters."""
         # 100-line file; two overlapping classes each >50%
         user_cls = _make_node("u", "User", NodeKind.CLASS, start_line=1, end_line=65)
         admin_cls = _make_node("a", "Admin", NodeKind.CLASS, start_line=10, end_line=70)
@@ -311,20 +342,37 @@ class TestSafetyFallback:
             file_line_count=100,
         )
 
-        # Both are filtered → fallback keeps them individually.
-        # Since they overlap (1-65 and 10-70), they would normally merge,
-        # but the fallback ensures each forms its own cluster.
-        # Actually, in fallback mode they are both kept as nodes,
-        # and they overlap (1-65 and 10-70), so they DO merge by
-        # the gap logic. This is the best we can do — at least the
-        # fallback doesn't silently restore the pre-filter state.
-        # The key point is: fallback produces the same result as
-        # having these nodes without any envelope filtering.
-        assert len(clusters) >= 1
+        # Fallback builds single-node clusters directly, bypassing merge logic.
+        # Each envelope should be its own cluster.
+        assert len(clusters) == 2, (
+            f"Expected 2 separate single-node clusters, got {len(clusters)}"
+        )
         all_symbols = [s for c in clusters for s in c.symbols]
-        # Both should be present
         assert user_cls in all_symbols
         assert admin_cls in all_symbols
+        # Each cluster should have exactly 1 symbol
+        assert all(len(c.symbols) == 1 for c in clusters)
+
+    def test_fallback_does_not_inflate_scores(self):
+        """Fallback path should not redistribute scores between envelopes."""
+        # 100-line file; nested envelopes Outer(1-90, 50pts) and Inner(10-80, 10pts)
+        outer = _make_node("o", "Outer", NodeKind.CLASS, start_line=1, end_line=90)
+        inner = _make_node("i", "Inner", NodeKind.CLASS, start_line=10, end_line=80)
+        nodes = [outer, inner]
+        scores = {"o": 50.0, "i": 10.0}
+
+        clusters = cluster_nodes_in_file(
+            nodes,
+            scores,
+            gap_threshold=15,
+            file_line_count=100,
+        )
+
+        # Each cluster should retain its original score without inflation
+        outer_cluster = [c for c in clusters if any(n.id == "o" for n in c.symbols)]
+        inner_cluster = [c for c in clusters if any(n.id == "i" for n in c.symbols)]
+        assert outer_cluster[0].importance == 50.0
+        assert inner_cluster[0].importance == 10.0
 
 
 class TestClusterStartLineExtension:
@@ -370,6 +418,45 @@ class TestClusterStartLineExtension:
         )
 
         assert clusters[0].start_line == 10  # No extension
+
+    def test_per_envelope_start_line_extension(self):
+        """Each cluster extends only to its enclosing envelope's start_line."""
+        # 200-line file; two non-overlapping classes each >50%
+        # ClassA spans 1-105, ClassB spans 106-200
+        class_a = _make_node("ca", "ClassA", NodeKind.CLASS, start_line=1, end_line=105)
+        class_b = _make_node(
+            "cb", "ClassB", NodeKind.CLASS, start_line=106, end_line=200
+        )
+        # Methods inside each class, far apart (won't merge)
+        method_a = _make_node(
+            "ma", "methodA", NodeKind.METHOD, start_line=10, end_line=20
+        )
+        method_b = _make_node(
+            "mb", "methodB", NodeKind.METHOD, start_line=115, end_line=125
+        )
+        nodes = [class_a, class_b, method_a, method_b]
+        scores = {"ca": 1.0, "cb": 1.0, "ma": 5.0, "mb": 3.0}
+
+        clusters = cluster_nodes_in_file(
+            nodes,
+            scores,
+            gap_threshold=15,
+            file_line_count=200,
+        )
+
+        # method_a cluster should extend to ClassA's start_line (1), not ClassB's (106)
+        a_cluster = [c for c in clusters if any(n.id == "ma" for n in c.symbols)]
+        assert len(a_cluster) == 1
+        assert a_cluster[0].start_line == 1, (
+            f"Expected methodA cluster start_line=1 (ClassA start), got {a_cluster[0].start_line}"
+        )
+
+        # method_b cluster should extend to ClassB's start_line (106), not ClassA's (1)
+        b_cluster = [c for c in clusters if any(n.id == "mb" for n in c.symbols)]
+        assert len(b_cluster) == 1
+        assert b_cluster[0].start_line == 106, (
+            f"Expected methodB cluster start_line=106 (ClassB start), got {b_cluster[0].start_line}"
+        )
 
 
 class TestContainerKindsShared:
