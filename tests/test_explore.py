@@ -1304,6 +1304,8 @@ class TestExploreSkeletonization:
             assert "return a + b" in result
         finally:
             cg.close()
+
+
 class TestExploreNecessaryFileBudget:
     """Tests for per-file section cap on necessary files (issue #33).
 
