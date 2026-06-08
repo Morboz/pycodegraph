@@ -95,14 +95,15 @@ def seed_named_symbols(
         if not is_test_query:
             candidates = [r for r in candidates if not is_test_file(r.node.file_path)]
 
-        # Sort: non-test first (belt-and-suspenders after filter), then
-        # larger body (skip stubs) — matches TS CodeGraph ordering.
+        # Sort: larger body first (skip stubs).  When is_test_query=True,
+        # test files remain in the pool — sort them to the back so that
+        # fallback picks prefer production implementations.
+        # Key: (is_test 0/1, body_lines) — non-test & large-body first.
         candidates.sort(
             key=lambda r: (
-                0 if not is_test_file(r.node.file_path) else 1,
-                r.node.end_line - r.node.start_line,
+                1 if is_test_file(r.node.file_path) else 0,
+                -(r.node.end_line - r.node.start_line),
             ),
-            reverse=True,
         )
 
         is_specific = len(candidates) <= 3
