@@ -347,13 +347,16 @@ class ExploreEngine:
                 # Re-add filtered envelope nodes that are named/entry symbols
                 # so they appear in the output header (e.g., the class name
                 # the user searched for), even though their line span was too
-                # large to include in clustering.
+                # large to include in clustering.  Prepend them so they appear
+                # first in the header and aren't truncated by max_symbols_in_header.
                 cluster_symbol_ids = {s.id for s in all_symbols}
+                header_envelopes: list[Node] = []
                 for n in file_nodes:
                     if n.id not in cluster_symbol_ids and (
                         n.id in entry_node_ids or n.id in named_node_ids
                     ):
-                        all_symbols.append(n)
+                        header_envelopes.append(n)
+                all_symbols = header_envelopes + all_symbols
 
                 section = format_source_section(
                     file_path,

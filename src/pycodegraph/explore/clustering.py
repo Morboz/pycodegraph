@@ -53,13 +53,20 @@ def cluster_nodes_in_file(
     When envelope nodes are filtered out, their importance scores are
     redistributed equally to child nodes that fall within the envelope's
     line range, preventing named-symbol boosts from being silently lost.
+    The redistribution uses a copy of *scores* so the caller's dict is
+    not mutated.
 
-    If filtering would remove *all* nodes, each envelope node is retained
-    individually (without merging) so the giant-cluster problem is not
-    reintroduced.
+    If filtering would remove *all* nodes, each envelope is placed in its
+    own single-node cluster (bypassing the merge logic) so overlapping
+    giant envelopes don't collapse into one mega-cluster.  Score
+    redistribution is skipped in this fallback path to avoid envelope-
+    to-envelope score inflation.
     """
     if not nodes:
         return []
+
+    # Work on a copy of scores so we don't mutate the caller's dict
+    scores = dict(scores)
 
     # Filter out envelope nodes covering >50% of the file
     removed_envelopes: list[Node] = []
@@ -77,35 +84,50 @@ def cluster_nodes_in_file(
 
         if filtered:
             nodes = filtered
+            # Redistribute importance from removed envelopes to their
+            # non-envelope children only (not to other envelopes).
+            for env in removed_envelopes:
+                env_score = scores.get(env.id, 0.0)
+                if env_score > 0:
+                    children = [
+                        n
+                        for n in nodes
+                        if n.start_line >= env.start_line and n.end_line <= env.end_line
+                    ]
+                    if children:
+                        per_child = env_score / len(children)
+                        for child in children:
+                            scores[child.id] = scores.get(child.id, 0.0) + per_child
         elif removed_envelopes:
-            # Safety fallback: don't restore the original list (which
-            # reintroduces overlapping giant envelopes → one mega-cluster).
-            # Instead, keep each removed envelope as its own standalone
-            # node so they form separate single-node clusters.
-            nodes = list(removed_envelopes)
+            # Safety fallback: all nodes were envelopes.  Build
+            # single-node clusters directly (bypassing the merge logic)
+            # so overlapping envelopes don't collapse into one mega-cluster.
+            # Skip score redistribution to avoid envelope-to-envelope inflation.
+            return [
+                FileCluster(
+                    file_path=env.file_path,
+                    start_line=env.start_line,
+                    end_line=env.end_line,
+                    symbols=[env],
+                    importance=scores.get(env.id, 0.0),
+                )
+                for env in sorted(removed_envelopes, key=lambda n: n.start_line)
+            ]
 
-        # Redistribute importance from removed envelopes to their children
-        for env in removed_envelopes:
-            env_score = scores.get(env.id, 0.0)
-            if env_score > 0:
-                children = [
-                    n
-                    for n in nodes
-                    if n.start_line >= env.start_line and n.end_line <= env.end_line
-                ]
-                if children:
-                    per_child = env_score / len(children)
-                    for child in children:
-                        scores[child.id] = scores.get(child.id, 0.0) + per_child
-
-    # Record the earliest start_line among removed envelopes so that
-    # clusters whose first node is a child of a filtered envelope can
-    # extend upward to include the class definition / decorators.
-    _envelope_floor: dict[str, int] = {}
-    for env in removed_envelopes:
-        _envelope_floor[env.file_path] = min(
-            _envelope_floor.get(env.file_path, env.start_line), env.start_line
-        )
+    def _extending_start(start: int, file_path: str) -> int:
+        """Extend *start* upward to the enclosing envelope's start_line."""
+        if not removed_envelopes:
+            return start
+        # Find the specific envelope(s) that contain this cluster's
+        # first node and extend to their earliest start_line.
+        enclosing = [
+            env
+            for env in removed_envelopes
+            if env.file_path == file_path and env.start_line <= start <= env.end_line
+        ]
+        if enclosing:
+            return min(env.start_line for env in enclosing)
+        return start
 
     sorted_nodes = sorted(nodes, key=lambda n: n.start_line)
     clusters: list[FileCluster] = []
@@ -119,17 +141,9 @@ def cluster_nodes_in_file(
             current_end = max(current_end, node.end_line)
         else:
             importance = sum(scores.get(n.id, 0.0) for n in current_nodes)
-            start = current_nodes[0].start_line
-            # Extend upward to the envelope's start_line if this cluster
-            # begins inside a filtered envelope (captures class def / decorators)
-            if (
-                removed_envelopes
-                and _envelope_floor.get(current_nodes[0].file_path, start) < start
-                and any(
-                    env.start_line <= start <= env.end_line for env in removed_envelopes
-                )
-            ):
-                start = _envelope_floor[current_nodes[0].file_path]
+            start = _extending_start(
+                current_nodes[0].start_line, current_nodes[0].file_path
+            )
             clusters.append(
                 FileCluster(
                     file_path=current_nodes[0].file_path,
@@ -144,13 +158,7 @@ def cluster_nodes_in_file(
 
     # Final cluster
     importance = sum(scores.get(n.id, 0.0) for n in current_nodes)
-    start = current_nodes[0].start_line
-    if (
-        removed_envelopes
-        and _envelope_floor.get(current_nodes[0].file_path, start) < start
-        and any(env.start_line <= start <= env.end_line for env in removed_envelopes)
-    ):
-        start = _envelope_floor[current_nodes[0].file_path]
+    start = _extending_start(current_nodes[0].start_line, current_nodes[0].file_path)
     clusters.append(
         FileCluster(
             file_path=current_nodes[0].file_path,
