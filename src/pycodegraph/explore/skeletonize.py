@@ -43,8 +43,8 @@ def compute_unique_named_node_ids(
 
     unique_ids: set[str] = set()
     for nid in named_node_ids:
-        node = subgraph.nodes.get(nid)
-        if node and name_counts.get(node.name, 0) <= _UNIQUE_NAME_THRESHOLD:
+        named_node: Node | None = subgraph.nodes.get(nid)
+        if named_node and name_counts.get(named_node.name, 0) <= _UNIQUE_NAME_THRESHOLD:
             unique_ids.add(nid)
 
     return unique_ids
