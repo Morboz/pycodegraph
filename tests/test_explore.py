@@ -20,6 +20,30 @@ from pycodegraph.types import (
 )
 
 
+def _make_node(
+    nid: str,
+    name: str,
+    kind: NodeKind = NodeKind.METHOD,
+    file_path: str = "query.py",
+    start_line: int = 1,
+    end_line: int = 5,
+) -> Node:
+    """Create a Node with minimal defaults (shared by skeletonization tests)."""
+    return Node(
+        id=nid,
+        kind=kind,
+        name=name,
+        qualified_name=name,
+        file_path=file_path,
+        language=Language.PYTHON,
+        start_line=start_line,
+        end_line=end_line,
+        start_column=0,
+        end_column=10,
+        updated_at=0,
+    )
+
+
 class TestExploreBasic:
     """Smoke tests for explore()."""
 
@@ -696,36 +720,14 @@ class TestUniqueNamedNodeIds:
 class TestShouldSkeletonize:
     """Tests for should_skeletonize — god-file detection."""
 
-    def _make_node(
-        self,
-        nid: str,
-        name: str,
-        kind: NodeKind = NodeKind.METHOD,
-        start_line: int = 1,
-        end_line: int = 5,
-    ) -> Node:
-        return Node(
-            id=nid,
-            kind=kind,
-            name=name,
-            qualified_name=name,
-            file_path="query.py",
-            language=Language.PYTHON,
-            start_line=start_line,
-            end_line=end_line,
-            start_column=0,
-            end_column=0,
-            updated_at=0,
-        )
-
     def test_god_file_detected(self):
         """File with spine nodes + large named body + off-path unique → skeletonize."""
         # Spine method with 50-line body
-        spine = self._make_node("spine", "fetch_all", start_line=10, end_line=60)
+        spine = _make_node("spine", "fetch_all", start_line=10, end_line=60)
         # Off-path unique method with 50-line body
-        off_path = self._make_node("off", "unique_method", start_line=100, end_line=150)
+        off_path = _make_node("off", "unique_method", start_line=100, end_line=150)
         # Background method
-        bg = self._make_node("bg", "background", start_line=200, end_line=210)
+        bg = _make_node("bg", "background", start_line=200, end_line=210)
 
         file_lines = [""] * 300  # 300-line file
         # Fill spine body with content (50 lines x ~50 chars)
@@ -736,14 +738,12 @@ class TestShouldSkeletonize:
             file_lines[i] = "y" * 50
 
         path_node_ids = {"spine"}
-        named_node_ids = {"spine", "off"}
         unique_named_node_ids = {"spine", "off"}
         entry_node_ids = {"spine"}
 
         result = should_skeletonize(
             [spine, off_path, bg],
             path_node_ids,
-            named_node_ids,
             unique_named_node_ids,
             entry_node_ids,
             file_lines,
@@ -755,13 +755,12 @@ class TestShouldSkeletonize:
 
     def test_not_god_file_when_no_spine(self):
         """File without spine nodes and only 1 entry callable should not skeletonize."""
-        method = self._make_node("m", "method", start_line=10, end_line=60)
+        method = _make_node("m", "method", start_line=10, end_line=60)
         file_lines = [""] * 100
 
         result = should_skeletonize(
             [method],
             set(),
-            {"m"},
             {"m"},
             {"m"},
             file_lines,
@@ -771,14 +770,13 @@ class TestShouldSkeletonize:
 
     def test_not_god_file_when_body_fits_budget(self):
         """File where named bodies fit within budget should not skeletonize."""
-        spine = self._make_node("spine", "fetch_all", start_line=10, end_line=15)
-        off_path = self._make_node("off", "unique_method", start_line=20, end_line=25)
+        spine = _make_node("spine", "fetch_all", start_line=10, end_line=15)
+        off_path = _make_node("off", "unique_method", start_line=20, end_line=25)
         file_lines = [""] * 100
 
         result = should_skeletonize(
             [spine, off_path],
             {"spine"},
-            {"spine", "off"},
             {"spine", "off"},
             {"spine", "off"},
             file_lines,
@@ -787,10 +785,10 @@ class TestShouldSkeletonize:
         # Small bodies, large budget → no skeletonization needed
         assert result is False
 
-    def test_not_god_file_when_no_off_path_unique(self):
-        """File where all unique nodes are on-spine should not skeletonize."""
-        # Only spine nodes, no off-path unique
-        spine = self._make_node("spine", "fetch_all", start_line=10, end_line=60)
+    def test_not_god_file_when_no_off_path_high_prio(self):
+        """File where all high-priority nodes are on-spine should not skeletonize."""
+        # Only spine nodes, no off-path high-priority callables
+        spine = _make_node("spine", "fetch_all", start_line=10, end_line=60)
         file_lines = ["x" * 50] * 100
 
         result = should_skeletonize(
@@ -798,18 +796,40 @@ class TestShouldSkeletonize:
             {"spine"},
             {"spine"},
             {"spine"},
-            {"spine"},
             file_lines,
             max_chars_per_file=500,
         )
-        # No off-path unique → not a god-file
+        # No off-path high-prio → not a god-file
         assert result is False
+
+    def test_on_spine_skeletonizes_with_overloaded_off_path_entry(self):
+        """On-spine file with overloaded off-path entry methods should
+        still skeletonize (not just unique-named)."""
+        spine = _make_node("spine", "fetch_all", start_line=10, end_line=60)
+        # Overloaded method — not unique, but is an entry point
+        overloaded = _make_node("overload", "execute", start_line=80, end_line=130)
+        file_lines = [""] * 200
+        for i in range(9, 60):
+            file_lines[i] = "x" * 50
+        for i in range(79, 130):
+            file_lines[i] = "y" * 50
+
+        result = should_skeletonize(
+            [spine, overloaded],
+            {"spine"},  # spine
+            set(),  # no unique named (overloaded)
+            {"overload"},  # but it IS an entry
+            file_lines,
+            max_chars_per_file=500,
+        )
+        # Off-path entry callable → should skeletonize
+        assert result is True
 
     def test_named_body_overflow_without_spine(self):
         """File without spine nodes but with large named bodies should
         skeletonize when ≥2 named callables exceed budget."""
-        named_a = self._make_node("a", "fetch_all", start_line=10, end_line=60)
-        named_b = self._make_node("b", "process_data", start_line=80, end_line=130)
+        named_a = _make_node("a", "fetch_all", start_line=10, end_line=60)
+        named_b = _make_node("b", "process_data", start_line=80, end_line=130)
         file_lines = [""] * 200
         # Fill bodies with content
         for i in range(9, 60):
@@ -820,7 +840,6 @@ class TestShouldSkeletonize:
         result = should_skeletonize(
             [named_a, named_b],
             set(),  # no spine
-            {"a", "b"},  # both are named
             {"a", "b"},  # both are unique
             {"a", "b"},  # both are entry
             file_lines,
@@ -832,13 +851,12 @@ class TestShouldSkeletonize:
 
     def test_no_overflow_without_spine_single_named(self):
         """File without spine and only 1 named callable should NOT skeletonize."""
-        named = self._make_node("n", "fetch_all", start_line=10, end_line=60)
+        named = _make_node("n", "fetch_all", start_line=10, end_line=60)
         file_lines = ["x" * 50] * 100
 
         result = should_skeletonize(
             [named],
             set(),  # no spine
-            {"n"},  # single named
             {"n"},  # single unique
             {"n"},  # single entry
             file_lines,
@@ -851,32 +869,10 @@ class TestShouldSkeletonize:
 class TestRenderSkeletonized:
     """Tests for render_skeletonized — per-symbol rendering."""
 
-    def _make_node(
-        self,
-        nid: str,
-        name: str,
-        kind: NodeKind = NodeKind.METHOD,
-        start_line: int = 1,
-        end_line: int = 5,
-    ) -> Node:
-        return Node(
-            id=nid,
-            kind=kind,
-            name=name,
-            qualified_name=name,
-            file_path="query.py",
-            language=Language.PYTHON,
-            start_line=start_line,
-            end_line=end_line,
-            start_column=0,
-            end_column=0,
-            updated_at=0,
-        )
-
     def test_spine_gets_full_body(self):
         """On-spine methods should have full body in output."""
-        spine = self._make_node("spine", "fetch_all", start_line=5, end_line=8)
-        bg = self._make_node("bg", "background", start_line=20, end_line=22)
+        spine = _make_node("spine", "fetch_all", start_line=5, end_line=8)
+        bg = _make_node("bg", "background", start_line=20, end_line=22)
         file_lines = [
             "",
             "",
@@ -920,8 +916,8 @@ class TestRenderSkeletonized:
 
     def test_background_gets_signature_only(self):
         """Off-spine, non-named methods should only get signature lines."""
-        spine = self._make_node("spine", "fetch_all", start_line=5, end_line=8)
-        bg = self._make_node("bg", "background", start_line=20, end_line=22)
+        spine = _make_node("spine", "fetch_all", start_line=5, end_line=8)
+        bg = _make_node("bg", "background", start_line=20, end_line=22)
         file_lines = [
             "",
             "",
@@ -966,8 +962,8 @@ class TestRenderSkeletonized:
 
     def test_unique_named_gets_full_body(self):
         """Uniquely-named methods (not on spine) should get full body."""
-        unique = self._make_node("unique", "special_handler", start_line=5, end_line=8)
-        bg = self._make_node("bg", "background", start_line=20, end_line=22)
+        unique = _make_node("unique", "special_handler", start_line=5, end_line=8)
+        bg = _make_node("bg", "background", start_line=20, end_line=22)
         file_lines = [
             "",
             "",
@@ -1018,7 +1014,7 @@ class TestRenderSkeletonized:
             start = i * 50 + 1
             end = start + 40
             methods.append(
-                self._make_node(f"m{i}", f"method_{i}", start_line=start, end_line=end)
+                _make_node(f"m{i}", f"method_{i}", start_line=start, end_line=end)
             )
             for j in range(start - 1, end):
                 file_lines[j] = "x" * 100  # 100 chars per line
@@ -1045,7 +1041,7 @@ class TestRenderSkeletonized:
 
     def test_tag_is_focused_when_body_ids_nonempty(self):
         """When some methods get full body, tag should be 'focused'."""
-        spine = self._make_node("spine", "fetch_all", start_line=5, end_line=8)
+        spine = _make_node("spine", "fetch_all", start_line=5, end_line=8)
         file_lines = [
             "",
             "",
@@ -1072,7 +1068,7 @@ class TestRenderSkeletonized:
 
     def test_tag_is_skeleton_when_no_body_ids(self):
         """When no methods get full body (all priority 99), tag should be 'skeleton'."""
-        bg = self._make_node("bg", "background", start_line=5, end_line=8)
+        bg = _make_node("bg", "background", start_line=5, end_line=8)
         file_lines = [
             "",
             "",
@@ -1095,6 +1091,79 @@ class TestRenderSkeletonized:
         )
 
         assert tag == "skeleton"
+
+    def test_signature_no_substring_false_positive(self):
+        """A node named 'get' should NOT match 'def target(self):'."""
+        get_method = _make_node("get", "get", start_line=5, end_line=7)
+        target_method = _make_node("target", "target", start_line=10, end_line=12)
+        file_lines = [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "def get(self):",
+            "    return self.value",
+            "",
+            "",
+            "def target(self):",
+            "    return 0",
+            "",
+        ]
+
+        result, _tag = render_skeletonized(
+            [get_method, target_method],
+            file_lines,
+            path_node_ids={"get"},
+            named_node_ids={"get"},
+            unique_named_node_ids={"get"},
+            entry_node_ids=set(),
+            max_chars_per_file=5000,
+        )
+
+        # "get" should have full body (it's on spine)
+        assert "def get(self):" in result
+        # "target" should only have signature — and NOT match via substring
+        assert "def target(self):" in result
+        # The body of target should NOT appear
+        assert "return 0" not in result
+
+    def test_signature_fallback_when_name_not_found(self):
+        """If the callable name is not found within 4 lines, emit the
+        first line as fallback instead of silently skipping."""
+        # start_line=5 but the name "unlikely_prefix_rare" only appears
+        # on line 10 — beyond the 4-line scan window.
+        method = _make_node("rare", "unlikely_prefix_rare", start_line=5, end_line=12)
+        file_lines = [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "    @decorator_one",  # line 5
+            "    @decorator_two",  # line 6
+            "    @decorator_three",  # line 7
+            "    @decorator_four",  # line 8 — 4-line scan ends here
+            "    # some comment",  # line 9
+            "    def unlikely_prefix_rare(self):",  # line 10
+            "        pass",  # line 11
+            "",
+        ]
+
+        result, _tag = render_skeletonized(
+            [method],
+            file_lines,
+            path_node_ids=set(),
+            named_node_ids=set(),
+            unique_named_node_ids=set(),
+            entry_node_ids=set(),
+            max_chars_per_file=5000,
+        )
+
+        # Should NOT silently skip — fallback to first line
+        assert len(result) > 0
+        # Fallback emits start_line (5) + first line content
+        assert "5\t" in result
 
 
 class TestExploreSkeletonization:

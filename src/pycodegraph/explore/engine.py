@@ -332,7 +332,6 @@ class ExploreEngine:
                 if should_skeletonize(
                     file_nodes,
                     path_node_ids,
-                    named_node_ids,
                     unique_named_node_ids,
                     entry_node_ids,
                     file_lines,

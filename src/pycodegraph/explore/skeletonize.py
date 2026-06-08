@@ -11,6 +11,8 @@ mechanism (``src/mcp/tools.ts:2045-2159``).
 
 from __future__ import annotations
 
+import re
+
 from ..types import Node, NodeKind, Subgraph
 
 # Kinds whose body is meaningful to show in full
@@ -20,6 +22,14 @@ _CALLABLE_BODY_KINDS: frozenset[NodeKind] = frozenset(
 
 # Threshold: names with this many or fewer global definitions are "specific"
 _UNIQUE_NAME_THRESHOLD = 3
+
+# Body cap multiplier: skeletonized output can exceed max_chars_per_file
+# by this factor, matching the TS CodeGraph's bodyCap = maxCharsPerFile * 1.5
+_BODY_CAP_MULTIPLIER = 1.5
+
+# Maximum signature-only lines to emit before eliding the rest.
+# Keeps output compact for files with hundreds of methods.
+_MAX_SIGNATURES = 24
 
 
 def compute_unique_named_node_ids(
@@ -53,7 +63,6 @@ def compute_unique_named_node_ids(
 def should_skeletonize(
     file_nodes: list[Node],
     path_node_ids: set[str],
-    named_node_ids: set[str],
     unique_named_node_ids: set[str],
     entry_node_ids: set[str],
     file_lines: list[str],
@@ -101,16 +110,20 @@ def should_skeletonize(
     if named_body_chars <= max_chars_per_file:
         return False
 
-    # --- On-spine god-file check (matches TS CodeGraph exactly) ---
+    # --- On-spine god-file check ---
+    # The TS CodeGraph requires off-path uniquely-named callables,
+    # but we also trigger when there are off-path entry callables
+    # whose bodies contribute to the budget overflow.  This handles
+    # the case where all named methods are overloaded (>3 defs)
+    # and thus not "unique" — the file still needs skeletonization.
     if has_spine_node:
-        # Need at least one off-path uniquely-named callable
-        has_off_path_unique = any(
+        has_off_path_high_prio = any(
             n.kind in _CALLABLE_BODY_KINDS
-            and n.id in unique_named_node_ids
+            and n.id in high_prio_ids
             and n.id not in path_node_ids
             for n in file_nodes
         )
-        return has_off_path_unique
+        return has_off_path_high_prio
 
     # --- Named/entry body overflow (no spine) ---
     # If high-priority callable bodies significantly exceed budget,
@@ -137,6 +150,12 @@ def render_skeletonized(
 ) -> tuple[str, str]:
     """Render a skeletonized file: priority methods get full body, rest get signatures.
 
+    ``named_node_ids`` is currently unused in the priority calculation
+    (overloaded names that aren't unique get priority 99, same as
+    unnamed callables) but is kept as a parameter so that future
+    priority tiers can distinguish "agent-named-but-overloaded" from
+    "truly anonymous" without changing the call signature.
+
     Priority levels (lower = higher priority):
     - 0: On-spine callable (flow path) → always full body
     - 1: Uniquely-named callable (agent specifically named it) → full body
@@ -150,7 +169,7 @@ def render_skeletonized(
         A tuple of (rendered_source, tag) where tag is "focused" if any
         method has a full body, or "skeleton" if signatures only.
     """
-    body_cap = int(max_chars_per_file * 1.5)
+    body_cap = int(max_chars_per_file * _BODY_CAP_MULTIPLIER)
 
     # Assign priority
     def priority(n: Node) -> int:
@@ -184,7 +203,7 @@ def render_skeletonized(
     lines: list[str] = []
     covered_until = 0
     sig_count = 0
-    sig_max = 24  # max signatures to show
+    sig_max = _MAX_SIGNATURES
 
     for n in sorted(file_nodes, key=lambda n: n.start_line):
         if n.start_line <= covered_until:
@@ -214,10 +233,25 @@ def render_skeletonized(
                 break
             for offset in range(4):
                 line_idx = n.start_line - 1 + offset
-                if line_idx < len(file_lines) and n.name in file_lines[line_idx]:
-                    lines.append(f"{line_idx + 1}\t{file_lines[line_idx].strip()}")
+                if line_idx >= len(file_lines):
+                    break
+                line_text = file_lines[line_idx]
+                # Use word-boundary regex to avoid substring false
+                # positives (e.g. node "get" matching "target")
+                if re.search(rf"\b{re.escape(n.name)}\b", line_text):
+                    lines.append(f"{line_idx + 1}\t{line_text.strip()}")
                     sig_count += 1
                     break
+            else:
+                # Fallback: emit the first line of the callable even
+                # if the name wasn't found within 4 lines (e.g.
+                # decorator-only lines), so the callable doesn't
+                # silently vanish from output.
+                if n.start_line - 1 < len(file_lines):
+                    lines.append(
+                        f"{n.start_line}\t{file_lines[n.start_line - 1].strip()}"
+                    )
+                    sig_count += 1
 
     tag = "focused" if body_ids else "skeleton"
     return "\n".join(lines), tag
