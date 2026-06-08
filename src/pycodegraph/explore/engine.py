@@ -73,6 +73,8 @@ def _cap_necessary_section(
         "run another explore with specific symbol names "
         "for the rest — do NOT Read this file)"
     )
+    # TODO(#32): Replace raw char-cut with skeletonization — keeps
+    # full bodies for spine/named symbols, signatures for the rest.
     trimmed = section[: max(0, necessary_section_cap - len(trunc_msg))] + trunc_msg
     return trimmed, True
 
@@ -346,6 +348,8 @@ class ExploreEngine:
                     continue
 
                 # Cap section size for necessary files (issue #33).
+                # After capping, `section` is the (possibly trimmed) version,
+                # so total_chars tracks actual output size.
                 section, trimmed = _cap_necessary_section(
                     section, is_necessary, budget.max_chars_per_file
                 )
