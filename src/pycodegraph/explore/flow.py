@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ..types import EdgeKind, Node
@@ -10,12 +11,28 @@ if TYPE_CHECKING:
     from ..graph.traversal import GraphTraverser
 
 
+@dataclass
+class FlowResult:
+    """Result of flow-chain tracing among named symbols.
+
+    Attributes:
+        chain: Ordered list of dicts ``{"node": Node, "edge": Edge | None}``
+            representing the longest call chain found.
+        path_node_ids: Set of node IDs that form the spine (the longest
+            call chain).  Used by skeletonization to distinguish on-spine
+            vs off-spine methods.
+    """
+
+    chain: list[dict] = field(default_factory=list)
+    path_node_ids: set[str] = field(default_factory=set)
+
+
 def find_flow_chain(
     named_symbols: list[Node],
     traverser: GraphTraverser,
     max_depth: int = 8,
     max_bridge: int = 1,
-) -> list[dict]:
+) -> FlowResult:
     """Find the longest call chain among named symbols.
 
     BFS from each named symbol along ``calls`` edges, looking for
@@ -23,14 +40,14 @@ def find_flow_chain(
     *max_bridge* consecutive steps to avoid wandering into a
     god-function's fan-out.
 
-    Returns a list of dicts ``{"node": Node, "edge": Edge | None}``
-    representing the longest chain found.
+    Returns a :class:`FlowResult` containing the longest chain found
+    and the set of spine (path) node IDs.
     """
     named_by_id = {node.id: node for node in named_symbols}
     named_symbol_ids = set(named_by_id)
 
     if len(named_symbol_ids) < 2:
-        return []
+        return FlowResult()
 
     best_chain: list[dict] = []
 
@@ -97,7 +114,10 @@ def find_flow_chain(
         if len(chain) > len(best_chain):
             best_chain = chain
 
-    return best_chain if len(best_chain) >= 3 else []
+    if len(best_chain) >= 3:
+        path_ids = {step["node"].id for step in best_chain}
+        return FlowResult(chain=best_chain, path_node_ids=path_ids)
+    return FlowResult()
 
 
 def format_flow_chain(chain: list[dict]) -> str:
