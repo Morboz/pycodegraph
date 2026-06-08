@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from ..db.queries import QueryBuilder
-from ..types import Edge, EdgeKind, Node, NodeKind, Subgraph, TraversalOptions
+from ..types import (
+    CONTAINER_KINDS,
+    Edge,
+    EdgeKind,
+    Node,
+    Subgraph,
+    TraversalOptions,
+)
 
 _DEFAULT_OPTIONS = TraversalOptions()
 
@@ -376,28 +383,18 @@ class GraphTraverser:
 
         # For container nodes, traverse into children
         focal = self._queries.get_node_by_id(node_id)
-        if focal:
-            container_kinds = {
-                NodeKind.CLASS,
-                NodeKind.INTERFACE,
-                NodeKind.STRUCT,
-                NodeKind.TRAIT,
-                NodeKind.PROTOCOL,
-                NodeKind.MODULE,
-                NodeKind.ENUM,
-            }
-            if focal.kind in container_kinds:
-                contains = self._queries.get_outgoing_edges(
-                    node_id, [EdgeKind.CONTAINS.value]
-                )
-                for edge in contains:
-                    child = self._queries.get_node_by_id(edge.target)
-                    if child and child.id not in visited:
-                        nodes[child.id] = child
-                        edges.append(edge)
-                        self._get_impact_recursive(
-                            child.id, max_depth, current_depth, nodes, edges, visited
-                        )
+        if focal and focal.kind in CONTAINER_KINDS:
+            contains = self._queries.get_outgoing_edges(
+                node_id, [EdgeKind.CONTAINS.value]
+            )
+            for edge in contains:
+                child = self._queries.get_node_by_id(edge.target)
+                if child and child.id not in visited:
+                    nodes[child.id] = child
+                    edges.append(edge)
+                    self._get_impact_recursive(
+                        child.id, max_depth, current_depth, nodes, edges, visited
+                    )
 
         incoming = self._queries.get_incoming_edges(node_id)
         for edge in incoming:

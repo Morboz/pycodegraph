@@ -35,6 +35,22 @@ class NodeKind(StrEnum):
     COMPONENT = "component"
 
 
+# Node kinds that represent containers (types that own children via
+# CONTAINS edges).  Shared by traversal, clustering, and other modules
+# so the definition stays in one place.
+CONTAINER_KINDS: frozenset[NodeKind] = frozenset(
+    [
+        NodeKind.CLASS,
+        NodeKind.INTERFACE,
+        NodeKind.STRUCT,
+        NodeKind.TRAIT,
+        NodeKind.PROTOCOL,
+        NodeKind.MODULE,
+        NodeKind.ENUM,
+    ]
+)
+
+
 class EdgeKind(StrEnum):
     CONTAINS = "contains"
     CALLS = "calls"
