@@ -2,5 +2,6 @@
 
 from .codegraph import CodeGraph
 from .fs import FileProvider, LocalFileProvider
+from .types import ExploreOptions
 
-__all__ = ["CodeGraph", "FileProvider", "LocalFileProvider"]
+__all__ = ["CodeGraph", "ExploreOptions", "FileProvider", "LocalFileProvider"]

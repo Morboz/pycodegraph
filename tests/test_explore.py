@@ -212,3 +212,123 @@ class TestExploreOutput:
             )
         finally:
             cg.close()
+
+
+class TestSeedingTestFilter:
+    """Test that seed_named_symbols filters out test-file candidates."""
+
+    def _write_project(self, tmp_path, files: dict[str, str]) -> str:
+        """Write a set of {relative_path: content} files under tmp_path."""
+        from pathlib import Path as P
+
+        root = str(tmp_path)
+        for rel, content in files.items():
+            p = P(root) / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+        return root
+
+    def test_test_files_excluded_from_seeds(self, tmp_path):
+        """Test-file symbols should NOT appear as seeds for a non-test query."""
+        root = self._write_project(
+            tmp_path,
+            {
+                "src/calculator.py": """\
+class Calculator:
+    def add(self, a, b):
+        return a + b
+
+    def compute(self, x):
+        return self.add(x, 1)
+""",
+                "tests/test_calculator.py": """\
+class TestCalculator:
+    def compute(self):
+        return 42
+
+    def add(self):
+        pass
+""",
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            from pycodegraph.explore.seeding import seed_named_symbols
+
+            seeds = seed_named_symbols("Calculator compute", cg._searcher)
+            # No seed should come from a test file
+            test_seeds = [s for s in seeds if "test" in s[0].file_path.lower()]
+            assert len(test_seeds) == 0, (
+                f"Test-file seeds should be filtered out, got: {test_seeds}"
+            )
+        finally:
+            cg.close()
+
+    def test_test_files_kept_for_test_query(self, tmp_path):
+        """Test-file symbols SHOULD appear when query mentions 'test'."""
+        root = self._write_project(
+            tmp_path,
+            {
+                "src/calculator.py": """\
+class Calculator:
+    def add(self, a, b):
+        return a + b
+""",
+                "tests/test_calculator.py": """\
+class TestCalculator:
+    def test_add(self):
+        pass
+""",
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            from pycodegraph.explore.seeding import seed_named_symbols
+
+            seeds = seed_named_symbols("test_add test", cg._searcher)
+            test_seeds = [s for s in seeds if "test" in s[0].file_path.lower()]
+            assert len(test_seeds) > 0, (
+                "Test-file seeds should be kept when query contains 'test'"
+            )
+        finally:
+            cg.close()
+
+    def test_overloaded_name_limited_to_one_fallback(self, tmp_path):
+        """Overloaded names (>3 defs) without disambiguation should
+        produce at most 1 seed (the most substantive non-test one)."""
+        root = self._write_project(
+            tmp_path,
+            {
+                "src/a.py": """\
+def process():
+    pass
+""",
+                "src/b.py": """\
+def process():
+    pass
+""",
+                "src/c.py": """\
+def process():
+    pass
+""",
+                "src/d.py": """\
+def process():
+    pass
+""",
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            from pycodegraph.explore.seeding import seed_named_symbols
+
+            seeds = seed_named_symbols("process", cg._searcher)
+            process_seeds = [(n, b) for n, b in seeds if n.name == "process"]
+            assert len(process_seeds) <= 1, (
+                f"Overloaded name should produce at most 1 seed, got {len(process_seeds)}: "
+                f"{[(n.qualified_name, n.file_path) for n, _ in process_seeds]}"
+            )
+        finally:
+            cg.close()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..search.query_utils import extract_symbols_from_query
+from ..search.query_utils import extract_symbols_from_query, is_test_file
 from ..types import Node, NodeKind, SearchOptions
 
 if TYPE_CHECKING:
@@ -33,6 +33,10 @@ _CALLABLE_KINDS: list[NodeKind] = [
 _SPECIFIC_NAME_BOOST = 50.0  # ≤3 defs → likely what the agent meant
 _GENERIC_NAME_BOOST = 20.0  # >3 defs → overloaded / ambiguous
 
+# Overloaded-name disambiguation caps (matching TS CodeGraph behaviour)
+_DISAMBIGUATED_CAP = 4  # max picks after co-naming disambiguation
+_GENERIC_FALLBACK_CAP = 1  # max picks when no disambiguation context matches
+
 
 def seed_named_symbols(
     query: str,
@@ -44,6 +48,21 @@ def seed_named_symbols(
     Returns a list of (Node, score_boost) tuples.  Symbols that the
     agent explicitly named get a high boost; overloaded names get a
     lower boost.
+
+    **Seeding strategy (aligned with TS CodeGraph):**
+
+    1. Extract symbol-like tokens from the query.
+    2. For each token, look up all definitions by exact name.
+    3. **Filter out test-file candidates** unless the query itself
+       contains "test"/"spec" — test files rarely contain the answer
+       the agent is looking for.
+    4. Specific names (≤3 defs) keep all candidates at high boost.
+    5. Overloaded names (>3 defs) use **co-naming disambiguation**:
+       only keep defs whose class/file is also named in the query
+       (PascalCase tokens serve as type hints).  Capped at
+       ``_DISAMBIGUATED_CAP`` picks.
+    6. If disambiguation yields nothing, fall back to the single
+       most-substantive non-test definition (``_GENERIC_FALLBACK_CAP``).
     """
     tokens = extract_symbols_from_query(query)
     if not tokens:
@@ -51,6 +70,11 @@ def seed_named_symbols(
 
     # PascalCase tokens serve as type/file disambiguators
     type_tokens = {t.lower() for t in tokens if t[0].isupper() and len(t) >= 4}
+
+    # Whether the query explicitly asks about tests — if so, keep
+    # test-file candidates in the pool (matching TS CodeGraph).
+    query_lower = query.lower()
+    is_test_query = "test" in query_lower or "spec" in query_lower
 
     named: list[tuple[Node, float]] = []
     seen_ids: set[str] = set()
@@ -64,10 +88,18 @@ def seed_named_symbols(
             ),
         )
 
-        # Sort: non-test first, then larger body (skip stubs)
+        # ── Filter out test-file candidates (TS CodeGraph: isTestPath) ───
+        # Test files rarely contain the answer; their presence inflates
+        # heuristic scores and pollutes file ranking.  Skip them unless
+        # the agent explicitly asks about tests.
+        if not is_test_query:
+            candidates = [r for r in candidates if not is_test_file(r.node.file_path)]
+
+        # Sort: non-test first (belt-and-suspenders after filter), then
+        # larger body (skip stubs) — matches TS CodeGraph ordering.
         candidates.sort(
             key=lambda r: (
-                0 if "test" in r.node.file_path.lower() else 1,
+                0 if not is_test_file(r.node.file_path) else 1,
                 r.node.end_line - r.node.start_line,
             ),
             reverse=True,
@@ -83,8 +115,13 @@ def seed_named_symbols(
             # Overloaded name — disambiguate by co-naming (PascalCase
             # tokens hint at which class/file the agent means)
             picks = [r for r in candidates if _in_named_context(r.node, type_tokens)]
-            if not picks:
-                picks = candidates[:1]
+            if picks:
+                # Disambiguation matched — cap to avoid flooding
+                picks = picks[:_DISAMBIGUATED_CAP]
+            else:
+                # No disambiguation match — fall back to the single
+                # most-substantive definition (non-test, largest body)
+                picks = candidates[:_GENERIC_FALLBACK_CAP]
             boost = _GENERIC_NAME_BOOST
 
         for r in picks:
