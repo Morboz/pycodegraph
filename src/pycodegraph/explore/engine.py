@@ -47,6 +47,35 @@ if TYPE_CHECKING:
 _WHOLE_FILE_MAX_LINES = 220
 _WHOLE_FILE_MAX_CHARS_FACTOR = 3  # x max_chars_per_file
 
+# Necessary-file section cap: even files containing named/entry symbols
+# (is_necessary=True) have their formatted section capped so they cannot
+# consume the entire output budget.  Mirrors TS CodeGraph's bodyCap.
+_NECESSARY_FILE_SECTION_FACTOR = 1.5  # x max_chars_per_file
+
+
+def _cap_necessary_section(
+    section: str, is_necessary: bool, max_chars_per_file: int
+) -> tuple[str, bool]:
+    """Cap a necessary file's section at 1.5x per-file budget.
+
+    Returns (possibly-trimmed section, whether trimming occurred).
+    Non-necessary sections are returned unchanged.
+    """
+    if not is_necessary:
+        return section, False
+
+    necessary_section_cap = int(max_chars_per_file * _NECESSARY_FILE_SECTION_FACTOR)
+    if len(section) <= necessary_section_cap:
+        return section, False
+
+    trunc_msg = (
+        "\n\n... (section trimmed to fit budget; "
+        "run another explore with specific symbol names "
+        "for the rest — do NOT Read this file)"
+    )
+    trimmed = section[: max(0, necessary_section_cap - len(trunc_msg))] + trunc_msg
+    return trimmed, True
+
 
 class ExploreEngine:
     """Orchestrates the explore pipeline: seeding, clustering, flow, formatting."""
@@ -316,6 +345,13 @@ class ExploreEngine:
                     any_trimmed = True
                     continue
 
+                # Cap section size for necessary files (issue #33).
+                section, trimmed = _cap_necessary_section(
+                    section, is_necessary, budget.max_chars_per_file
+                )
+                if trimmed:
+                    any_trimmed = True
+
                 lines.append(section)
                 total_chars += len(section)
                 files_included += 1
@@ -443,6 +479,13 @@ class ExploreEngine:
                     continue
 
                 if len(selected_clusters) < len(clusters):
+                    any_trimmed = True
+
+                # Cap section size for necessary files (issue #33).
+                section, trimmed = _cap_necessary_section(
+                    section, is_necessary, budget.max_chars_per_file
+                )
+                if trimmed:
                     any_trimmed = True
 
                 lines.append(section)
