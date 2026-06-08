@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pycodegraph.explore.clustering import cluster_nodes_in_file
+from pycodegraph.explore.clustering import FileCluster, cluster_nodes_in_file
 from pycodegraph.types import CONTAINER_KINDS, Language, Node, NodeKind
 
 
@@ -457,6 +457,119 @@ class TestClusterStartLineExtension:
         assert b_cluster[0].start_line == 106, (
             f"Expected methodB cluster start_line=106 (ClassB start), got {b_cluster[0].start_line}"
         )
+
+
+class TestClusterBudgetEnforcement:
+    """Tests for cluster selection respecting file_budget (issue #31)."""
+
+    def _make_cluster(
+        self,
+        start_line: int,
+        end_line: int,
+        importance: float = 1.0,
+        file_path: str = "query.py",
+    ) -> FileCluster:
+        """Helper to create a FileCluster for budget selection tests."""
+        return FileCluster(
+            file_path=file_path,
+            start_line=start_line,
+            end_line=end_line,
+            symbols=[],
+            importance=importance,
+        )
+
+    def test_first_cluster_exceeding_budget_selected_alone(self):
+        """When the first cluster exceeds budget, it is selected as a
+        fallback but no further clusters are added (issue #31)."""
+        from pycodegraph.explore.clustering import select_clusters_within_budget
+
+        # 2000-line cluster → est = 2000 * 60 = 120,000 chars
+        # file_budget = 6,500 → way over
+        clusters = [
+            self._make_cluster(1, 2000, importance=10.0),
+            self._make_cluster(2100, 2150, importance=5.0),
+        ]
+
+        selected = select_clusters_within_budget(clusters, file_budget=6500)
+
+        # First cluster is selected as fallback (保底), but no more
+        assert len(selected) == 1
+        assert selected[0].start_line == 1
+        assert selected[0].end_line == 2000
+
+    def test_budget_enforced_for_first_cluster_when_it_fits(self):
+        """When the first cluster fits within budget, budget is enforced
+        for subsequent clusters."""
+        from pycodegraph.explore.clustering import select_clusters_within_budget
+
+        # Cluster 1: 50 lines → est = 3000 chars (fits in 6500)
+        # Cluster 2: 100 lines → est = 6000 chars (would exceed 3000+6000=9000 > 6500)
+        clusters = [
+            self._make_cluster(1, 50, importance=10.0),
+            self._make_cluster(100, 199, importance=5.0),
+        ]
+
+        selected = select_clusters_within_budget(clusters, file_budget=6500)
+
+        assert len(selected) == 1
+        assert selected[0].start_line == 1
+        assert selected[0].end_line == 50
+
+    def test_multiple_clusters_all_fit_within_budget(self):
+        """Multiple clusters that all fit within budget are all selected."""
+        from pycodegraph.explore.clustering import select_clusters_within_budget
+
+        # 3 clusters each 10 lines → est = 600 each → total 1800 < 6500
+        clusters = [
+            self._make_cluster(1, 10, importance=10.0),
+            self._make_cluster(20, 29, importance=8.0),
+            self._make_cluster(40, 49, importance=5.0),
+        ]
+
+        selected = select_clusters_within_budget(clusters, file_budget=6500)
+
+        assert len(selected) == 3
+
+    def test_budget_stops_adding_when_next_exceeds(self):
+        """Selection stops as soon as the next cluster would exceed budget."""
+        from pycodegraph.explore.clustering import select_clusters_within_budget
+
+        # Cluster 1: 50 lines → est = 3000 (fits, total=3000)
+        # Cluster 2: 30 lines → est = 1800 (fits, total=4800 < 6500)
+        # Cluster 3: 50 lines → est = 3000 (exceeds 4800+3000=7800 > 6500)
+        clusters = [
+            self._make_cluster(1, 50, importance=10.0),
+            self._make_cluster(60, 89, importance=8.0),
+            self._make_cluster(100, 149, importance=5.0),
+        ]
+
+        selected = select_clusters_within_budget(clusters, file_budget=6500)
+
+        assert len(selected) == 2
+        assert selected[0].start_line == 1
+        assert selected[1].start_line == 60
+
+    def test_empty_clusters_returns_empty(self):
+        """No clusters → empty selection."""
+        from pycodegraph.explore.clustering import select_clusters_within_budget
+
+        selected = select_clusters_within_budget([], file_budget=6500)
+        assert selected == []
+
+    def test_zero_budget_selects_first_as_fallback(self):
+        """Even with zero budget, the first cluster is selected as fallback."""
+        from pycodegraph.explore.clustering import select_clusters_within_budget
+
+        clusters = [
+            self._make_cluster(1, 100, importance=10.0),
+            self._make_cluster(200, 250, importance=5.0),
+        ]
+
+        selected = select_clusters_within_budget(clusters, file_budget=0)
+
+        # First cluster is still selected as fallback
+        assert len(selected) == 1
+        assert selected[0].start_line == 1
 
 
 class TestContainerKindsShared:
