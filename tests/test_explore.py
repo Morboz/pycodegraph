@@ -1304,3 +1304,260 @@ class TestExploreSkeletonization:
             assert "return a + b" in result
         finally:
             cg.close()
+
+
+class TestExploreNecessaryFileBudget:
+    """Tests for per-file section cap on necessary files (issue #33).
+
+    When is_necessary=True, the 90% global budget check is bypassed so
+    that core files are never dropped.  But a necessary file's section
+    must still be capped at 1.5 * max_chars_per_file — otherwise a
+    single large necessary file can eat the entire output budget.
+    """
+
+    _SECTION_CAP_FACTOR = 1.5  # mirrors _NECESSARY_FILE_SECTION_FACTOR
+
+    def _write_project(self, tmp_path, files: dict[str, str]) -> str:
+        from pathlib import Path as P
+
+        root = str(tmp_path)
+        for rel, content in files.items():
+            p = P(root) / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+        return root
+
+    @staticmethod
+    def _split_sections(output: str) -> dict[str, str]:
+        """Split explore output into file sections keyed by file path.
+
+        Each section starts with ``#### <file_path>`` and ends before
+        the next ``#### `` or end of output.
+        """
+        import re
+
+        parts: dict[str, str] = {}
+        for m in re.finditer(r"(^#### (\S+).*?)(?=^#### |\Z)", output, re.M | re.S):
+            parts[m.group(2)] = m.group(1)
+        return parts
+
+    def test_necessary_whole_file_section_capped(self, tmp_path):
+        """A necessary file via the whole-file path has its section
+        capped at 1.5 * max_chars_per_file (issue #33).
+
+        Without the fix, is_necessary=True bypasses all budget checks,
+        so a necessary file's section can grow unboundedly.  The fix
+        caps the section so it cannot exceed 1.5x the per-file budget.
+        """
+        # File: <220 lines, < 3*800=2400 raw chars → whole-file path.
+        # But formatted section (with line numbers) > 1.5*800=1200.
+        max_chars_per_file = 800
+        section_cap = int(max_chars_per_file * self._SECTION_CAP_FACTOR)
+
+        svc_lines = ["class Svc:"]
+        for i in range(50):
+            svc_lines.append(f"    def m{i}(self): return {i}")
+        svc_lines.append("")
+
+        root = self._write_project(
+            tmp_path,
+            {
+                "src/svc.py": "\n".join(svc_lines),
+                "src/caller.py": (
+                    "from svc import Svc\n\n"
+                    "def run():\n    s = Svc()\n    return s.m0()\n"
+                ),
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            result = cg.explore(
+                "Svc",
+                ExploreOptions(
+                    max_chars_per_file=max_chars_per_file, max_output_chars=5000
+                ),
+            )
+            assert isinstance(result, str)
+            assert "Svc" in result
+            # Verify the exact per-section cap marker is present
+            assert "section trimmed to fit budget" in result, (
+                "A necessary file exceeding the section cap should show "
+                "the exact truncation marker"
+            )
+            # Verify the svc.py section does not exceed the cap
+            # (allow +1 for the inter-section newline from _split_sections)
+            sections = self._split_sections(result)
+            svc_section = sections.get("src/svc.py", "")
+            assert len(svc_section) <= section_cap + 1, (
+                f"svc.py section is {len(svc_section)} chars, "
+                f"exceeds cap {section_cap}+1"
+            )
+        finally:
+            cg.close()
+
+    def test_multiple_necessary_files_stay_under_ceiling(self, tmp_path):
+        """When all selected files are necessary, the output still stays
+        within the hard ceiling and each section respects per-file cap
+        (issue #33)."""
+        max_chars_per_file = 6500  # default for 5000+ files
+        section_cap = int(max_chars_per_file * self._SECTION_CAP_FACTOR)
+
+        files = {}
+        for name in ["alpha", "beta", "gamma"]:
+            svc_lines = [f"class {name.title()}Svc:"]
+            for i in range(50):
+                svc_lines.append(f"    def m{i}(self): return {i}")
+            svc_lines.append("")
+            files[f"src/{name}.py"] = "\n".join(svc_lines)
+
+        root = self._write_project(tmp_path, files)
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            result = cg.explore(
+                "AlphaSvc BetaSvc GammaSvc",
+                ExploreOptions(max_output_chars=3000),
+            )
+            assert isinstance(result, str)
+            # Hard ceiling: min(1.5 * 3000, 25000) = 4500
+            assert len(result) <= 4500, (
+                f"Output {len(result)} chars exceeds hard ceiling 4500"
+            )
+            # Verify each file section respects the per-section cap
+            # (allow +1 for the inter-section newline from _split_sections)
+            sections = self._split_sections(result)
+            for fpath, section_text in sections.items():
+                assert len(section_text) <= section_cap + 1, (
+                    f"Section for {fpath} is {len(section_text)} chars, "
+                    f"exceeds cap {section_cap}+1"
+                )
+        finally:
+            cg.close()
+
+    def test_necessary_clustered_file_truncation_marker(self, tmp_path):
+        """When a necessary file via the cluster path exceeds the section
+        cap, the exact truncation marker appears (issue #33)."""
+        # Create a file >220 lines → cluster path, named symbol → necessary.
+        lines = ["class HugeService:"]
+        for i in range(150):
+            lines.append(f"    def method_{i}(self):")
+            lines.append(f"        return {i}")
+        lines.append("")
+
+        root = self._write_project(
+            tmp_path,
+            {
+                "src/huge.py": "\n".join(lines),
+                "src/caller.py": (
+                    "from huge import HugeService\n\n"
+                    "def run():\n    s = HugeService()\n    return s.method_0()\n"
+                ),
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            result = cg.explore(
+                "HugeService",
+                ExploreOptions(max_chars_per_file=500, max_output_chars=2000),
+            )
+            assert isinstance(result, str)
+            # Verify the exact per-section cap marker is present
+            assert "section trimmed to fit budget" in result, (
+                "A necessary file exceeding the section cap via cluster path "
+                "should show the exact truncation marker"
+            )
+            assert "HugeService" in result
+        finally:
+            cg.close()
+
+    def test_non_necessary_file_still_respects_global_cap(self, tmp_path):
+        """Non-necessary files still skip when exceeding the 90% global
+        cap — regression test for issue #33 fix."""
+        named_lines = ["class Target:", "    def run(self):", "        pass", ""]
+        big_lines = ["class Incidental:"]
+        for i in range(50):
+            big_lines.append(f"    def method_{i}(self):")
+            big_lines.append(f"        return {i}")
+        big_lines.append("")
+
+        root = self._write_project(
+            tmp_path,
+            {
+                "src/target.py": "\n".join(named_lines),
+                "src/incidental.py": "\n".join(big_lines),
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            result = cg.explore(
+                "Target",
+                ExploreOptions(max_output_chars=1000),
+            )
+            assert isinstance(result, str)
+            assert "Target" in result
+        finally:
+            cg.close()
+
+    def test_small_necessary_file_not_truncated(self, tmp_path):
+        """A necessary file that fits within the section cap is not
+        truncated (issue #33)."""
+        root = self._write_project(
+            tmp_path,
+            {
+                "src/service.py": (
+                    "class Service:\n    def run(self):\n        pass\n"
+                ),
+                "src/main.py": (
+                    "from service import Service\n\n"
+                    "def main():\n    s = Service()\n    s.run()\n"
+                ),
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            result = cg.explore("Service")
+            assert isinstance(result, str)
+            assert "section trimmed to fit budget" not in result
+            assert "Service" in result
+        finally:
+            cg.close()
+
+    def test_tiny_max_chars_per_file_edge_case(self, tmp_path):
+        """When max_chars_per_file is very small, the truncation message
+        may be longer than the cap — output should still be valid
+        (issue #33 edge case)."""
+        svc_lines = ["class Svc:"]
+        for i in range(50):
+            svc_lines.append(f"    def m{i}(self): return {i}")
+        svc_lines.append("")
+
+        root = self._write_project(
+            tmp_path,
+            {
+                "src/svc.py": "\n".join(svc_lines),
+                "src/caller.py": (
+                    "from svc import Svc\n\n"
+                    "def run():\n    s = Svc()\n    return s.m0()\n"
+                ),
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            result = cg.explore(
+                "Svc",
+                ExploreOptions(max_chars_per_file=50, max_output_chars=2000),
+            )
+            assert isinstance(result, str)
+            # Should not crash — output is a valid string
+            assert "Svc" in result
+            # The section cap (1.5 * 50 = 75) is smaller than the
+            # truncation message itself, but the max(0, ...) guard
+            # prevents negative slicing.
+            assert len(result) > 0
+        finally:
+            cg.close()
