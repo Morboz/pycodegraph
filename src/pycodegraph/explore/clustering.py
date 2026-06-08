@@ -172,6 +172,42 @@ def cluster_nodes_in_file(
     return clusters
 
 
+def select_clusters_within_budget(
+    ranked_clusters: list[FileCluster],
+    file_budget: int,
+) -> list[FileCluster]:
+    """Select clusters from a pre-ranked list within a per-file character budget.
+
+    Clusters are assumed to be sorted by importance (descending).  The
+    selection enforces *file_budget* for every cluster including the
+    first.  If the very first cluster already exceeds the budget it is
+    selected as a fallback (保底) so the file always has at least one
+    section — but selection stops immediately, preventing further
+    clusters from being added.
+
+    The size estimate uses a rough heuristic of 60 characters per line
+    (matching the original engine.py logic).
+
+    This fixes issue #31: previously the first cluster was
+    unconditionally admitted regardless of budget.
+    """
+    selected_clusters: list[FileCluster] = []
+    projected = 0
+    for cluster in ranked_clusters:
+        est = (cluster.end_line - cluster.start_line + 1) * 60
+        if projected + est <= file_budget:
+            selected_clusters.append(cluster)
+            projected += est
+        elif not selected_clusters:
+            # Fallback: at least one cluster is selected, but stop here
+            selected_clusters.append(cluster)
+            projected += est
+            break
+        else:
+            break
+    return selected_clusters
+
+
 def score_files(
     subgraph: Subgraph,
     named_node_ids: set[str],

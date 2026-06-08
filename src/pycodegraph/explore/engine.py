@@ -14,12 +14,12 @@ from ..types import (
 )
 from .blast_radius import compute_blast_radius
 from .clustering import (
-    FileCluster,
     cluster_nodes_in_file,
     extract_source_with_line_numbers,
     extract_whole_file,
     get_file_language,
     score_files,
+    select_clusters_within_budget,
     select_files,
 )
 from .flow import find_flow_chain, format_flow_chain
@@ -324,14 +324,7 @@ class ExploreEngine:
                     max(0, budget.max_output_chars - total_chars - 200),
                 )
 
-                selected_clusters: list[FileCluster] = []
-                projected = 0
-                for cluster in ranked:
-                    # Rough size estimate
-                    est = (cluster.end_line - cluster.start_line + 1) * 60
-                    if not selected_clusters or projected + est <= file_budget:
-                        selected_clusters.append(cluster)
-                        projected += est
+                selected_clusters = select_clusters_within_budget(ranked, file_budget)
 
                 source = extract_source_with_line_numbers(
                     self._file_provider, file_path, selected_clusters

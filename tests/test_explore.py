@@ -214,6 +214,87 @@ class TestExploreOutput:
             cg.close()
 
 
+class TestExploreBudgetEnforcement:
+    """Integration tests for file_budget enforcement in cluster selection (issue #31)."""
+
+    def _write_project(self, tmp_path, files: dict[str, str]) -> str:
+        """Write a set of {relative_path: content} files under tmp_path."""
+        from pathlib import Path as P
+
+        root = str(tmp_path)
+        for rel, content in files.items():
+            p = P(root) / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+        return root
+
+    def test_explore_oversized_cluster_does_not_exceed_budget(self, tmp_path):
+        """When a single cluster far exceeds file_budget, it is kept as
+        fallback but the output should not grow unboundedly (issue #31)."""
+        # Create a file with one huge class spanning many lines
+        big_class_lines = [
+            "class BigService:",
+            "    def __init__(self):",
+            "        self.data = []",
+        ]
+        # Add many methods to inflate the class
+        for i in range(80):
+            big_class_lines.append(f"    def method_{i}(self):")
+            big_class_lines.append(f"        return {i}")
+        big_class_lines.append("")  # trailing newline
+
+        root = self._write_project(
+            tmp_path,
+            {
+                "src/service.py": "\n".join(big_class_lines),
+                "src/main.py": "from service import BigService\n\ndef run():\n    s = BigService()\n    return s.method_0()\n",
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            # Very small per-file budget
+            result = cg.explore(
+                "BigService",
+                ExploreOptions(max_chars_per_file=500, max_output_chars=2000),
+            )
+            assert isinstance(result, str)
+            # The output should stay within hard ceiling
+            assert len(result) <= 3000  # hard ceiling is 1.5 * 2000 = 3000
+        finally:
+            cg.close()
+
+    def test_explore_budget_not_violated_by_first_cluster(self, tmp_path):
+        """Even with a tight budget, explore should produce output that
+        respects the hard ceiling — the first oversized cluster should not
+        cause the output to balloon (issue #31)."""
+        # Create a file with a single large function
+        lines = ["def huge_function():", "    x = 1"]
+        for i in range(200):
+            lines.append(f"    y_{i} = x + {i}")
+        lines.append("    return x")
+        lines.append("")
+
+        root = self._write_project(
+            tmp_path,
+            {
+                "src/large.py": "\n".join(lines),
+                "src/caller.py": "from large import huge_function\n\ndef call_it():\n    return huge_function()\n",
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            result = cg.explore(
+                "huge_function",
+                ExploreOptions(max_output_chars=1500),
+            )
+            # Hard ceiling: min(1.5 * 1500, 25000) = 2250
+            assert len(result) <= 2250
+        finally:
+            cg.close()
+
+
 class TestSeedingTestFilter:
     """Test that seed_named_symbols filters out test-file candidates."""
 
