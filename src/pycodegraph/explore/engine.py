@@ -344,6 +344,17 @@ class ExploreEngine:
                 for c in selected_clusters:
                     all_symbols.extend(c.symbols)
 
+                # Re-add filtered envelope nodes that are named/entry symbols
+                # so they appear in the output header (e.g., the class name
+                # the user searched for), even though their line span was too
+                # large to include in clustering.
+                cluster_symbol_ids = {s.id for s in all_symbols}
+                for n in file_nodes:
+                    if n.id not in cluster_symbol_ids and (
+                        n.id in entry_node_ids or n.id in named_node_ids
+                    ):
+                        all_symbols.append(n)
+
                 section = format_source_section(
                     file_path,
                     all_symbols,
@@ -353,7 +364,8 @@ class ExploreEngine:
                 )
 
                 is_necessary = any(
-                    n.id in entry_node_ids or n.id in named_node_ids for n in file_nodes
+                    n.id in entry_node_ids or n.id in named_node_ids
+                    for n in all_symbols
                 )
                 if (
                     not is_necessary
