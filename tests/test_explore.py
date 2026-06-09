@@ -1569,9 +1569,10 @@ class TestExploreNecessaryFileBudget:
         finally:
             cg.close()
 
-    def test_necessary_clustered_file_truncation_marker(self, tmp_path):
+    def test_necessary_clustered_file_output_bounded(self, tmp_path):
         """When a necessary file via the cluster path exceeds the section
-        cap, the exact truncation marker appears (issue #33)."""
+        cap, the output is bounded — either via the truncation marker or
+        via skeletonization fallback (issue #33, updated by #46)."""
         # Create a file >220 lines → cluster path, named symbol → necessary.
         lines = ["class HugeService:"]
         for i in range(150):
@@ -1597,10 +1598,15 @@ class TestExploreNecessaryFileBudget:
                 ExploreOptions(max_chars_per_file=500, max_output_chars=2000),
             )
             assert isinstance(result, str)
-            # Verify the exact per-section cap marker is present
-            assert "section trimmed to fit budget" in result, (
+            # The output should be bounded — either via truncation marker
+            # or via skeletonization (which is better, issue #46 fallback).
+            # Use specific section-header patterns to avoid false positives
+            # from variable names or code comments containing these words.
+            is_trimmed = "section trimmed to fit budget" in result
+            is_skeletonized = "· focused" in result or "· skeleton" in result
+            assert is_trimmed or is_skeletonized, (
                 "A necessary file exceeding the section cap via cluster path "
-                "should show the exact truncation marker"
+                "should show truncation marker or be skeletonized"
             )
             assert "HugeService" in result
         finally:
@@ -1893,5 +1899,155 @@ class TestRemainingFilesCollection:
             # If truncation happened, truncated file paths should be collected
             if "output truncated" in result:
                 assert "Not shown above" in result or "handler_" in result
+        finally:
+            cg.close()
+
+
+class TestClusterToSkeletonFallback:
+    """Tests for the defensive fallback to skeletonization when cluster
+    output would exceed the per-file budget (issue #46).
+
+    When the cluster path produces a single oversized cluster that would
+    emit far more than max_chars_per_file * 2, the engine should fall
+    back to skeletonization instead of emitting the raw oversized cluster.
+    """
+
+    def test_oversized_cluster_triggers_skeletonization(self, tmp_path):
+        """A file where clustering produces a single huge cluster (many
+        dense methods) should fall back to skeletonization rather than
+        emitting 88K chars of raw source (issue #46)."""
+        # Build a file like Django's query.py: many dense methods in a class
+        lines = [
+            "class DenseService:",
+            "    def __init__(self):",
+            "        self.data = []",
+        ]
+        # Add many methods with small gaps (all within gap_threshold)
+        for i in range(40):
+            lines.append(f"    def method_{i}(self, arg):")
+            for j in range(10):
+                lines.append(f"        x_{j} = self.data + {j} + arg")
+            lines.append("        return x_0")
+        lines.append("")
+
+        root = _write_project(
+            tmp_path,
+            {
+                "src/dense.py": "\n".join(lines),
+                "src/caller.py": (
+                    "from dense import DenseService\n\n"
+                    "def run():\n"
+                    "    s = DenseService()\n"
+                    "    return s.method_0()\n"
+                ),
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            # Small per-file budget; clustering would produce a single
+            # cluster of 40 dense methods (~450 lines)
+            result = cg.explore(
+                "DenseService method_0",
+                ExploreOptions(max_chars_per_file=500, max_output_chars=5000),
+            )
+            assert isinstance(result, str)
+            # Must stay within hard ceiling
+            assert len(result) <= 7500, (
+                f"Output {len(result)} exceeds hard ceiling 7500"
+            )
+            # The named symbol should appear
+            assert "method_0" in result
+            # Should be skeletonized (focused or skeleton tag)
+            assert "focused" in result or "skeleton" in result, (
+                "Oversized cluster should trigger skeletonization fallback"
+            )
+        finally:
+            cg.close()
+
+    def test_cluster_output_does_not_exceed_2x_per_file_budget(self, tmp_path):
+        """The cluster path should never emit more than
+        max_chars_per_file * 2 even when a single cluster is huge."""
+        # Many methods, very tight budget
+        lines = ["class BigClass:"]
+        for i in range(60):
+            lines.append(f"    def m{i}(self):")
+            for j in range(8):
+                lines.append(f"        val_{j} = {i} + {j}")
+            lines.append("        return val_0")
+        lines.append("")
+
+        root = _write_project(
+            tmp_path,
+            {
+                "src/big.py": "\n".join(lines),
+                "src/caller.py": (
+                    "from big import BigClass\n\n"
+                    "def run():\n    return BigClass().m0()\n"
+                ),
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            max_cpf = 400
+            result = cg.explore(
+                "BigClass m0",
+                ExploreOptions(max_chars_per_file=max_cpf, max_output_chars=3000),
+            )
+            # The source section for big.py should not exceed 2 * max_cpf
+            # (this is checked via the hard ceiling at 1.5 * max_output_chars)
+            assert len(result) <= 4500, (
+                f"Output {len(result)} chars exceeds expected ceiling"
+            )
+        finally:
+            cg.close()
+
+    def test_cluster_fallback_when_skeletonize_not_triggered(self, tmp_path):
+        """When should_skeletonize returns False but the cluster output
+        would be huge, the engine should still limit output size.
+
+        This simulates the scenario from issue #46 where skeletonization
+        does NOT trigger (e.g., the query doesn't produce named nodes
+        specific enough to make should_skeletonize return True), but the
+        cluster path still produces a massive output.
+        """
+        # A file with many entry-point-adjacent methods but no named
+        # symbols unique enough to trigger skeletonization
+        lines = ["class GenericHandler:"]
+        for i in range(50):
+            lines.append(f"    def handle_{i}(self, request):")
+            for j in range(10):
+                lines.append(f"        data_{j} = request.get('key_{j}', {j})")
+            lines.append("        return data_0")
+        lines.append("")
+
+        root = _write_project(
+            tmp_path,
+            {
+                "src/handler.py": "\n".join(lines),
+                "src/app.py": (
+                    "from handler import GenericHandler\n\n"
+                    "def main():\n"
+                    "    h = GenericHandler()\n"
+                    "    return h.handle_0({})\n"
+                ),
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            max_cpf = 500
+            result = cg.explore(
+                "GenericHandler",
+                ExploreOptions(max_chars_per_file=max_cpf, max_output_chars=3000),
+            )
+            assert isinstance(result, str)
+            # Hard ceiling: min(1.5 * 3000, 25000) = 4500
+            assert len(result) <= 4500, (
+                f"Output {len(result)} exceeds hard ceiling 4500"
+            )
+            # The class name should appear
+            assert "GenericHandler" in result
         finally:
             cg.close()

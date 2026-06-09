@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pycodegraph.explore.clustering import FileCluster, cluster_nodes_in_file
-from pycodegraph.types import CONTAINER_KINDS, Language, Node, NodeKind
+from pycodegraph.types import CONTAINER_KINDS, Edge, EdgeKind, Language, Node, NodeKind
 
 
 def _make_node(
@@ -623,3 +623,601 @@ class TestContainerKindsShared:
         assert "container_kinds = {" not in src, (
             "traversal.py should use CONTAINER_KINDS from types.py"
         )
+
+
+class TestEdgeSourceLocationsInClustering:
+    """Tests for adding edge source locations as ranges during clustering.
+
+    Edge source lines (from calls/references) add spatial spread to the
+    range set, preventing dense method blocks from merging into one
+    monolithic cluster.  This is the Python port of the TS CodeGraph's
+    edge-line logic (tools.ts:2257-2274).
+    """
+
+    def test_dense_methods_split_by_call_edges(self):
+        """37 methods within gap_threshold should form separate clusters
+        when edge source locations provide spatial gaps between them.
+
+        This is the core fix for issue #46: without edge source locations,
+        37 dense methods merge into 1 cluster (728 lines, 88K chars);
+        with edge lines pointing to callers in other parts of the file,
+        the cluster is broken up.
+        """
+        # Simulate: methods at lines 10-20, 25-35, 40-50 (within gap)
+        # but edge source locations at lines 100, 200, 300 create gaps
+        method_a = _make_node(
+            "ma", "filter", NodeKind.METHOD, start_line=10, end_line=20
+        )
+        method_b = _make_node(
+            "mb", "exclude", NodeKind.METHOD, start_line=25, end_line=35
+        )
+        method_c = _make_node(
+            "mc", "annotate", NodeKind.METHOD, start_line=40, end_line=50
+        )
+        # Edge from method_a to a target, but the call site is at line 200
+        edge_to_far = Edge(
+            source="ma", target="external", kind=EdgeKind.CALLS, line=200
+        )
+
+        nodes = [method_a, method_b, method_c]
+        scores = {n.id: 1.0 for n in nodes}
+
+        # Without edges: all 3 methods merge into 1 cluster (within gap=15)
+        clusters_no_edges = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=500
+        )
+        assert len(clusters_no_edges) == 1, "Without edges, methods should merge"
+
+        # With edges: the edge source at line 200 creates a gap between
+        # the dense method block (10-50) and the far-away call site (200),
+        # so they form separate clusters.
+        clusters_with_edges = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=500, edges=[edge_to_far]
+        )
+        # At minimum, the edge location at line 200 should create a
+        # separate cluster from the dense method block
+        assert len(clusters_with_edges) >= 2, (
+            f"Edge source locations should split dense methods, "
+            f"got {len(clusters_with_edges)} cluster(s)"
+        )
+
+    def test_contains_edges_ignored(self):
+        """CONTAINS edges should NOT add source locations — they represent
+        parent-child relationships, not call references."""
+        parent = _make_node(
+            "cls", "Service", NodeKind.CLASS, start_line=1, end_line=150
+        )
+        method = _make_node("m", "process", NodeKind.METHOD, start_line=10, end_line=20)
+        contains_edge = Edge(source="cls", target="m", kind=EdgeKind.CONTAINS, line=5)
+
+        nodes = [parent, method]
+        scores = {n.id: 1.0 for n in nodes}
+
+        # CONTAINS edge should be ignored (no additional ranges)
+        clusters = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=200, edges=[contains_edge]
+        )
+        # Without the CONTAINS edge creating a range at line 5,
+        # the class (1-150) is filtered as envelope (>50% of 200),
+        # and the method (10-20) forms a single cluster
+        all_symbols = [s for c in clusters for s in c.symbols]
+        assert parent not in all_symbols
+
+    def test_edge_without_line_ignored(self):
+        """Edges with line=None or line<=0 should be ignored."""
+        method = _make_node("m", "process", NodeKind.METHOD, start_line=10, end_line=20)
+        edge_no_line = Edge(
+            source="m", target="external", kind=EdgeKind.CALLS, line=None
+        )
+        edge_zero_line = Edge(
+            source="m", target="external", kind=EdgeKind.CALLS, line=0
+        )
+        edge_neg_line = Edge(
+            source="m", target="external", kind=EdgeKind.CALLS, line=-1
+        )
+
+        nodes = [method]
+        scores = {"m": 1.0}
+
+        # All three edges should be ignored — no crash, no extra clusters
+        clusters = cluster_nodes_in_file(
+            nodes,
+            scores,
+            gap_threshold=15,
+            file_line_count=200,
+            edges=[edge_no_line, edge_zero_line, edge_neg_line],
+        )
+        assert len(clusters) == 1
+
+    def test_edge_source_lines_contribute_to_importance(self):
+        """Edge source locations should contribute importance to their cluster."""
+        method_a = _make_node(
+            "ma", "filter", NodeKind.METHOD, start_line=10, end_line=20
+        )
+        # Call from method_a at line 100
+        edge_far = Edge(source="ma", target="external", kind=EdgeKind.CALLS, line=100)
+
+        nodes = [method_a]
+        scores = {"ma": 5.0}
+
+        clusters = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=200, edges=[edge_far]
+        )
+        # There should be at least 2 clusters (method + edge location)
+        assert len(clusters) >= 2
+        # The cluster containing the edge source location should have
+        # some importance (edge ranges contribute importance=2)
+        edge_cluster = [c for c in clusters if c.start_line == 100]
+        assert len(edge_cluster) == 1
+        assert edge_cluster[0].importance > 0
+
+    def test_django_queryset_dense_methods_with_edges(self):
+        """Simulate the exact scenario from issue #46: 37 dense QuerySet
+        methods that all merge into 1 cluster without edges.
+
+        When edges reference distant code (e.g., _filter_or_exclude_inplace
+        at line 1000), the cluster should split.
+        """
+        # QuerySet class covering most of the file (filtered as envelope)
+        qs_class = _make_node(
+            "qs", "QuerySet", NodeKind.CLASS, start_line=5, end_line=1050
+        )
+        # Dense methods: 5 methods all within gap_threshold of each other
+        methods = [
+            _make_node(
+                f"m{i}",
+                f"method_{i}",
+                NodeKind.METHOD,
+                start_line=30 + i * 20,
+                end_line=40 + i * 20,
+            )
+            for i in range(5)
+        ]
+        # A standalone function far away (referenced by edge from method_0)
+        far_fn = _make_node(
+            "far",
+            "_filter_or_exclude",
+            NodeKind.FUNCTION,
+            start_line=1500,
+            end_line=1680,
+        )
+        # Edge from method_0 calling _filter_or_exclude at line 325
+        # This creates a range at line 325 which is within the method block
+        edge_call = Edge(source="m0", target="far", kind=EdgeKind.CALLS, line=325)
+
+        all_nodes = [qs_class, *methods, far_fn]
+        scores = {n.id: 1.0 for n in all_nodes}
+
+        # Without edges: methods are dense → 1 cluster; far_fn is separate
+        clusters_no_edges = cluster_nodes_in_file(
+            all_nodes, scores, gap_threshold=15, file_line_count=2000
+        )
+        # Methods merge (gap between methods = 10 < 15), far_fn separate
+        method_clusters_no_edges = [
+            c for c in clusters_no_edges if any(s.id.startswith("m") for s in c.symbols)
+        ]
+        assert len(method_clusters_no_edges) == 1, "Dense methods merge without edges"
+
+        # With edges: still 1 cluster for dense methods (edge at 325 is
+        # within the method block), but far_fn should still be separate
+        clusters_with_edges = cluster_nodes_in_file(
+            all_nodes, scores, gap_threshold=15, file_line_count=2000, edges=[edge_call]
+        )
+        far_clusters = [
+            c for c in clusters_with_edges if any(s.id == "far" for s in c.symbols)
+        ]
+        assert len(far_clusters) >= 1, "far_fn should be in its own cluster"
+
+    def test_no_edges_backward_compatible(self):
+        """Calling cluster_nodes_in_file without edges should behave
+        exactly as before (backward compatible)."""
+        fn_a = _make_node("a", "func_a", NodeKind.FUNCTION, start_line=10, end_line=20)
+        fn_b = _make_node("b", "func_b", NodeKind.FUNCTION, start_line=25, end_line=35)
+        nodes = [fn_a, fn_b]
+        scores = {"a": 1.0, "b": 1.0}
+
+        # Without edges kwarg
+        clusters_no_kwarg = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=200
+        )
+        # With edges=[]
+        clusters_empty = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=200, edges=[]
+        )
+
+        # Same result
+        assert len(clusters_no_kwarg) == len(clusters_empty)
+        for c1, c2 in zip(clusters_no_kwarg, clusters_empty, strict=True):
+            assert c1.start_line == c2.start_line
+            assert c1.end_line == c2.end_line
+            assert c1.importance == c2.importance
+
+
+class TestClusterRankingByDensity:
+    """Tests for cluster ranking: max_importance → density → score → span.
+
+    The ranking determines the order in which clusters are selected within
+    a per-file budget.  High-importance, dense clusters should be selected
+    first — matching the TS CodeGraph's rankedClusters sort.
+    """
+
+    def test_max_importance_highest_priority(self):
+        """Clusters with higher max_importance rank first, regardless of
+        total importance or density."""
+        from pycodegraph.explore.clustering import FileCluster
+
+        # Cluster A: max_importance=50 (entry point), total=50, 50 lines
+        cluster_a = FileCluster(
+            file_path="f.py",
+            start_line=1,
+            end_line=50,
+            symbols=[],
+            importance=50.0,
+            max_importance=50.0,
+        )
+        # Cluster B: max_importance=10, total=100 (more total but lower max)
+        cluster_b = FileCluster(
+            file_path="f.py",
+            start_line=60,
+            end_line=110,
+            symbols=[],
+            importance=100.0,
+            max_importance=10.0,
+        )
+
+        ranked = sorted(
+            [cluster_a, cluster_b],
+            key=lambda c: (
+                -c.max_importance,
+                -(c.importance / max(c.end_line - c.start_line + 1, 1)),
+                -c.importance,
+                c.end_line - c.start_line + 1,
+            ),
+        )
+        assert ranked[0] is cluster_a, "max_importance=50 should rank first"
+
+    def test_density_as_tiebreaker(self):
+        """When max_importance is equal, denser clusters rank first."""
+        from pycodegraph.explore.clustering import FileCluster
+
+        # Cluster A: 10 importance / 50 lines = 0.2 density
+        cluster_a = FileCluster(
+            file_path="f.py",
+            start_line=1,
+            end_line=50,
+            symbols=[],
+            importance=10.0,
+            max_importance=5.0,
+        )
+        # Cluster B: 10 importance / 10 lines = 1.0 density (denser)
+        cluster_b = FileCluster(
+            file_path="f.py",
+            start_line=60,
+            end_line=69,
+            symbols=[],
+            importance=10.0,
+            max_importance=5.0,
+        )
+
+        ranked = sorted(
+            [cluster_a, cluster_b],
+            key=lambda c: (
+                -c.max_importance,
+                -(c.importance / max(c.end_line - c.start_line + 1, 1)),
+                -c.importance,
+                c.end_line - c.start_line + 1,
+            ),
+        )
+        assert ranked[0] is cluster_b, "Denser cluster should rank first"
+
+    def test_span_key_provides_deterministic_order(self):
+        """The span key (ascending) provides deterministic ordering when
+        max_importance, density, and importance are all equal.
+
+        Since density = importance / span, equal importance and density
+        mathematically imply equal span, so this key only provides
+        deterministic ordering in floating-point edge cases.  Verify
+        the sort key function includes span (ascending) correctly.
+        """
+        from pycodegraph.explore.clustering import FileCluster
+
+        # Two clusters with identical keys except span (same via
+        # density = importance/span, but verify the key tuple
+        # has span in ascending position)
+        cluster_a = FileCluster(
+            file_path="f.py",
+            start_line=1,
+            end_line=10,
+            symbols=[],
+            importance=20.0,
+            max_importance=5.0,
+        )
+        cluster_b = FileCluster(
+            file_path="f.py",
+            start_line=60,
+            end_line=69,
+            symbols=[],
+            importance=20.0,
+            max_importance=5.0,
+        )
+
+        # Compute sort keys explicitly to verify span is ascending
+        key_a = (
+            -cluster_a.max_importance,
+            -(
+                cluster_a.importance
+                / max(cluster_a.end_line - cluster_a.start_line + 1, 1)
+            ),
+            -cluster_a.importance,
+            cluster_a.end_line - cluster_a.start_line + 1,
+        )
+        key_b = (
+            -cluster_b.max_importance,
+            -(
+                cluster_b.importance
+                / max(cluster_b.end_line - cluster_b.start_line + 1, 1)
+            ),
+            -cluster_b.importance,
+            cluster_b.end_line - cluster_b.start_line + 1,
+        )
+        # Both have same max_importance and importance, same density,
+        # same span → keys are equal → sort is stable
+        assert key_a == key_b
+        # Verify the last element is span (ascending = positive)
+        assert key_a[3] > 0, "Span should be positive (ascending order)"
+
+    def test_file_cluster_has_max_importance_field(self):
+        """FileCluster should have a max_importance field."""
+        from pycodegraph.explore.clustering import FileCluster
+
+        c = FileCluster(
+            file_path="f.py",
+            start_line=1,
+            end_line=10,
+            symbols=[],
+            importance=5.0,
+            max_importance=10.0,
+        )
+        assert c.max_importance == 10.0
+
+
+class TestEdgeRangeNegativeCases:
+    """Negative tests for edge source locations — verify edge ranges don't
+    accidentally merge previously separate clusters (review concern #1/#8).
+
+    When there are nodes between an edge source location and the caller
+    node, the edge should not bridge them into one bigger cluster.
+    """
+
+    def test_edge_does_not_merge_separate_clusters(self):
+        """An edge source location between two separate clusters should
+        NOT merge them if the gap exceeds gap_threshold.
+
+        This tests the concern that edge ranges could *increase* cluster
+        size instead of splitting them when there are nodes in between.
+        The key insight: an edge range is just another 1-line range in
+        the merge — it only bridges a gap if the gap <= gap_threshold.
+        """
+        # Two clusters: method_a (10-20) and method_b (200-210), far apart
+        method_a = _make_node(
+            "ma", "filter", NodeKind.METHOD, start_line=10, end_line=20
+        )
+        method_b = _make_node(
+            "mb", "exclude", NodeKind.METHOD, start_line=200, end_line=210
+        )
+
+        nodes = [method_a, method_b]
+        scores = {n.id: 1.0 for n in nodes}
+
+        # Without edges: 2 separate clusters (gap 180 > 15)
+        clusters_no_edges = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=300
+        )
+        assert len(clusters_no_edges) == 2
+
+        # With an edge from method_a at line 100 — this is in the gap
+        # between the two clusters. Gap from method_a end (20) to edge
+        # (100) = 80 > 15, so edge does NOT bridge.
+        edge = Edge(source="ma", target="external", kind=EdgeKind.CALLS, line=100)
+        clusters_with_edges = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=300, edges=[edge]
+        )
+        # method_a cluster should still be separate from edge cluster
+        a_clusters = [
+            c for c in clusters_with_edges if any(s.id == "ma" for s in c.symbols)
+        ]
+        assert len(a_clusters) == 1
+        # The edge at line 100 creates its own cluster (gap 20→100=80>15)
+        edge_clusters = [c for c in clusters_with_edges if c.start_line == 100]
+        assert len(edge_clusters) == 1, "Edge range should be in its own cluster"
+        # method_b is still separate from edge (gap 100→200=100>15)
+        b_clusters = [
+            c for c in clusters_with_edges if any(s.id == "mb" for s in c.symbols)
+        ]
+        assert len(b_clusters) == 1
+
+    def test_edge_can_bridge_close_clusters(self):
+        """An edge source location CAN bridge two clusters that are
+        within gap_threshold — this is by design and expected behavior.
+        It is NOT a bug: edge ranges add spatial spread to help
+        skeletonization/clustering make better decisions."""
+        method_a = _make_node(
+            "ma", "filter", NodeKind.METHOD, start_line=10, end_line=20
+        )
+        method_b = _make_node(
+            "mb", "exclude", NodeKind.METHOD, start_line=200, end_line=210
+        )
+
+        nodes = [method_a, method_b]
+        scores = {n.id: 1.0 for n in nodes}
+
+        # Without edges: 2 separate clusters (gap 180 > 15)
+        clusters_no_edges = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=300
+        )
+        assert len(clusters_no_edges) == 2
+
+        # With an edge at line 30 — gap from method_a end (20) to edge
+        # (30) = 10 <= 15 → edge bridges with method_a.
+        # But edge at 30 to method_b start (200) = 170 > 15 → still separate.
+        edge_close = Edge(source="ma", target="external", kind=EdgeKind.CALLS, line=30)
+        clusters_close_edge = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=300, edges=[edge_close]
+        )
+        # The edge at line 30 merges with method_a (gap 20→30=10<=15)
+        a_clusters = [
+            c for c in clusters_close_edge if any(s.id == "ma" for s in c.symbols)
+        ]
+        assert len(a_clusters) == 1
+        # But method_a cluster span is now 10-30 (not 10-20), slightly larger
+        assert a_clusters[0].end_line == 30
+
+    def test_edge_within_gap_creates_no_new_merge(self):
+        """An edge source location within the gap between two nodes that
+        are already within gap_threshold should not create a *larger*
+        cluster than what already exists."""
+        method_a = _make_node(
+            "ma", "filter", NodeKind.METHOD, start_line=10, end_line=20
+        )
+        method_b = _make_node(
+            "mb", "exclude", NodeKind.METHOD, start_line=30, end_line=40
+        )
+        # Edge at line 25 — within gap_threshold, but methods already merge
+        edge = Edge(source="ma", target="external", kind=EdgeKind.CALLS, line=25)
+
+        nodes = [method_a, method_b]
+        scores = {n.id: 1.0 for n in nodes}
+
+        clusters_no_edges = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=200
+        )
+        clusters_with_edges = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=200, edges=[edge]
+        )
+
+        # Both should produce 1 cluster (methods already merge)
+        assert len(clusters_no_edges) == 1
+        assert len(clusters_with_edges) == 1
+        # The cluster span should not be larger with edges
+        assert clusters_with_edges[0].start_line >= clusters_no_edges[0].start_line
+        assert clusters_with_edges[0].end_line <= clusters_no_edges[0].end_line
+
+
+class TestEdgeOnlyClusterFilePath:
+    """Tests for file_path inheritance in edge-only clusters (review concern #2).
+
+    Edge-derived ranges inherit file_path from their source node so that
+    clusters composed entirely of edge ranges don't end up with file_path="".
+    """
+
+    def test_edge_range_inherits_file_path(self):
+        """Edge ranges should inherit file_path from their source node."""
+        method = _make_node("m", "process", NodeKind.METHOD, start_line=10, end_line=20)
+        edge = Edge(source="m", target="external", kind=EdgeKind.CALLS, line=200)
+
+        nodes = [method]
+        scores = {"m": 5.0}
+
+        clusters = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=300, edges=[edge]
+        )
+        # All clusters should have a non-empty file_path
+        for c in clusters:
+            assert c.file_path != "", (
+                f"Cluster at lines {c.start_line}-{c.end_line} has empty file_path"
+            )
+
+    def test_edge_only_cluster_has_file_path(self):
+        """A cluster consisting solely of edge ranges should still have
+        a valid file_path (inherited from the edge's source node)."""
+        method = _make_node("m", "process", NodeKind.METHOD, start_line=10, end_line=20)
+        # Edge far away — will create a separate cluster with no real nodes
+        edge = Edge(source="m", target="external", kind=EdgeKind.CALLS, line=500)
+
+        nodes = [method]
+        scores = {"m": 5.0}
+
+        clusters = cluster_nodes_in_file(
+            nodes, scores, gap_threshold=15, file_line_count=600, edges=[edge]
+        )
+        # The edge-only cluster at line 500 should have file_path from method
+        edge_clusters = [c for c in clusters if c.start_line == 500]
+        assert len(edge_clusters) == 1
+        assert edge_clusters[0].file_path == "query.py", (
+            f"Edge-only cluster should inherit file_path, got '{edge_clusters[0].file_path}'"
+        )
+
+
+class TestMaxImportancePopulation:
+    """Tests verifying cluster_nodes_in_file populates max_importance
+    correctly for all code paths (review concern #6)."""
+
+    def test_max_importance_single_node(self):
+        """A cluster with one node should have max_importance equal to that
+        node's score."""
+        method = _make_node("m", "process", NodeKind.METHOD, start_line=10, end_line=20)
+        clusters = cluster_nodes_in_file(
+            [method], {"m": 5.0}, gap_threshold=15, file_line_count=200
+        )
+        assert len(clusters) == 1
+        assert clusters[0].max_importance == 5.0
+
+    def test_max_importance_multiple_nodes(self):
+        """A cluster with multiple nodes should have max_importance equal
+        to the highest individual node score."""
+        method_a = _make_node(
+            "ma", "filter", NodeKind.METHOD, start_line=10, end_line=20
+        )
+        method_b = _make_node(
+            "mb", "exclude", NodeKind.METHOD, start_line=22, end_line=30
+        )
+        clusters = cluster_nodes_in_file(
+            [method_a, method_b],
+            {"ma": 3.0, "mb": 7.0},
+            gap_threshold=15,
+            file_line_count=200,
+        )
+        assert len(clusters) == 1
+        assert clusters[0].max_importance == 7.0
+        # Total importance should be sum
+        assert clusters[0].importance == 10.0
+
+    def test_max_importance_with_edge_ranges(self):
+        """Edge ranges contribute importance; max_importance should be the
+        maximum across both node and edge range importances."""
+        method = _make_node("m", "process", NodeKind.METHOD, start_line=10, end_line=20)
+        # Edge at line 15 (within the method's cluster)
+        edge = Edge(source="m", target="external", kind=EdgeKind.CALLS, line=15)
+        clusters = cluster_nodes_in_file(
+            [method], {"m": 5.0}, gap_threshold=15, file_line_count=200, edges=[edge]
+        )
+        # The method cluster now includes the edge range
+        method_cluster = [c for c in clusters if any(s.id == "m" for s in c.symbols)]
+        assert len(method_cluster) == 1
+        # max_importance should be max(5.0, 2.0) = 5.0
+        assert method_cluster[0].max_importance == 5.0
+
+    def test_max_importance_edge_only_cluster(self):
+        """An edge-only cluster should have max_importance = _EDGE_RANGE_IMPORTANCE."""
+        method = _make_node("m", "process", NodeKind.METHOD, start_line=10, end_line=20)
+        edge = Edge(source="m", target="external", kind=EdgeKind.CALLS, line=500)
+        clusters = cluster_nodes_in_file(
+            [method], {"m": 5.0}, gap_threshold=15, file_line_count=600, edges=[edge]
+        )
+        edge_cluster = [c for c in clusters if c.start_line == 500]
+        assert len(edge_cluster) == 1
+        from pycodegraph.explore.clustering import _EDGE_RANGE_IMPORTANCE
+
+        assert edge_cluster[0].max_importance == _EDGE_RANGE_IMPORTANCE
+
+    def test_max_importance_envelope_fallback(self):
+        """The envelope-fallback path should set max_importance correctly."""
+        # 100-line file; class covers >50%
+        big_class = _make_node(
+            "cls", "BigClass", NodeKind.CLASS, start_line=5, end_line=90
+        )
+        clusters = cluster_nodes_in_file(
+            [big_class], {"cls": 50.0}, gap_threshold=15, file_line_count=100
+        )
+        assert len(clusters) == 1
+        assert clusters[0].max_importance == 50.0

@@ -17,6 +17,7 @@ from ..types import (
 from .blast_radius import compute_blast_radius
 from .budget import format_budget_note, get_explore_budget
 from .clustering import (
+    _CHARS_PER_LINE_ESTIMATE,
     cluster_nodes_in_file,
     extract_source_with_line_numbers,
     extract_whole_file,
@@ -55,6 +56,10 @@ _WHOLE_FILE_MAX_CHARS_FACTOR = 3  # x max_chars_per_file
 # consume the entire output budget.  Mirrors TS CodeGraph's bodyCap.
 _NECESSARY_FILE_SECTION_FACTOR = 1.5  # x max_chars_per_file
 
+# When the sole selected cluster is estimated to exceed this multiple
+# of max_chars_per_file, fall back to skeletonization (issue #46).
+_OVERSIZED_CLUSTER_FACTOR = 2
+
 
 def _cap_necessary_section(
     section: str, is_necessary: bool, max_chars_per_file: int
@@ -80,6 +85,57 @@ def _cap_necessary_section(
     # full bodies for spine/named symbols, signatures for the rest.
     trimmed = section[: max(0, necessary_section_cap - len(trunc_msg))] + trunc_msg
     return trimmed, True
+
+
+def _append_skeletonized_section(
+    file_path: str,
+    file_nodes: list[Node],
+    file_lines: list[str],
+    path_node_ids: set[str],
+    named_node_ids: set[str],
+    unique_named_node_ids: set[str],
+    entry_node_ids: set[str],
+    max_chars_per_file: int,
+    lang: str,
+    max_symbols_in_header: int,
+    total_chars: int,
+    max_output_chars: int,
+) -> tuple[str, int, int, bool] | None:
+    """Render a skeletonized section and return (section, chars, files_count, trimmed).
+
+    Returns None if skeletonization produces nothing or the section
+    would exceed the 90% global cap for non-necessary files.
+    Shared by the primary skeletonization path and the defensive
+    cluster fallback (issue #46).
+    """
+    source, tag = render_skeletonized(
+        file_nodes,
+        file_lines,
+        path_node_ids,
+        named_node_ids,
+        unique_named_node_ids,
+        entry_node_ids,
+        max_chars_per_file,
+    )
+    if not source:
+        return None
+
+    section = format_source_section(
+        file_path,
+        file_nodes,
+        source,
+        lang,
+        max_symbols_in_header,
+        tag=tag,
+    )
+
+    is_necessary = any(
+        n.id in entry_node_ids or n.id in named_node_ids for n in file_nodes
+    )
+    if not is_necessary and total_chars + len(section) > max_output_chars * 0.9:
+        return None  # caller should add to remaining_files + set any_trimmed
+
+    return section, len(section), 1, False
 
 
 class ExploreEngine:
@@ -369,7 +425,8 @@ class ExploreEngine:
                     file_lines,
                     budget.max_chars_per_file,
                 ):
-                    source, tag = render_skeletonized(
+                    result = _append_skeletonized_section(
+                        file_path,
                         file_nodes,
                         file_lines,
                         path_node_ids,
@@ -377,55 +434,92 @@ class ExploreEngine:
                         unique_named_node_ids,
                         entry_node_ids,
                         budget.max_chars_per_file,
-                    )
-                    if not source:
-                        _add_remaining(file_path, file_nodes)
-                        continue
-
-                    section = format_source_section(
-                        file_path,
-                        file_nodes,
-                        source,
                         lang,
                         budget.max_symbols_in_header,
-                        tag=tag,
+                        total_chars,
+                        budget.max_output_chars,
                     )
-
-                    is_necessary = any(
-                        n.id in entry_node_ids or n.id in named_node_ids
-                        for n in file_nodes
-                    )
-                    if (
-                        not is_necessary
-                        and total_chars + len(section) > budget.max_output_chars * 0.9
-                    ):
+                    if result is None:
                         _add_remaining(file_path, file_nodes)
                         any_trimmed = True
                         continue
 
+                    section, sec_chars, sec_files, _ = result
                     lines.append(section)
-                    total_chars += len(section)
-                    files_included += 1
+                    total_chars += sec_chars
+                    files_included += sec_files
                     continue
+                # Filter edges whose source node is in this file
+                # (edge source locations add spatial spread to clustering)
+                file_node_ids = {n.id for n in file_nodes}
+                file_edges = [e for e in subgraph.edges if e.source in file_node_ids]
                 clusters = cluster_nodes_in_file(
                     file_nodes,
                     node_importance,
                     gap_threshold=budget.gap_threshold,
                     file_line_count=file_line_count,
+                    edges=file_edges,
                 )
 
                 if not clusters:
                     _add_remaining(file_path, file_nodes)
                     continue
 
-                # Rank clusters by importance, select within per-file budget
-                ranked = sorted(clusters, key=lambda c: c.importance, reverse=True)
+                # Rank clusters by: max_importance desc, density desc, score desc, span asc
+                # (matches TS CodeGraph's rankedClusters sort)
+                ranked = sorted(
+                    clusters,
+                    key=lambda c: (
+                        -c.max_importance,
+                        -(c.importance / max(c.end_line - c.start_line + 1, 1)),
+                        -c.importance,
+                        c.end_line - c.start_line + 1,
+                    ),
+                )
                 file_budget = min(
                     budget.max_chars_per_file,
                     max(0, budget.max_output_chars - total_chars - 200),
                 )
 
                 selected_clusters = select_clusters_within_budget(ranked, file_budget)
+
+                # ── Defensive fallback (issue #46) ──────────────────────
+                # If the only selected cluster is estimated to produce
+                # output far exceeding the per-file budget (2x), fall back
+                # to skeletonization instead of emitting the raw oversized
+                # cluster.  This prevents a dense method block (e.g., 37
+                # QuerySet methods) from producing 88K chars when the
+                # budget is 6,500.
+                cluster_span = (
+                    selected_clusters[0].end_line - selected_clusters[0].start_line + 1
+                )
+                if (
+                    len(selected_clusters) == 1
+                    and cluster_span * _CHARS_PER_LINE_ESTIMATE
+                    > budget.max_chars_per_file * _OVERSIZED_CLUSTER_FACTOR
+                ):
+                    result = _append_skeletonized_section(
+                        file_path,
+                        file_nodes,
+                        file_lines,
+                        path_node_ids,
+                        named_node_ids,
+                        unique_named_node_ids,
+                        entry_node_ids,
+                        budget.max_chars_per_file,
+                        lang,
+                        budget.max_symbols_in_header,
+                        total_chars,
+                        budget.max_output_chars,
+                    )
+                    if result is not None:
+                        section, sec_chars, sec_files, _ = result
+                        lines.append(section)
+                        total_chars += sec_chars
+                        files_included += sec_files
+                        continue
+                    # If skeletonization produced nothing, fall through
+                    # to the cluster path (it's better than nothing)
 
                 source = extract_source_with_line_numbers(
                     self._file_provider, file_path, selected_clusters
