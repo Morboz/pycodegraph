@@ -291,7 +291,7 @@ class ExploreOptions:
     max_chars_per_file: int | None = None
     include_relationships: bool = True
     include_flow: bool = True
-    include_blast_radius: bool = False
+    include_blast_radius: bool = True
 
 
 @dataclass
