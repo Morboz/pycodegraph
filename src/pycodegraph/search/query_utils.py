@@ -541,10 +541,16 @@ def extract_symbols_from_query(query: str) -> list[str]:
         if len(m.group(1)) >= 2:
             symbols.add(m.group(1))
 
-    # snake_case
-    for m in re.finditer(r"\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b", query, re.IGNORECASE):
+    # snake_case (including underscore-prefixed like _fetch_all)
+    for m in re.finditer(
+        r"\b(_*[a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b", query, re.IGNORECASE
+    ):
         if len(m.group(1)) >= 3:
             symbols.add(m.group(1))
+
+    # __dunder__ (Python double-underscore names like __init__, __str__)
+    for m in re.finditer(r"\b(__[a-z][a-z0-9]*__)\b", query, re.IGNORECASE):
+        symbols.add(m.group(1))
 
     # SCREAMING_SNAKE
     for m in re.finditer(r"\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)\b", query):
@@ -556,9 +562,9 @@ def extract_symbols_from_query(query: str) -> list[str]:
         if m.group(1):
             symbols.add(m.group(1))
 
-    # dot.notation
+    # dot.notation (including underscore-prefixed segments like QuerySet._fetch_all)
     for m in re.finditer(
-        r"\b([a-zA-Z][a-zA-Z0-9]*(?:\.[a-zA-Z][a-zA-Z0-9]*)+)\b", query
+        r"\b([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+)\b", query
     ):
         parts = m.group(1).split(".")
         for part in parts:
