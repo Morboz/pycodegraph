@@ -70,10 +70,16 @@ class ReferenceResolver:
         if not ref.reference_name or len(ref.reference_name) < 2:
             return None
 
-        # IMPORTS refs: resolve to the import node in the same file,
-        # regardless of whether the target module is external.
+        # IMPORTS refs: first try to resolve to the import node in the same file.
+        # If no matching IMPORT node exists (e.g., per-name refs from
+        # "from X import Y"), fall through to import-based resolution so that
+        # the actual target symbol can be found.
         if ref.reference_kind == EdgeKind.IMPORTS:
-            return self._resolve_imports_ref(ref)
+            result = self._resolve_imports_ref(ref)
+            if result:
+                return result
+            # Fall through: per-name IMPORTS refs (from "from X import Y")
+            # are resolved via import mappings, not via IMPORT nodes.
 
         if is_builtin_or_external(ref, self._context.known_names):
             return None

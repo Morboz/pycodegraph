@@ -55,9 +55,49 @@ def _python_extract_import(node: TSNode, source: bytes) -> dict | None:
     if node.type == "import_from_statement":
         module = get_child_by_field(node, "module_name")
         if module:
+            # Collect individual imported names (Y, Z in "from X import Y, Z")
+            # for emitting per-name IMPORTS unresolved references.
+            import_names: list[dict[str, int]] = []
+            module_node = module
+            for i in range(node.named_child_count):
+                child = node.named_child(i)
+                if not child:
+                    continue
+                # Skip the module_name node itself
+                if child == module_node:
+                    continue
+                # Skip wildcard imports
+                if child.type == "wildcard_import":
+                    continue
+                if child.type == "aliased_import":
+                    # "from X import Y as Z" -> use alias "Z"
+                    alias_node = get_child_by_field(child, "alias")
+                    name_node = alias_node or get_child_by_field(child, "name")
+                    if name_node:
+                        raw = get_node_text(name_node, source)
+                        local = raw.split(".")[-1] if "." in raw else raw
+                        import_names.append(
+                            {
+                                "name": local,
+                                "line": name_node.start_point[0] + 1,
+                                "column": name_node.start_point[1],
+                            }
+                        )
+                elif child.type == "dotted_name":
+                    raw = get_node_text(child, source)
+                    local = raw.split(".")[-1] if "." in raw else raw
+                    import_names.append(
+                        {
+                            "name": local,
+                            "line": child.start_point[0] + 1,
+                            "column": child.start_point[1],
+                        }
+                    )
+
             return {
                 "module_name": get_node_text(module, source),
                 "signature": get_node_text(node, source),
+                "import_names": import_names,
             }
     return None
 

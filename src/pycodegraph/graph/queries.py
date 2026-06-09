@@ -105,9 +105,23 @@ class GraphQueryManager:
                 if source and source.file_path != file_path:
                     dependents.add(source.file_path)
 
-        # Node-level imports of exported symbols
+        # Node-level imports of exported symbols.
+        # Python has no explicit export system, so all top-level symbols
+        # (classes, functions, etc.) are implicitly importable.
+        _IMPLICIT_EXPORT_KINDS = frozenset(
+            [
+                NodeKind.CLASS,
+                NodeKind.FUNCTION,
+                NodeKind.VARIABLE,
+                NodeKind.CONSTANT,
+            ]
+        )
         for node in nodes:
-            if node.is_exported:
+            if node.is_exported or (
+                node.language == "python"
+                and node.kind in _IMPLICIT_EXPORT_KINDS
+                and node.kind != NodeKind.FILE
+            ):
                 for edge in self._queries.get_incoming_edges(
                     node.id, [EdgeKind.IMPORTS.value]
                 ):

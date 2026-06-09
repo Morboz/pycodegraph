@@ -1106,6 +1106,20 @@ class TreeSitterExtractor:
                             column=node.start_point[1],
                         )
                     )
+                # Emit per-name IMPORTS refs for from-import names
+                # (e.g., "from X import Y, Z" -> IMPORTS refs for Y and Z)
+                if info.get("import_names") and self.node_stack:
+                    parent_id = self.node_stack[-1]
+                    for name_info in info["import_names"]:
+                        self.unresolved_refs.append(
+                            UnresolvedReference(
+                                from_node_id=parent_id,
+                                reference_name=name_info["name"],
+                                reference_kind=EdgeKind.IMPORTS,
+                                line=name_info["line"],
+                                column=name_info["column"],
+                            )
+                        )
                 return
 
         # Python: import os, sys → multiple imports
