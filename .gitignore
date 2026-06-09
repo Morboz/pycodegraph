@@ -13,3 +13,10 @@ build/
 
 # macOS
 .DS_Store
+
+# Claude Code worktrees
+.claude/worktrees/
+
+# Debug/diagnosis scripts (not part of the package)
+scripts/
+docs/diagnosis/
