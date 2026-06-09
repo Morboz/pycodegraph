@@ -11,7 +11,11 @@ from ..types import Edge, EdgeKind, NodeKind, UnresolvedReference
 from ._context import ResolutionContext
 from ._types import ResolutionResult, ResolvedRef, UnresolvedRef
 from .builtins import is_builtin_or_external
-from .import_resolver import extract_import_mappings, resolve_via_import
+from .import_resolver import (
+    extract_import_mappings,
+    resolve_python_module_member,
+    resolve_via_import,
+)
 from .name_matcher import match_reference
 
 logger = logging.getLogger(__name__)
@@ -85,6 +89,12 @@ class ReferenceResolver:
         result = resolve_via_import(ref, self._context)
         if result:
             return result
+
+        # Python module member resolution (e.g., utils.helper())
+        if ref.language == "python":
+            result = resolve_python_module_member(ref, self._context)
+            if result:
+                return result
 
         # Then name-based strategies
         return match_reference(ref, self._context)

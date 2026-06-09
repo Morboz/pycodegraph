@@ -222,17 +222,24 @@ def _find_exported_symbol(
 
     nodes_in_file = context.get_nodes_in_file(file_path)
 
+    # In Python, all top-level definitions are implicitly exported
+    # (there is no formal export system like JS/TS).
+    require_exported = language != "python"
+
     if is_default:
         for n in nodes_in_file:
-            if n.is_exported and n.kind in (NodeKind.FUNCTION, NodeKind.CLASS):
+            if (not require_exported or n.is_exported) and n.kind in (
+                NodeKind.FUNCTION,
+                NodeKind.CLASS,
+            ):
                 return n
     elif is_namespace and member_name:
         for n in nodes_in_file:
-            if n.name == member_name and n.is_exported:
+            if n.name == member_name and (not require_exported or n.is_exported):
                 return n
     else:
         for n in nodes_in_file:
-            if n.name == exported_name and n.is_exported:
+            if n.name == exported_name and (not require_exported or n.is_exported):
                 return n
 
     return None
@@ -352,7 +359,116 @@ def _resolve_aliased_import(
             if hit:
                 return hit
 
+    # Python absolute imports: convert dots to path separators
+    # e.g. "myapp.models" → "myapp/models", then try .py and /__init__.py
+    if language == "python" and "." in import_path:
+        hit = find_python_module_file(import_path, context)
+        if hit:
+            return hit
+
     return try_with_ext(import_path)
+
+
+def find_python_module_file(
+    module_path: str,
+    context: ResolutionContext,
+) -> str | None:
+    """Resolve a Python dotted module path to a project-relative file path.
+
+    Converts ``a.b.c`` to ``a/b/c`` and tries:
+      1. ``a/b/c.py``  (module file)
+      2. ``a/b/c/__init__.py``  (package)
+
+    Uses FILE nodes in the graph for matching (suffix-based), so this
+    works even when the index only tracks a subset of the filesystem.
+    """
+    from ..types import NodeKind
+
+    if not module_path or module_path.startswith("."):
+        return None
+
+    rel = module_path.replace(".", "/")  # a.b.c → a/b/c
+
+    # Strategy 1: Try exact file_exists with converted path + extensions
+    extensions = EXTENSION_RESOLUTION.get("python", [])
+    for ext in extensions:
+        candidate = rel + ext
+        if context.file_exists(candidate):
+            return candidate
+
+    # Strategy 2: Search FILE nodes by suffix match
+    # Look for .py files whose path ends with the converted module path
+    last_seg = module_path.split(".")[-1]
+    py_candidates = context.get_nodes_by_name(last_seg + ".py")
+    for node in py_candidates:
+        if node.kind == NodeKind.FILE and node.file_path.endswith(rel + ".py"):
+            return node.file_path
+
+    # Try package __init__.py
+    init_candidates = context.get_nodes_by_name("__init__.py")
+    for node in init_candidates:
+        if node.kind == NodeKind.FILE and node.file_path.endswith(rel + "/__init__.py"):
+            return node.file_path
+
+    return None
+
+
+def resolve_python_module_member(
+    ref: UnresolvedRef,
+    context: ResolutionContext,
+) -> ResolvedRef | None:
+    """Resolve ``receiver.member`` references where *receiver* is an imported module.
+
+    When Python code does ``import utils; utils.helper()``, the reference
+    name is ``utils.helper``.  This function finds the import for ``utils``,
+    resolves it to a file, and looks up *helper* as a top-level definition
+    in that file.
+    """
+    from ..types import NodeKind
+
+    dot_idx = ref.reference_name.find(".")
+    if dot_idx <= 0:
+        return None
+
+    receiver = ref.reference_name[:dot_idx]
+    member = ref.reference_name[dot_idx + 1 :].split(".")[0]
+
+    imports = context.get_import_mappings(ref.file_path, ref.language)
+    for imp in imports:
+        if imp.local_name != receiver:
+            continue
+
+        # Build the full module path to resolve
+        if imp.is_namespace:
+            module_path = imp.source
+        else:
+            module_path = imp.source + "." + imp.local_name
+
+        resolved_path = resolve_import_path(
+            module_path, ref.file_path, ref.language, context
+        )
+        if not resolved_path:
+            resolved_path = find_python_module_file(module_path, context)
+        if not resolved_path or resolved_path == ref.file_path:
+            continue
+
+        # Look for the member as a top-level definition in the resolved file
+        target_kinds = (
+            NodeKind.FUNCTION,
+            NodeKind.CLASS,
+            NodeKind.VARIABLE,
+            NodeKind.CONSTANT,
+        )
+        for node in context.get_nodes_in_file(resolved_path):
+            if node.name == member and node.kind in target_kinds:
+                return ResolvedRef(
+                    original=ref,
+                    target_node_id=node.id,
+                    confidence=0.85,
+                    resolved_by="import",
+                )
+
+    return None
 
 
 # --- Import mapping extraction ---

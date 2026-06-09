@@ -190,6 +190,122 @@ class TestInheritanceResolution:
             cg.close()
 
 
+class TestPythonAbsoluteImportResolution:
+    """Verify Python absolute import path resolution (issues #51, #52)."""
+
+    def test_absolute_import_resolves_dot_path(self, tmp_path):
+        """from myapp.models import User — dots in myapp.models must convert to myapp/models."""
+        from tests.conftest import write_file
+
+        root = str(tmp_path)
+        # Create a package structure: myapp/models.py with a User class
+        write_file(root, "myapp/__init__.py", "")
+        write_file(root, "myapp/models.py", "class User:\n    pass\n")
+        write_file(
+            root,
+            "main.py",
+            "from myapp.models import User\n\ndef run():\n    user = User()\n    return user\n",
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            # Find the User class node
+            user_nodes = cg._queries.get_nodes_by_name("User")
+            assert len(user_nodes) > 0, "User class should be indexed"
+            user_node = user_nodes[0]
+            assert user_node.file_path == "myapp/models.py", (
+                f"User should be in myapp/models.py, got {user_node.file_path}"
+            )
+
+            # There should be a CALLS or INSTANTIATES edge from main.py to User
+            all_edges = cg.get_all_edges(limit=50000)
+            user_ids = {n.id for n in user_nodes}
+            edges_to_user = [
+                e
+                for e in all_edges
+                if e.target in user_ids
+                and e.kind
+                in (EdgeKind.CALLS, EdgeKind.INSTANTIATES, EdgeKind.REFERENCES)
+            ]
+            assert len(edges_to_user) > 0, (
+                "There should be a resolved edge from main.py to User class"
+            )
+        finally:
+            cg.close()
+
+    def test_absolute_import_package_init(self, tmp_path):
+        """from myapp.models import User where models is a package with __init__.py."""
+        from tests.conftest import write_file
+
+        root = str(tmp_path)
+        # Create a package structure: myapp/models/__init__.py
+        write_file(root, "myapp/__init__.py", "")
+        write_file(root, "myapp/models/__init__.py", "class User:\n    pass\n")
+        write_file(
+            root,
+            "main.py",
+            "from myapp.models import User\n\ndef run():\n    user = User()\n    return user\n",
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            user_nodes = cg._queries.get_nodes_by_name("User")
+            assert len(user_nodes) > 0, "User class should be indexed"
+            user_node = user_nodes[0]
+            assert user_node.file_path == "myapp/models/__init__.py", (
+                f"User should be in myapp/models/__init__.py, got {user_node.file_path}"
+            )
+
+            all_edges = cg.get_all_edges(limit=50000)
+            user_ids = {n.id for n in user_nodes}
+            edges_to_user = [
+                e
+                for e in all_edges
+                if e.target in user_ids
+                and e.kind
+                in (EdgeKind.CALLS, EdgeKind.INSTANTIATES, EdgeKind.REFERENCES)
+            ]
+            assert len(edges_to_user) > 0, (
+                "There should be a resolved edge from main.py to User class"
+            )
+        finally:
+            cg.close()
+
+    def test_module_member_call_resolution(self, tmp_path):
+        """import utils; utils.helper() — should resolve helper as a CALLS edge."""
+        from tests.conftest import write_file
+
+        root = str(tmp_path)
+        write_file(root, "utils.py", "def helper():\n    pass\n")
+        write_file(
+            root,
+            "main.py",
+            "import utils\n\ndef run():\n    utils.helper()\n",
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            helper_nodes = cg._queries.get_nodes_by_name("helper")
+            assert len(helper_nodes) > 0, "helper function should be indexed"
+            helper_node = helper_nodes[0]
+            assert helper_node.file_path == "utils.py", (
+                f"helper should be in utils.py, got {helper_node.file_path}"
+            )
+
+            all_edges = cg.get_all_edges(limit=50000)
+            helper_ids = {n.id for n in helper_nodes}
+            calls_to_helper = [
+                e
+                for e in all_edges
+                if e.target in helper_ids and e.kind == EdgeKind.CALLS
+            ]
+            assert len(calls_to_helper) > 0, (
+                "There should be a CALLS edge from main.py to utils.helper()"
+            )
+        finally:
+            cg.close()
+
+
 class TestResolutionStats:
     """Verify resolution statistics reported by index_all()."""
 
