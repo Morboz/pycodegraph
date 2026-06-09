@@ -190,6 +190,253 @@ class TestInheritanceResolution:
             cg.close()
 
 
+class TestInterfaceDispatchSynthesis:
+    """Verify ABC/Protocol dispatch edge synthesis.
+
+    After resolution + synthesis, a CALLS edge with provenance
+    'heuristic:synthesis' should connect each base-type method to
+    the same-named method in the concrete class that extends/implements it.
+    """
+
+    def test_abc_method_dispatch(self, tmp_path):
+        """ABC Shape with abstract area() -> Circle implements Shape.
+
+        After synthesis there should be a CALLS edge from Shape.area
+        to Circle.area (heuristic provenance).
+        """
+        root = str(tmp_path)
+        write_file(
+            root,
+            "shapes.py",
+            """\
+from abc import ABC, abstractmethod
+
+class Shape(ABC):
+    @abstractmethod
+    def area(self) -> float:
+        pass
+
+class Circle(Shape):
+    def __init__(self, radius: float):
+        self.radius = radius
+
+    def area(self) -> float:
+        return 3.14159 * self.radius ** 2
+""",
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            all_edges = cg.get_all_edges(limit=50000)
+
+            # Find Shape.area and Circle.area nodes
+            all_nodes = cg.get_all_nodes(limit=50000)
+            shape_area = [
+                n
+                for n in all_nodes
+                if n.name == "area" and "Shape" in (n.qualified_name or "")
+            ]
+            circle_area = [
+                n
+                for n in all_nodes
+                if n.name == "area" and "Circle" in (n.qualified_name or "")
+            ]
+
+            assert len(shape_area) >= 1, "Shape.area node should exist"
+            assert len(circle_area) >= 1, "Circle.area node should exist"
+
+            # Check for synthesized CALLS edge from Shape.area -> Circle.area
+            synth = [
+                e
+                for e in all_edges
+                if e.source == shape_area[0].id
+                and e.target == circle_area[0].id
+                and e.kind == EdgeKind.CALLS
+                and e.provenance
+                and e.provenance.startswith("heuristic:synthesis")
+            ]
+            assert len(synth) >= 1, (
+                f"Expected synthesized CALLS edge from Shape.area to Circle.area, "
+                f"found {len(synth)}"
+            )
+        finally:
+            cg.close()
+
+    def test_protocol_dispatch(self, tmp_path):
+        """typing.Protocol Drawable with draw() -> Square explicitly implements Drawable.
+
+        Python Protocol supports structural subtyping, but explicit
+        inheritance (Square(Drawable)) is also valid and creates the
+        EXTENDS edge needed for synthesis.
+        """
+        root = str(tmp_path)
+        write_file(
+            root,
+            "drawable.py",
+            """\
+from typing import Protocol
+
+class Drawable(Protocol):
+    def draw(self) -> None: ...
+
+class Square(Drawable):
+    def draw(self) -> None:
+        print("square")
+""",
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            all_edges = cg.get_all_edges(limit=50000)
+            all_nodes = cg.get_all_nodes(limit=50000)
+
+            drawable_draw = [
+                n
+                for n in all_nodes
+                if n.name == "draw" and "Drawable" in (n.qualified_name or "")
+            ]
+            square_draw = [
+                n
+                for n in all_nodes
+                if n.name == "draw" and "Square" in (n.qualified_name or "")
+            ]
+
+            assert len(drawable_draw) >= 1, "Drawable.draw node should exist"
+            assert len(square_draw) >= 1, "Square.draw node should exist"
+
+            synth = [
+                e
+                for e in all_edges
+                if e.source == drawable_draw[0].id
+                and e.target == square_draw[0].id
+                and e.kind == EdgeKind.CALLS
+                and e.provenance
+                and e.provenance.startswith("heuristic:synthesis")
+            ]
+            assert len(synth) >= 1, (
+                f"Expected synthesized CALLS edge from Drawable.draw to Square.draw, "
+                f"found {len(synth)}"
+            )
+        finally:
+            cg.close()
+
+    def test_multi_level_inheritance(self, tmp_path):
+        """Shape -> Circle -> UnitCircle; both levels get dispatch edges."""
+        root = str(tmp_path)
+        write_file(
+            root,
+            "multi.py",
+            """\
+from abc import ABC, abstractmethod
+
+class Shape(ABC):
+    @abstractmethod
+    def area(self) -> float:
+        pass
+
+class Circle(Shape):
+    def __init__(self, radius: float):
+        self.radius = radius
+
+    def area(self) -> float:
+        return 3.14159 * self.radius ** 2
+
+class UnitCircle(Circle):
+    def __init__(self):
+        super().__init__(1.0)
+
+    def area(self) -> float:
+        return 3.14159
+""",
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            all_edges = cg.get_all_edges(limit=50000)
+            all_nodes = cg.get_all_nodes(limit=50000)
+
+            shape_area = [
+                n
+                for n in all_nodes
+                if n.name == "area" and "Shape" in (n.qualified_name or "")
+            ]
+            circle_area = [
+                n
+                for n in all_nodes
+                if n.name == "area" and "Circle" in (n.qualified_name or "")
+            ]
+            unit_area = [
+                n
+                for n in all_nodes
+                if n.name == "area" and "UnitCircle" in (n.qualified_name or "")
+            ]
+
+            assert len(shape_area) >= 1, "Shape.area node should exist"
+            assert len(circle_area) >= 1, "Circle.area node should exist"
+            assert len(unit_area) >= 1, "UnitCircle.area node should exist"
+
+            synth_edges = [
+                e
+                for e in all_edges
+                if e.kind == EdgeKind.CALLS
+                and e.provenance
+                and e.provenance.startswith("heuristic:synthesis")
+            ]
+
+            # At minimum: Shape.area -> Circle.area, Shape.area -> UnitCircle.area,
+            # and Circle.area -> UnitCircle.area
+            synth_sources = {e.source for e in synth_edges}
+            synth_targets = {e.target for e in synth_edges}
+
+            assert shape_area[0].id in synth_sources, (
+                "Shape.area should be a source of a synthesized edge"
+            )
+            assert circle_area[0].id in synth_targets, (
+                "Circle.area should be a target of a synthesized edge"
+            )
+            assert unit_area[0].id in synth_targets, (
+                "UnitCircle.area should be a target of a synthesized edge"
+            )
+        finally:
+            cg.close()
+
+    def test_no_dispatch_for_unrelated(self, tmp_path):
+        """Two unrelated classes with same-named methods should NOT get dispatch edges."""
+        root = str(tmp_path)
+        write_file(
+            root,
+            "unrelated.py",
+            """\
+class Dog:
+    def speak(self) -> str:
+        return "woof"
+
+class Robot:
+    def speak(self) -> str:
+        return "beep"
+""",
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            all_edges = cg.get_all_edges(limit=50000)
+
+            # There should be NO synthesized dispatch edges since
+            # Dog and Robot have no inheritance relationship
+            synth = [
+                e
+                for e in all_edges
+                if e.kind == EdgeKind.CALLS
+                and e.provenance
+                and e.provenance.startswith("heuristic:synthesis")
+            ]
+            assert len(synth) == 0, (
+                f"Expected no synthesized edges for unrelated classes, got {len(synth)}"
+            )
+        finally:
+            cg.close()
+
+
 class TestResolutionStats:
     """Verify resolution statistics reported by index_all()."""
 
