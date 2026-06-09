@@ -31,6 +31,12 @@ _BODY_CAP_MULTIPLIER = 1.5
 # Keeps output compact for files with hundreds of methods.
 _MAX_SIGNATURES = 24
 
+# Density fallback: when no spine/unique/entry coverage exists, a file
+# with this many or more callable nodes is treated as a "god-file"
+# needing skeletonization.  Calibrated for the Django ORM scenario
+# where find_flow_chain cannot cross dynamic-dispatch boundaries.
+_DENSITY_FALLBACK_THRESHOLD = 20
+
 
 def compute_unique_named_node_ids(
     named_node_ids: set[str],
@@ -156,9 +162,12 @@ def should_skeletonize(
     # This matches the TS CodeGraph's behavior where
     # buildFlowFromNamedSymbols usually finds a spine via full-graph
     # BFS + synth edges; when it cannot, density still controls output.
+    # Note: has_spine_node is always False here (empty high_prio_ids
+    # implies empty path_node_ids), but the guard makes the intent
+    # explicit.
     if not has_spine_node:
         callable_count = sum(1 for n in file_nodes if n.kind in _CALLABLE_BODY_KINDS)
-        if callable_count >= 20:
+        if callable_count >= _DENSITY_FALLBACK_THRESHOLD:
             return True
 
     return False
