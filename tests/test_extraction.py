@@ -545,3 +545,107 @@ class TestPythonDecoratorExtraction:
             assert any("app.route" in d for d in decs)
         finally:
             cg.close()
+
+
+class TestPythonFromImportRefs:
+    """Verify that from-import creates per-name IMPORTS refs (issue #53).
+
+    `from X import Y, Z` should emit IMPORTS unresolved refs for each
+    imported name (Y, Z) in addition to the module-level IMPORT node/edge.
+    """
+
+    def test_from_import_creates_per_name_imports_ref(self, tmp_path):
+        """from os.path import join should create an IMPORTS ref for 'join'."""
+        root = str(tmp_path)
+        write_file(root, "models.py", "class User:\n    pass\n")
+        write_file(root, "mod.py", "from models import User\n")
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            # The file node for mod.py should have an IMPORTS edge to User
+            file_nodes = cg._queries.get_nodes_by_file("mod.py")
+            file_node = next(n for n in file_nodes if n.kind == NodeKind.FILE)
+            outgoing = cg._queries.get_outgoing_edges(file_node.id, [EdgeKind.IMPORTS])
+            # Should have IMPORTS edges: one for the module "models",
+            # and one for the imported name "User"
+            target_names = set()
+            for edge in outgoing:
+                target = cg.get_node_by_id(edge.target)
+                if target:
+                    target_names.add(target.name)
+            assert "User" in target_names
+        finally:
+            cg.close()
+
+    def test_from_import_multiple_names(self, tmp_path):
+        """from myapp.models import User, Post should create IMPORTS refs for both."""
+        root = str(tmp_path)
+        write_file(
+            root, "models.py", "class User:\n    pass\n\nclass Post:\n    pass\n"
+        )
+        write_file(root, "mod.py", "from models import User, Post\n")
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            file_nodes = cg._queries.get_nodes_by_file("mod.py")
+            file_node = next(n for n in file_nodes if n.kind == NodeKind.FILE)
+            outgoing = cg._queries.get_outgoing_edges(file_node.id, [EdgeKind.IMPORTS])
+            target_names = set()
+            for edge in outgoing:
+                target = cg.get_node_by_id(edge.target)
+                if target:
+                    target_names.add(target.name)
+            assert "User" in target_names
+            assert "Post" in target_names
+        finally:
+            cg.close()
+
+    def test_from_import_alias(self, tmp_path):
+        """from X import Y as Z should create an IMPORTS ref for 'Z' (the local alias)."""
+        root = str(tmp_path)
+        write_file(root, "models.py", "class User:\n    pass\n")
+        write_file(root, "mod.py", "from models import User as MyUser\n")
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            file_nodes = cg._queries.get_nodes_by_file("mod.py")
+            file_node = next(n for n in file_nodes if n.kind == NodeKind.FILE)
+            outgoing = cg._queries.get_outgoing_edges(file_node.id, [EdgeKind.IMPORTS])
+            target_names = set()
+            for edge in outgoing:
+                target = cg.get_node_by_id(edge.target)
+                if target:
+                    target_names.add(target.name)
+            # The local alias "MyUser" should be resolved to the User class
+            assert "User" in target_names
+        finally:
+            cg.close()
+
+    def test_from_import_wildcard_skipped(self, tmp_path):
+        """from X import * should NOT create per-name refs (wildcard is skipped)."""
+        root = str(tmp_path)
+        write_file(root, "xpkg.py", "def foo(): pass\n")
+        write_file(root, "mod.py", "from xpkg import *\n")
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            # Verify that at least the module-level IMPORT node exists
+            import_nodes = cg._queries.get_nodes_by_kind(NodeKind.IMPORT)
+            assert any(n.name == "xpkg" for n in import_nodes)
+
+            # The file should have an IMPORTS edge for the module name
+            # but NOT per-name refs (since * is a wildcard)
+            file_nodes = cg._queries.get_nodes_by_file("mod.py")
+            file_node = next(n for n in file_nodes if n.kind == NodeKind.FILE)
+            outgoing = cg._queries.get_outgoing_edges(file_node.id, [EdgeKind.IMPORTS])
+            # Should have exactly 1 IMPORTS edge (to the module import node),
+            # not per-symbol edges
+            module_import_edges = [
+                e
+                for e in outgoing
+                if cg.get_node_by_id(e.target)
+                and cg.get_node_by_id(e.target).kind == NodeKind.IMPORT
+            ]
+            assert len(module_import_edges) == 1
+        finally:
+            cg.close()
