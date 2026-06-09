@@ -22,11 +22,35 @@ from ..types import (
     UnresolvedReference,
 )
 from .extractor import TreeSitterExtractor
+from .frameworks import detect_python_frameworks
 from .grammars import detect_language, is_language_supported
 
 
 def hash_content(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+class _ProjectFileReader:
+    """Adapts project directory access to the FileReader protocol for framework detection."""
+
+    def __init__(self, root_dir: str, known_files: list[str]) -> None:
+        self._root_dir = root_dir
+        self._known_files = known_files
+
+    def read_file(self, file_path: str) -> str | None:
+        full = os.path.join(self._root_dir, file_path)
+        try:
+            with open(full) as f:
+                return f.read()
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    def file_exists(self, file_path: str) -> bool:
+        full = os.path.join(self._root_dir, file_path)
+        return os.path.isfile(full)
+
+    def list_files(self) -> list[str]:
+        return list(self._known_files)
 
 
 def should_include_file(file_path: str, config: CodeGraphConfig) -> bool:
@@ -201,6 +225,10 @@ class ExtractionOrchestrator:
         files = scan_directory(self.root_dir, self.config)
         total = len(files)
 
+        # Phase 1b: Detect Python frameworks
+        file_reader = _ProjectFileReader(self.root_dir, files)
+        framework_resolvers = detect_python_frameworks(file_reader)
+
         # Phase 2: Read, parse, and collect results
         parsed_results: list[tuple[tuple, ExtractionResult]] = []
         skip_stats = {"skipped": 0, "errored": 0}
@@ -234,6 +262,14 @@ class ExtractionOrchestrator:
 
             extractor = TreeSitterExtractor(rel_path, content, language)
             result = extractor.extract()
+
+            # Phase 2b: Framework route extraction for Python files
+            if framework_resolvers and language == Language.PYTHON:
+                for resolver in framework_resolvers:
+                    fw_result = resolver.extract(rel_path, content)
+                    if fw_result.nodes or fw_result.references:
+                        result.nodes.extend(fw_result.nodes)
+                        result.unresolved_references.extend(fw_result.references)
 
             file_info = (rel_path, content, language, stat.st_size, stat.st_mtime)
             parsed_results.append((file_info, result))

@@ -571,3 +571,212 @@ class TestResolutionStats:
         # edges_created should include both structural edges and resolved refs
         assert result.edges_created >= result.refs_resolved
         cg.close()
+
+
+# ---------------------------------------------------------------------------
+# Flask / FastAPI / Django framework source code used by TestFrameworkResolution
+# ---------------------------------------------------------------------------
+
+FLASK_APP = """\
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/users', methods=['GET'])
+def list_users():
+    return []
+
+@app.route('/users/<int:id>', methods=['GET'])
+def get_user(id):
+    return {}
+"""
+
+FLASK_BLUEPRINT = """\
+from flask import Blueprint
+
+users_bp = Blueprint('users', __name__)
+
+@users_bp.route('/users', methods=['GET'])
+def list_users():
+    return []
+"""
+
+FASTAPI_APP = """\
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get('/items/{item_id}')
+def read_item(item_id: int):
+    return {"id": item_id}
+
+@app.post('/items')
+def create_item():
+    return {}
+"""
+
+FASTAPI_ROUTER = """\
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get('/health')
+def health_check():
+    return {"status": "ok"}
+"""
+
+DJANGO_URLS = """\
+from django.urls import path
+from .views import ArticleListView, ArticleDetailView
+
+urlpatterns = [
+    path('articles/', ArticleListView.as_view(), name='article-list'),
+    path('articles/<int:pk>/', ArticleDetailView.as_view(), name='article-detail'),
+]
+"""
+
+DJANGO_VIEWS = """\
+from django.views import View
+
+class ArticleListView(View):
+    def get(self, request):
+        pass
+
+class ArticleDetailView(View):
+    def get(self, request, pk):
+        pass
+"""
+
+DJANGO_DRF_ROUTER = """\
+from rest_framework.routers import DefaultRouter
+from .views import ArticleViewSet
+
+router = DefaultRouter()
+router.register(r'articles', ArticleViewSet)
+"""
+
+
+class TestFrameworkResolution:
+    """Verify Python framework resolvers detect and extract ROUTE nodes."""
+
+    # --- Flask ---
+
+    def test_flask_route_extraction(self, tmp_path):
+        """Flask @app.route decorator should produce ROUTE nodes with paths."""
+        root = str(tmp_path)
+        write_file(root, "app.py", FLASK_APP)
+        write_file(root, "requirements.txt", "flask==3.0\n")
+
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            all_nodes = cg.get_all_nodes(limit=50000)
+            route_nodes = [n for n in all_nodes if n.kind == "route"]
+            assert len(route_nodes) >= 2, (
+                f"Expected at least 2 ROUTE nodes for Flask @app.route, got {len(route_nodes)}"
+            )
+            route_names = {n.name for n in route_nodes}
+            assert any("/users" in name for name in route_names), (
+                f"Expected a route containing '/users', got {route_names}"
+            )
+        finally:
+            cg.close()
+
+    def test_flask_blueprint_route_extraction(self, tmp_path):
+        """Flask Blueprint @bp.route decorator should produce ROUTE nodes."""
+        root = str(tmp_path)
+        write_file(root, "users.py", FLASK_BLUEPRINT)
+        write_file(root, "requirements.txt", "flask==3.0\n")
+
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            all_nodes = cg.get_all_nodes(limit=50000)
+            route_nodes = [n for n in all_nodes if n.kind == "route"]
+            assert len(route_nodes) >= 1, (
+                f"Expected at least 1 ROUTE node for Blueprint @bp.route, got {len(route_nodes)}"
+            )
+        finally:
+            cg.close()
+
+    # --- FastAPI ---
+
+    def test_fastapi_route_extraction(self, tmp_path):
+        """FastAPI @app.get/post decorator should produce ROUTE nodes with paths."""
+        root = str(tmp_path)
+        write_file(root, "main.py", FASTAPI_APP)
+        write_file(root, "requirements.txt", "fastapi==0.110\n")
+
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            all_nodes = cg.get_all_nodes(limit=50000)
+            route_nodes = [n for n in all_nodes if n.kind == "route"]
+            assert len(route_nodes) >= 2, (
+                f"Expected at least 2 ROUTE nodes for FastAPI, got {len(route_nodes)}"
+            )
+            route_names = {n.name for n in route_nodes}
+            # Should contain HTTP method + path info
+            assert any("items" in name for name in route_names), (
+                f"Expected a route containing 'items', got {route_names}"
+            )
+        finally:
+            cg.close()
+
+    def test_fastapi_router_route_extraction(self, tmp_path):
+        """FastAPI @router.get decorator should produce ROUTE nodes."""
+        root = str(tmp_path)
+        write_file(root, "routers.py", FASTAPI_ROUTER)
+        write_file(root, "requirements.txt", "fastapi==0.110\n")
+
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            all_nodes = cg.get_all_nodes(limit=50000)
+            route_nodes = [n for n in all_nodes if n.kind == "route"]
+            assert len(route_nodes) >= 1, (
+                f"Expected at least 1 ROUTE node for FastAPI router, got {len(route_nodes)}"
+            )
+        finally:
+            cg.close()
+
+    # --- Django ---
+
+    def test_django_url_pattern_extraction(self, tmp_path):
+        """Django path() in urlpatterns should produce ROUTE nodes."""
+        root = str(tmp_path)
+        write_file(root, "urls.py", DJANGO_URLS)
+        write_file(root, "views.py", DJANGO_VIEWS)
+        write_file(root, "requirements.txt", "django==5.0\n")
+
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            all_nodes = cg.get_all_nodes(limit=50000)
+            route_nodes = [n for n in all_nodes if n.kind == "route"]
+            assert len(route_nodes) >= 2, (
+                f"Expected at least 2 ROUTE nodes for Django path(), got {len(route_nodes)}"
+            )
+            route_names = {n.name for n in route_nodes}
+            assert any("articles" in name for name in route_names), (
+                f"Expected a route containing 'articles', got {route_names}"
+            )
+        finally:
+            cg.close()
+
+    def test_django_drf_router_registration(self, tmp_path):
+        """Django REST framework router.register() should produce ROUTE nodes."""
+        root = str(tmp_path)
+        write_file(root, "urls.py", DJANGO_DRF_ROUTER)
+        write_file(root, "requirements.txt", "django==5.0\ndjangorestframework==3.14\n")
+
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            all_nodes = cg.get_all_nodes(limit=50000)
+            route_nodes = [n for n in all_nodes if n.kind == "route"]
+            assert len(route_nodes) >= 1, (
+                f"Expected at least 1 ROUTE node for DRF router.register(), got {len(route_nodes)}"
+            )
+        finally:
+            cg.close()
