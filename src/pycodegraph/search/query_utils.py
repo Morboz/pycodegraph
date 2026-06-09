@@ -523,9 +523,10 @@ def extract_symbols_from_query(query: str) -> list[str]:
 
     Identifies potential code symbols using patterns:
     - CamelCase: UserService, signInWithGoogle
-    - snake_case: user_service, sign_in
+    - snake_case: user_service, sign_in, _fetch_all
+    - __dunder__: __init__, __str__
     - SCREAMING_SNAKE: MAX_RETRIES
-    - dot.notation: app.isPackaged (extracts both sides)
+    - dot.notation: app.isPackaged, QuerySet._fetch_all (extracts both sides)
     - Acronyms: REST, HTTP
     - Plain lowercase identifiers: undo, redo, history
 

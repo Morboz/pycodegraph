@@ -54,3 +54,8 @@ class TestExtractSymbolsFromQuery:
         result = extract_symbols_from_query("app.isPackaged")
         assert "isPackaged" in result
         assert "app.isPackaged" in result
+
+    def test_non_dunder_double_underscore_not_extracted(self) -> None:
+        """__partial (no trailing __) is not a dunder — should not be extracted."""
+        result = extract_symbols_from_query("__partial")
+        assert "__partial" not in result
