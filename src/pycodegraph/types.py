@@ -303,6 +303,8 @@ class ExploreOutputBudget:
     max_chars_per_file: int
     gap_threshold: int
     max_symbols_in_header: int
+    include_budget_note: bool = False
+    include_additional_files: bool = False
 
     @classmethod
     def from_file_count(cls, file_count: int) -> ExploreOutputBudget:
@@ -312,6 +314,6 @@ class ExploreOutputBudget:
         elif file_count < 500:
             return cls(18_000, 5, 3_800, 8, 6)
         elif file_count < 5_000:
-            return cls(24_000, 8, 6_500, 12, 10)
+            return cls(24_000, 8, 6_500, 12, 10, True, True)
         else:
-            return cls(24_000, 8, 7_000, 15, 15)
+            return cls(24_000, 8, 7_000, 15, 15, True, True)

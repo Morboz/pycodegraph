@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from ..context.builder import ContextBuilder
@@ -13,6 +14,7 @@ from ..types import (
     Node,
 )
 from .blast_radius import compute_blast_radius
+from .budget import format_budget_note, get_explore_budget
 from .clustering import (
     cluster_nodes_in_file,
     extract_source_with_line_numbers,
@@ -119,7 +121,7 @@ class ExploreEngine:
             file_count = 100
         budget = ExploreOutputBudget.from_file_count(file_count)
 
-        # Override with explicit options
+        # Override with explicit options (preserve tier flags)
         if opts.max_output_chars is not None:
             budget = ExploreOutputBudget(
                 max_output_chars=opts.max_output_chars,
@@ -127,6 +129,8 @@ class ExploreEngine:
                 max_chars_per_file=budget.max_chars_per_file,
                 gap_threshold=budget.gap_threshold,
                 max_symbols_in_header=budget.max_symbols_in_header,
+                include_budget_note=budget.include_budget_note,
+                include_additional_files=budget.include_additional_files,
             )
         if opts.max_files is not None:
             budget = ExploreOutputBudget(
@@ -135,6 +139,8 @@ class ExploreEngine:
                 max_chars_per_file=budget.max_chars_per_file,
                 gap_threshold=budget.gap_threshold,
                 max_symbols_in_header=budget.max_symbols_in_header,
+                include_budget_note=budget.include_budget_note,
+                include_additional_files=budget.include_additional_files,
             )
         if opts.max_chars_per_file is not None:
             budget = ExploreOutputBudget(
@@ -143,6 +149,8 @@ class ExploreEngine:
                 max_chars_per_file=opts.max_chars_per_file,
                 gap_threshold=budget.gap_threshold,
                 max_symbols_in_header=budget.max_symbols_in_header,
+                include_budget_note=budget.include_budget_note,
+                include_additional_files=budget.include_additional_files,
             )
 
         max_files = budget.default_max_files
@@ -290,6 +298,8 @@ class ExploreEngine:
         files_included = 0
         any_trimmed = False
         remaining_files: list[tuple[str, list[Node]]] = []
+        # Track files added to lines so truncation can collect dropped ones
+        included_file_entries: list[tuple[str, list[Node]]] = []
 
         for file_path in selected_files:
             # Get nodes for this file
@@ -359,6 +369,7 @@ class ExploreEngine:
                 lines.append(section)
                 total_chars += len(section)
                 files_included += 1
+                included_file_entries.append((file_path, file_nodes))
             else:
                 # Large file — check skeletonization first, then cluster
                 file_lines = content.split("\n") if content else []
@@ -414,9 +425,8 @@ class ExploreEngine:
                     lines.append(section)
                     total_chars += len(section)
                     files_included += 1
+                    included_file_entries.append((file_path, file_nodes))
                     continue
-
-                # ── Cluster-based extraction (default) ───────────────────
                 clusters = cluster_nodes_in_file(
                     file_nodes,
                     node_importance,
@@ -495,6 +505,7 @@ class ExploreEngine:
                 lines.append(section)
                 total_chars += len(section)
                 files_included += 1
+                included_file_entries.append((file_path, all_symbols))
 
         # Remaining files list
         if remaining_files:
@@ -505,6 +516,15 @@ class ExploreEngine:
         if completeness:
             lines.append("")
             lines.append(completeness)
+
+        # Budget note — how many explore calls the agent has (issue #34)
+        if budget.include_budget_note:
+            try:
+                budget_calls = get_explore_budget(file_count)
+                lines.append("")
+                lines.append(format_budget_note(budget_calls, file_count))
+            except Exception:
+                pass  # Stats unavailable — skip budget note
 
         # Flow section (placed right before Source Code for readability)
         if flow_text:
@@ -518,6 +538,9 @@ class ExploreEngine:
         output = "\n".join(lines)
 
         # Hard ceiling — avoid MCP externalization (~25K)
+        # Structural truncation: protect header, blast radius, relationships
+        # by only truncating the Source Code section.  Truncated file paths
+        # are collected into remaining_files (issue #34).
         _TRUNC_MSG = (
             "\n\n... (output truncated to budget; the source above is "
             "complete and verbatim — treat it as already Read. For "
@@ -534,13 +557,84 @@ class ExploreEngine:
             if len(trunc_msg) >= hard_ceiling:
                 return trunc_msg[:hard_ceiling]
 
-            # Reserve room for truncation message
-            ceiling = hard_ceiling - len(trunc_msg)
-            # Cut at file section boundary
-            cut = output[:ceiling]
-            last_section = cut.rfind("\n#### ")
-            boundary = last_section if last_section > ceiling * 0.5 else cut.rfind("\n")
-            output = cut[:boundary] if boundary > 0 else cut
-            output += trunc_msg
+            # Try structural truncation: keep everything before Source Code,
+            # only truncate the source section.
+            source_marker = "\n### Source Code\n"
+            marker_pos = output.find(source_marker)
+
+            if marker_pos > 0:
+                structural = output[: marker_pos + len(source_marker)]
+                source_part = output[marker_pos + len(source_marker) :]
+
+                # Estimate remaining-files section length so we account
+                # for it in the ceiling.  Over-estimate by using a fixed
+                # per-entry size plus header/footer.
+                _REMAINING_PER_ENTRY = 120  # generous per-file line
+                remaining_section_len = 0
+                if remaining_files:
+                    remaining_section_len = len(
+                        "\n### Not shown above — explore these names for their source\n"
+                    ) + _REMAINING_PER_ENTRY * len(remaining_files)
+
+                source_ceiling = (
+                    hard_ceiling
+                    - len(structural)
+                    - len(trunc_msg)
+                    - remaining_section_len
+                )
+                if source_ceiling > 200:
+                    # Cut at file section boundary within source
+                    cut = source_part[:source_ceiling]
+                    last_section = cut.rfind("\n#### ")
+                    boundary = (
+                        last_section
+                        if last_section > source_ceiling * 0.3
+                        else cut.rfind("\n")
+                    )
+                    if boundary <= 0:
+                        boundary = source_ceiling
+
+                    truncated_tail = source_part[boundary:]
+                    # Extract file paths from the truncated tail
+                    truncated_paths = re.findall(
+                        r"^#### (\S+)", truncated_tail, re.MULTILINE
+                    )
+                    for fp in truncated_paths:
+                        fp_nodes = [
+                            n for n in subgraph.nodes.values() if n.file_path == fp
+                        ]
+                        if fp_nodes:
+                            remaining_files.append((fp, fp_nodes))
+
+                    # Build remaining-files section if we collected any
+                    remaining_section = ""
+                    if remaining_files:
+                        remaining_section = "\n" + format_remaining_files(
+                            remaining_files
+                        )
+
+                    output = structural + cut[:boundary] + remaining_section + trunc_msg
+                else:
+                    # Structural section alone exceeds ceiling — fallback
+                    ceiling = hard_ceiling - len(trunc_msg)
+                    cut = output[:ceiling]
+                    last_section = cut.rfind("\n#### ")
+                    boundary = (
+                        last_section
+                        if last_section > ceiling * 0.5
+                        else cut.rfind("\n")
+                    )
+                    output = (
+                        cut[:boundary] + trunc_msg if boundary > 0 else cut + trunc_msg
+                    )
+            else:
+                # No Source Code marker — fallback to tail truncation
+                ceiling = hard_ceiling - len(trunc_msg)
+                cut = output[:ceiling]
+                last_section = cut.rfind("\n#### ")
+                boundary = (
+                    last_section if last_section > ceiling * 0.5 else cut.rfind("\n")
+                )
+                output = cut[:boundary] + trunc_msg if boundary > 0 else cut + trunc_msg
 
         return output
