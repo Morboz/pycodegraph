@@ -17,6 +17,7 @@ from .import_resolver import (
     resolve_via_import,
 )
 from .name_matcher import match_reference
+from .synthesizer import synthesize_interface_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,11 @@ class ReferenceResolver:
 
         # Delete all processed refs (single truncate)
         self._queries.delete_all_unresolved_refs()
+
+        # Synthesize interface dispatch edges (ABC/Protocol CALLS)
+        synth_edges = synthesize_interface_dispatch(self._queries, self._context)
+        if synth_edges:
+            self._queries.insert_edges(synth_edges)
 
         result.stats = {
             "total": total,
