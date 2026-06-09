@@ -59,6 +59,15 @@ def synthesize_interface_dispatch(
     list[Edge]
         Newly synthesized CALLS edges with provenance ``heuristic:synthesis``.
     """
+    # 0. Remove previously synthesized edges to prevent duplicates on
+    #    incremental re-indexing (the edges table has no UNIQUE constraint
+    #    on source/target/kind, so re-running would otherwise duplicate rows).
+    removed = queries.delete_edges_by_provenance_prefix("heuristic:synthesis")
+    if removed:
+        logger.info(
+            "Removed %d previously synthesized edges before regeneration", removed
+        )
+
     # 1. Gather all IMPLEMENTS and EXTENDS edges.
     all_edges = queries.get_all_edges(limit=500000)
     impl_extends = [
