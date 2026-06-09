@@ -34,13 +34,18 @@ class LanguageExtractor:
     # Config flags
     methods_are_top_level: bool = False
 
+    # Node type that wraps decorated definitions (Python: decorated_definition)
+    decorated_definition_types: list[str] = field(default_factory=list)
+
     # Hook functions
     get_signature: Callable | None = None
     get_visibility: Callable | None = None
     is_exported: Callable | None = None
     is_async: Callable | None = None
     is_static: Callable | None = None
+    is_classmethod: Callable | None = None
     is_const: Callable | None = None
+    is_property: Callable | None = None
     extract_import: Callable | None = None
     get_receiver_type: Callable | None = None
     resolve_type_alias_kind: Callable | None = None

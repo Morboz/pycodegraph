@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -121,6 +122,9 @@ class TreeSitterExtractor:
         self.unresolved_refs: list[UnresolvedReference] = []
         self.errors: list[ExtractionError] = []
         self.node_stack: list[str] = []
+        # Decorator context: (name, line, column) tuples for decorators on the
+        # current decorated_definition
+        self._pending_decorators: list[tuple[str, int, int]] = []
 
     def extract(self) -> ExtractionResult:
         start = time.time()
@@ -207,8 +211,16 @@ class TreeSitterExtractor:
         node_type = node.type
         skip_children = False
 
+        # Decorated definitions (e.g. Python @decorator def foo(): ...)
+        # We extract decorator names here and pass them to the inner definition
+        # handler so that Node.decorators, DECORATES refs, and is_static/is_property
+        # are populated correctly.
+        if node_type in (self.extractor.decorated_definition_types or []):
+            self._handle_decorated_definition(node)
+            skip_children = True
+
         # Function declarations
-        if node_type in self.extractor.function_types:
+        elif node_type in self.extractor.function_types:
             if (
                 self._is_inside_class_like()
                 and node_type in self.extractor.method_types
@@ -383,6 +395,108 @@ class TreeSitterExtractor:
             NodeKind.MODULE,
         )
 
+    @property
+    def _pending_decorator_names(self) -> list[str]:
+        """Convenience: list of just the decorator names from pending decorators."""
+        return [name for name, _line, _col in self._pending_decorators]
+
+    def _call_hook_with_decorator_names(
+        self, hook: callable, node: TSNode
+    ) -> bool | None:
+        """Call an is_static/is_property/is_classmethod hook safely.
+
+        Some hooks accept (node, decorator_names) while others only accept (node).
+        Try the extended signature first; fall back to the basic one on TypeError.
+        """
+        try:
+            return hook(node, self._pending_decorator_names)  # type: ignore[call-arg]
+        except TypeError:
+            return hook(node)  # type: ignore[call-arg]
+
+    # =========================================================================
+    # Decorator Handling
+    # =========================================================================
+
+    def _handle_decorated_definition(self, node: TSNode) -> None:
+        """Handle a decorated_definition node by extracting decorator names,
+        then visiting the inner definition so it picks up the pending decorators."""
+        decorators: list[tuple[str, int, int]] = []
+
+        for i in range(node.named_child_count):
+            child = node.named_child(i)
+            if not child:
+                continue
+            if child.type == "decorator":
+                name = self._extract_decorator_name(child)
+                if name:
+                    decorators.append(
+                        (name, child.start_point[0] + 1, child.start_point[1])
+                    )
+
+        # Store pending decorators for the inner definition to pick up
+        self._pending_decorators = decorators
+
+        # Visit the inner (non-decorator) children
+        for i in range(node.named_child_count):
+            child = node.named_child(i)
+            if not child:
+                continue
+            if child.type != "decorator":
+                self._visit_node(child)
+
+        # Clear pending decorators after processing the inner definition
+        self._pending_decorators = []
+
+    def _extract_decorator_name(self, decorator_node: TSNode) -> str | None:
+        """Extract the name from a decorator node.
+
+        Handles:
+          @name             -> "name"
+          @dotted.name      -> "dotted.name"
+          @name(args)       -> "name"
+          @dotted.name(args)-> "dotted.name"
+        """
+        # The decorator node has named children: identifier, attribute, or call
+        for i in range(decorator_node.named_child_count):
+            child = decorator_node.named_child(i)
+            if not child:
+                continue
+
+            if child.type == "identifier":
+                return get_node_text(child, self.source_bytes)
+
+            if child.type == "attribute":
+                # e.g. app.route — reconstruct the dotted name
+                return get_node_text(child, self.source_bytes)
+
+            if child.type == "call":
+                # Decorator with arguments: @name(args) or @dotted.name(args)
+                # The function part is the first named child
+                func = child.named_child(0)
+                if func:
+                    if func.type == "identifier":
+                        return get_node_text(func, self.source_bytes)
+                    if func.type == "attribute":
+                        return get_node_text(func, self.source_bytes)
+                # Fallback: text of the first named child
+                return get_node_text(func, self.source_bytes) if func else None
+
+        # Fallback: try to get text from the node itself (strip the @)
+        return None
+
+    def _emit_decorates_refs(self, decorated_node_id: str) -> None:
+        """Emit UnresolvedReference with kind=DECORATES for each pending decorator."""
+        for dec_name, dec_line, dec_column in self._pending_decorators:
+            self.unresolved_refs.append(
+                UnresolvedReference(
+                    from_node_id=decorated_node_id,
+                    reference_name=dec_name,
+                    reference_kind=EdgeKind.DECORATES,
+                    line=dec_line,
+                    column=dec_column,
+                )
+            )
+
     # =========================================================================
     # Symbol Extractors
     # =========================================================================
@@ -479,7 +593,16 @@ class TreeSitterExtractor:
             else None
         )
         is_async = self.extractor.is_async(node) if self.extractor.is_async else None
-        is_static = self.extractor.is_static(node) if self.extractor.is_static else None
+        is_static = (
+            self._call_hook_with_decorator_names(self.extractor.is_static, node)
+            if self.extractor.is_static
+            else None
+        )
+
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
 
         func_node = self._create_node(
             NodeKind.FUNCTION,
@@ -491,9 +614,13 @@ class TreeSitterExtractor:
             is_exported=bool(is_exported) if is_exported else False,
             is_async=bool(is_async) if is_async else False,
             is_static=bool(is_static) if is_static else False,
+            **extra_kwargs,
         )
         if not func_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(func_node.id)
 
         self.node_stack.append(func_node.id)
         body = get_child_by_field(node, self.extractor.body_field)
@@ -532,12 +659,31 @@ class TreeSitterExtractor:
             else None
         )
         is_async = self.extractor.is_async(node) if self.extractor.is_async else None
-        is_static = self.extractor.is_static(node) if self.extractor.is_static else None
+        is_static = (
+            self._call_hook_with_decorator_names(self.extractor.is_static, node)
+            if self.extractor.is_static
+            else None
+        )
+
+        # Check if this is a @property
+        is_prop = (
+            self._call_hook_with_decorator_names(self.extractor.is_property, node)
+            if self.extractor.is_property
+            else False
+        )
 
         qname = f"{receiver_type}::{name}" if receiver_type else None
 
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
+
+        # Use NodeKind.PROPERTY for @property-decorated methods inside a class
+        node_kind = NodeKind.PROPERTY if is_prop else NodeKind.METHOD
+
         method_node = self._create_node(
-            NodeKind.METHOD,
+            node_kind,
             name,
             node,
             docstring=docstring,
@@ -546,9 +692,13 @@ class TreeSitterExtractor:
             is_async=bool(is_async) if is_async else False,
             is_static=bool(is_static) if is_static else False,
             qualified_name=qname,
+            **extra_kwargs,
         )
         if not method_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(method_node.id)
 
         self.node_stack.append(method_node.id)
         body = get_child_by_field(node, self.extractor.body_field)
@@ -573,6 +723,11 @@ class TreeSitterExtractor:
             else None
         )
 
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
+
         class_node = self._create_node(
             kind,
             name,
@@ -580,9 +735,13 @@ class TreeSitterExtractor:
             docstring=docstring,
             visibility=visibility,
             is_exported=bool(is_exported) if is_exported else False,
+            **extra_kwargs,
         )
         if not class_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(class_node.id)
 
         self._extract_inheritance(node, class_node.id)
 
@@ -606,15 +765,24 @@ class TreeSitterExtractor:
             else None
         )
 
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
+
         iface_node = self._create_node(
             NodeKind.INTERFACE,
             name,
             node,
             docstring=docstring,
             is_exported=bool(is_exported) if is_exported else False,
+            **extra_kwargs,
         )
         if not iface_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(iface_node.id)
 
         self._extract_inheritance(node, iface_node.id)
 
@@ -641,11 +809,24 @@ class TreeSitterExtractor:
             else None
         )
 
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
+
         struct_node = self._create_node(
-            NodeKind.STRUCT, name, node, docstring=docstring, visibility=visibility
+            NodeKind.STRUCT,
+            name,
+            node,
+            docstring=docstring,
+            visibility=visibility,
+            **extra_kwargs,
         )
         if not struct_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(struct_node.id)
 
         self._extract_inheritance(node, struct_node.id)
 
@@ -671,11 +852,24 @@ class TreeSitterExtractor:
             else None
         )
 
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
+
         enum_node = self._create_node(
-            NodeKind.ENUM, name, node, docstring=docstring, visibility=visibility
+            NodeKind.ENUM,
+            name,
+            node,
+            docstring=docstring,
+            visibility=visibility,
+            **extra_kwargs,
         )
         if not enum_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(enum_node.id)
 
         self._extract_inheritance(node, enum_node.id)
 

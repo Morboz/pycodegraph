@@ -24,10 +24,30 @@ def _python_is_async(node: TSNode) -> bool:
     return prev is not None and prev.type == "async"
 
 
-def _python_is_static(node: TSNode) -> bool:
-    prev = node.prev_named_sibling
-    if prev and prev.type == "decorator":
-        return False
+def _python_is_static(node: TSNode, decorator_names: list[str] | None = None) -> bool:
+    """Check if a method has the @staticmethod decorator.
+
+    The decorator_names list is populated during extraction by walking
+    the decorated_definition parent.
+    """
+    if decorator_names:
+        return "staticmethod" in decorator_names
+    return False
+
+
+def _python_is_classmethod(
+    node: TSNode, decorator_names: list[str] | None = None
+) -> bool:
+    """Check if a method has the @classmethod decorator."""
+    if decorator_names:
+        return "classmethod" in decorator_names
+    return False
+
+
+def _python_is_property(node: TSNode, decorator_names: list[str] | None = None) -> bool:
+    """Check if a method has the @property decorator."""
+    if decorator_names:
+        return "property" in decorator_names
     return False
 
 
@@ -57,7 +77,11 @@ PYTHON_EXTRACTOR = LanguageExtractor(
     body_field="body",
     params_field="parameters",
     return_field="return_type",
+    decorated_definition_types=["decorated_definition"],
     get_signature=_python_get_signature,
     is_async=_python_is_async,
+    is_static=_python_is_static,
+    is_classmethod=_python_is_classmethod,
+    is_property=_python_is_property,
     extract_import=_python_extract_import,
 )

@@ -448,3 +448,100 @@ class TestExtractionEdgeCases:
             assert any(n.language == Language.GO for n in nodes)
         finally:
             cg.close()
+
+
+class TestPythonDecoratorExtraction:
+    """Verify Python decorator extraction: @staticmethod, @property, DECORATES edges."""
+
+    def test_decorator_on_function(self, tmp_path):
+        """@my_decorator on a function should populate decorators and create DECORATES ref."""
+        import json
+
+        # Define the decorator as a real function so it can be resolved
+        cg = _index_single(
+            tmp_path,
+            "mod.py",
+            "def my_decorator(func): return func\n\n@my_decorator\ndef func(): pass\n",
+        )
+        try:
+            funcs = cg._queries.get_nodes_by_kind(NodeKind.FUNCTION)
+            func = next(n for n in funcs if n.name == "func")
+            # decorators field should be a JSON-encoded list containing "my_decorator"
+            assert func.decorators is not None
+            decs = json.loads(func.decorators)
+            assert "my_decorator" in decs
+
+            # There should be a DECORATES edge (resolved from the decorator function)
+            outgoing = cg._queries.get_outgoing_edges(func.id, [EdgeKind.DECORATES])
+            assert len(outgoing) >= 1
+        finally:
+            cg.close()
+
+    def test_staticmethod_detected(self, tmp_path):
+        """@staticmethod should set is_static=True on the method node."""
+        cg = _index_single(
+            tmp_path,
+            "mod.py",
+            "class Foo:\n    @staticmethod\n    def bar(): pass\n",
+        )
+        try:
+            methods = cg._queries.get_nodes_by_kind(NodeKind.METHOD)
+            bar = next(n for n in methods if n.name == "bar")
+            assert bar.is_static is True
+        finally:
+            cg.close()
+
+    def test_property_creates_property_node(self, tmp_path):
+        """@property should create a PROPERTY node instead of METHOD."""
+        cg = _index_single(
+            tmp_path,
+            "mod.py",
+            "class Foo:\n    @property\n    def name(self): pass\n",
+        )
+        try:
+            props = cg._queries.get_nodes_by_kind(NodeKind.PROPERTY)
+            assert any(n.name == "name" for n in props)
+
+            # Should NOT be a METHOD
+            methods = cg._queries.get_nodes_by_kind(NodeKind.METHOD)
+            assert not any(n.name == "name" for n in methods)
+        finally:
+            cg.close()
+
+    def test_multiple_decorators(self, tmp_path):
+        """Multiple decorators should all be captured."""
+        import json
+
+        cg = _index_single(
+            tmp_path,
+            "mod.py",
+            "class Foo:\n    @d1\n    @d2\n    def bar(self): pass\n",
+        )
+        try:
+            methods = cg._queries.get_nodes_by_kind(NodeKind.METHOD)
+            bar = next(n for n in methods if n.name == "bar")
+            assert bar.decorators is not None
+            decs = json.loads(bar.decorators)
+            assert "d1" in decs
+            assert "d2" in decs
+        finally:
+            cg.close()
+
+    def test_dotted_decorator(self, tmp_path):
+        """Dotted decorator names like @app.route should be captured."""
+        import json
+
+        cg = _index_single(
+            tmp_path,
+            "mod.py",
+            "@app.route('/path')\ndef handler(): pass\n",
+        )
+        try:
+            funcs = cg._queries.get_nodes_by_kind(NodeKind.FUNCTION)
+            handler = next(n for n in funcs if n.name == "handler")
+            assert handler.decorators is not None
+            decs = json.loads(handler.decorators)
+            # The full dotted name should be captured
+            assert any("app.route" in d for d in decs)
+        finally:
+            cg.close()
