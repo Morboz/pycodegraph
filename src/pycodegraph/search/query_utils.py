@@ -549,6 +549,11 @@ def extract_symbols_from_query(query: str) -> list[str]:
         if len(m.group(1)) >= 3:
             symbols.add(m.group(1))
 
+    # underscore-prefixed identifiers with no internal underscore (e.g. _private)
+    for m in re.finditer(r"\b(_[a-z][a-z0-9]+)\b", query, re.IGNORECASE):
+        if len(m.group(1)) >= 3:
+            symbols.add(m.group(1))
+
     # __dunder__ (Python double-underscore names like __init__, __str__)
     for m in re.finditer(r"\b(__[a-z][a-z0-9]*__)\b", query, re.IGNORECASE):
         symbols.add(m.group(1))
