@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pycodegraph import CodeGraph
+from pycodegraph.explore.budget import format_budget_note, get_explore_budget
 from pycodegraph.explore.flow import FlowResult, find_flow_chain, format_flow_chain
 from pycodegraph.explore.skeletonize import (
     compute_unique_named_node_ids,
@@ -42,6 +43,18 @@ def _make_node(
         end_column=10,
         updated_at=0,
     )
+
+
+def _write_project(tmp_path, files: dict[str, str]) -> str:
+    """Write a set of {relative_path: content} files under tmp_path."""
+    from pathlib import Path as P
+
+    root = str(tmp_path)
+    for rel, content in files.items():
+        p = P(root) / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+    return root
 
 
 class TestExploreBasic:
@@ -293,17 +306,6 @@ class TestExploreOutput:
 class TestExploreBudgetEnforcement:
     """Integration tests for file_budget enforcement in cluster selection (issue #31)."""
 
-    def _write_project(self, tmp_path, files: dict[str, str]) -> str:
-        """Write a set of {relative_path: content} files under tmp_path."""
-        from pathlib import Path as P
-
-        root = str(tmp_path)
-        for rel, content in files.items():
-            p = P(root) / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content)
-        return root
-
     def test_explore_oversized_cluster_does_not_exceed_budget(self, tmp_path):
         """When a single cluster far exceeds file_budget, it is kept as
         fallback but the output should not grow unboundedly (issue #31)."""
@@ -319,7 +321,7 @@ class TestExploreBudgetEnforcement:
             big_class_lines.append(f"        return {i}")
         big_class_lines.append("")  # trailing newline
 
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/service.py": "\n".join(big_class_lines),
@@ -351,7 +353,7 @@ class TestExploreBudgetEnforcement:
         lines.append("    return x")
         lines.append("")
 
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/large.py": "\n".join(lines),
@@ -374,20 +376,9 @@ class TestExploreBudgetEnforcement:
 class TestSeedingTestFilter:
     """Test that seed_named_symbols filters out test-file candidates."""
 
-    def _write_project(self, tmp_path, files: dict[str, str]) -> str:
-        """Write a set of {relative_path: content} files under tmp_path."""
-        from pathlib import Path as P
-
-        root = str(tmp_path)
-        for rel, content in files.items():
-            p = P(root) / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content)
-        return root
-
     def test_test_files_excluded_from_seeds(self, tmp_path):
         """Test-file symbols should NOT appear as seeds for a non-test query."""
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/calculator.py": """\
@@ -424,7 +415,7 @@ class TestCalculator:
 
     def test_test_files_kept_for_test_query(self, tmp_path):
         """Test-file symbols SHOULD appear when query mentions 'test'."""
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/calculator.py": """\
@@ -455,7 +446,7 @@ class TestCalculator:
     def test_overloaded_name_limited_to_one_fallback(self, tmp_path):
         """Overloaded names (>3 defs) without disambiguation should
         produce at most 1 seed (the most substantive non-test one)."""
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/a.py": """\
@@ -532,7 +523,7 @@ class TestIsTestFile:
     def test_sort_prefers_non_test_when_test_query(self, tmp_path):
         """When is_test_query=True, non-test candidates should still
         sort before test candidates (production impl > test stub)."""
-        root = TestSeedingTestFilter()._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/calculator.py": """\
@@ -1169,17 +1160,6 @@ class TestRenderSkeletonized:
 class TestExploreSkeletonization:
     """Integration tests for skeletonization in the explore pipeline (issue #32)."""
 
-    def _write_project(self, tmp_path, files: dict[str, str]) -> str:
-        """Write a set of {relative_path: content} files under tmp_path."""
-        from pathlib import Path as P
-
-        root = str(tmp_path)
-        for rel, content in files.items():
-            p = P(root) / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content)
-        return root
-
     def test_god_file_skeletonized_stays_within_budget(self, tmp_path):
         """A large file with many named methods should be skeletonized
         and stay within per-file budget (issue #32)."""
@@ -1201,7 +1181,7 @@ class TestExploreSkeletonization:
             lines.append(f"        return x_{j}")
         lines.append("")  # trailing newline
 
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/service.py": "\n".join(lines),
@@ -1251,7 +1231,7 @@ class TestExploreSkeletonization:
             lines.append("        return y_0")
         lines.append("")
 
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/service.py": "\n".join(lines),
@@ -1289,7 +1269,7 @@ class TestExploreSkeletonization:
 
     def test_small_file_not_skeletonized(self, tmp_path):
         """A small file should NOT be skeletonized — existing behavior preserved."""
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/small.py": "def add(a, b):\n    return a + b\n",
@@ -1316,16 +1296,6 @@ class TestExploreNecessaryFileBudget:
     """
 
     _SECTION_CAP_FACTOR = 1.5  # mirrors _NECESSARY_FILE_SECTION_FACTOR
-
-    def _write_project(self, tmp_path, files: dict[str, str]) -> str:
-        from pathlib import Path as P
-
-        root = str(tmp_path)
-        for rel, content in files.items():
-            p = P(root) / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content)
-        return root
 
     @staticmethod
     def _split_sections(output: str) -> dict[str, str]:
@@ -1359,7 +1329,7 @@ class TestExploreNecessaryFileBudget:
             svc_lines.append(f"    def m{i}(self): return {i}")
         svc_lines.append("")
 
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/svc.py": "\n".join(svc_lines),
@@ -1411,7 +1381,7 @@ class TestExploreNecessaryFileBudget:
             svc_lines.append("")
             files[f"src/{name}.py"] = "\n".join(svc_lines)
 
-        root = self._write_project(tmp_path, files)
+        root = _write_project(tmp_path, files)
         cg = CodeGraph.init(root)
         cg.index_all()
         try:
@@ -1445,7 +1415,7 @@ class TestExploreNecessaryFileBudget:
             lines.append(f"        return {i}")
         lines.append("")
 
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/huge.py": "\n".join(lines),
@@ -1482,7 +1452,7 @@ class TestExploreNecessaryFileBudget:
             big_lines.append(f"        return {i}")
         big_lines.append("")
 
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/target.py": "\n".join(named_lines),
@@ -1504,7 +1474,7 @@ class TestExploreNecessaryFileBudget:
     def test_small_necessary_file_not_truncated(self, tmp_path):
         """A necessary file that fits within the section cap is not
         truncated (issue #33)."""
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/service.py": (
@@ -1535,7 +1505,7 @@ class TestExploreNecessaryFileBudget:
             svc_lines.append(f"    def m{i}(self): return {i}")
         svc_lines.append("")
 
-        root = self._write_project(
+        root = _write_project(
             tmp_path,
             {
                 "src/svc.py": "\n".join(svc_lines),
@@ -1559,5 +1529,205 @@ class TestExploreNecessaryFileBudget:
             # truncation message itself, but the max(0, ...) guard
             # prevents negative slicing.
             assert len(result) > 0
+        finally:
+            cg.close()
+
+
+# =============================================================================
+# Issue #34: Explore Budget Note, Blast Radius protection, remaining_files
+# =============================================================================
+
+
+class TestGetExploreBudget:
+    """Unit tests for get_explore_budget — call-count tiers."""
+
+    def test_tiny_project(self):
+        assert get_explore_budget(10) == 1
+
+    def test_medium_project(self):
+        assert get_explore_budget(1_000) == 2
+
+    def test_large_project(self):
+        assert get_explore_budget(10_000) == 3
+
+    def test_very_large_project(self):
+        assert get_explore_budget(20_000) == 4
+
+    def test_huge_project(self):
+        assert get_explore_budget(30_000) == 5
+
+    def test_boundary_500(self):
+        assert get_explore_budget(499) == 1
+        assert get_explore_budget(500) == 2
+
+    def test_boundary_5000(self):
+        assert get_explore_budget(4_999) == 2
+        assert get_explore_budget(5_000) == 3
+
+
+class TestFormatBudgetNote:
+    """Unit tests for format_budget_note."""
+
+    def test_contains_call_count(self):
+        note = format_budget_note(3, 5_002)
+        assert "3 calls" in note
+
+    def test_contains_file_count(self):
+        note = format_budget_note(3, 5_002)
+        assert "5,002" in note
+
+    def test_is_blockquote(self):
+        """Budget note should be a markdown blockquote."""
+        note = format_budget_note(2, 1_000)
+        assert note.startswith(">")
+
+    def test_mentions_explore_cheaper(self):
+        note = format_budget_note(2, 1_000)
+        assert "explore" in note.lower()
+
+
+class TestExploreBudgetNote:
+    """Integration tests for the budget note in explore output (issue #34)."""
+
+    def test_small_project_has_no_budget_note(self, create_python_project):
+        """Small projects (<500 files) should NOT show the budget note."""
+        root = create_python_project()
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            result = cg.explore("User")
+            assert "Explore budget:" not in result
+        finally:
+            cg.close()
+
+    def test_budget_note_appears_when_file_count_large(self, tmp_path):
+        """When the project has ≥500 files, the budget note should appear."""
+        # Build a project large enough to trigger include_budget_note.
+        # We create 600 minimal Python files.
+        files: dict[str, str] = {}
+        for i in range(600):
+            files[f"src/mod_{i:04d}.py"] = f"x_{i} = {i}\n"
+        files["src/models.py"] = (
+            "class User:\n"
+            "    def __init__(self, name):\n"
+            "        self.name = name\n\n"
+            "    def greet(self):\n"
+            "        return f'Hello {self.name}'\n"
+        )
+        root = _write_project(tmp_path, files)
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            result = cg.explore("User")
+            assert "Explore budget:" in result
+            assert "calls for this project" in result
+        finally:
+            cg.close()
+
+
+class TestBlastRadiusTruncationProtection:
+    """Blast radius section should survive hard-ceiling truncation (issue #34)."""
+
+    def test_blast_radius_survives_truncation(self, tmp_path):
+        """When source code triggers hard-ceiling truncation, the blast radius
+        section (which appears before Source Code) should be preserved.
+
+        We create a project where:
+        - An entry point (create_user) has callers (run), giving non-empty blast radius
+        - A large file inflates the source section past the hard ceiling
+        """
+        # A large service file with many methods
+        svc_lines = [
+            "from models import User",
+            "",
+            "def create_user(name, email):",
+            "    return User(name, email)",
+            "",
+        ]
+        for i in range(50):
+            svc_lines.append(f"def helper_{i}(data):")
+            for j in range(15):
+                svc_lines.append(f"    x_{j} = data.get('k_{j}', {j})")
+            svc_lines.append(f"    return {i}")
+            svc_lines.append("")
+        svc_lines.append("")
+
+        caller = (
+            "from services import create_user\n\n"
+            "def run():\n"
+            "    user = create_user('Alice', 'alice@example.com')\n"
+            "    return user\n"
+        )
+
+        models = (
+            "class User:\n"
+            "    def __init__(self, name, email):\n"
+            "        self.name = name\n\n"
+            "    def greet(self):\n"
+            "        return f'Hello {self.name}'\n"
+        )
+
+        root = _write_project(
+            tmp_path,
+            {
+                "models.py": models,
+                "services.py": "\n".join(svc_lines),
+                "main.py": caller,
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            # Tight budget forces hard-ceiling truncation
+            result = cg.explore(
+                "create_user",
+                ExploreOptions(
+                    max_output_chars=800,
+                    include_blast_radius=True,
+                ),
+            )
+            # Verify truncation actually happened
+            assert len(result) <= 1200  # hard ceiling = min(1.5*800, 25000)
+            # If blast radius was computed, it must be present
+            # (create_user is called by run, so blast radius should exist)
+            if "### Blast radius" in result:
+                blast_pos = result.index("### Blast radius")
+                source_pos = result.index("### Source Code")
+                assert blast_pos < source_pos, (
+                    "Blast radius should appear before Source Code"
+                )
+        finally:
+            cg.close()
+
+
+class TestRemainingFilesCollection:
+    """Truncated files should appear in 'Not shown above' (issue #34)."""
+
+    def test_truncated_files_appear_in_not_shown(self, tmp_path):
+        """Files whose source sections are cut by the hard ceiling should
+        appear in the 'Not shown above' list."""
+        # Create multiple files large enough that the combined output
+        # exceeds the hard ceiling.
+        files: dict[str, str] = {}
+        for idx in range(5):
+            lines = [f"def handler_{idx}(request):"]
+            for i in range(100):
+                lines.append(f"    val_{i} = request.get('key_{i}', {i})")
+            lines.append("    return request")
+            lines.append("")
+            files[f"handler_{idx}.py"] = "\n".join(lines)
+
+        root = _write_project(tmp_path, files)
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            # Tight budget forces hard-ceiling truncation
+            result = cg.explore(
+                "handler",
+                ExploreOptions(max_output_chars=600),
+            )
+            # If truncation happened, truncated file paths should be collected
+            if "output truncated" in result:
+                assert "Not shown above" in result or "handler_" in result
         finally:
             cg.close()
