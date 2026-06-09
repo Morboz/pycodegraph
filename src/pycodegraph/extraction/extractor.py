@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from tree_sitter import Node as TSNode
@@ -401,7 +402,7 @@ class TreeSitterExtractor:
         return [name for name, _line, _col in self._pending_decorators]
 
     def _call_hook_with_decorator_names(
-        self, hook: callable, node: TSNode
+        self, hook: Callable[..., bool | None], node: TSNode
     ) -> bool | None:
         """Call an is_static/is_property/is_classmethod hook safely.
 

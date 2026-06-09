@@ -57,7 +57,7 @@ def _python_extract_import(node: TSNode, source: bytes) -> dict | None:
         if module:
             # Collect individual imported names (Y, Z in "from X import Y, Z")
             # for emitting per-name IMPORTS unresolved references.
-            import_names: list[dict[str, int]] = []
+            import_names: list[dict[str, str | int]] = []
             module_node = module
             for i in range(node.named_child_count):
                 child = node.named_child(i)
