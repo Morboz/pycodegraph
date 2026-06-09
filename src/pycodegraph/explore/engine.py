@@ -100,7 +100,7 @@ def _append_skeletonized_section(
     max_symbols_in_header: int,
     total_chars: int,
     max_output_chars: int,
-) -> tuple[str, int, bool, bool] | None:
+) -> tuple[str, int, int, bool] | None:
     """Render a skeletonized section and return (section, chars, files_count, trimmed).
 
     Returns None if skeletonization produces nothing or the section
