@@ -59,3 +59,18 @@ class TestExtractSymbolsFromQuery:
         """__partial (no trailing __) is not a dunder — should not be extracted."""
         result = extract_symbols_from_query("__partial")
         assert "__partial" not in result
+
+    def test_underscore_prefix_no_internal_underscore(self) -> None:
+        """_private (underscore prefix, no internal underscore) should be extracted.
+
+        Regression test for #48: the snake_case pattern required at least one
+        internal underscore, so _fetch_all worked but _private did not.
+        """
+        result = extract_symbols_from_query("_private method")
+        assert "_private" in result, f"_private missing from {result}"
+
+    def test_underscore_prefix_short_identifier_skipped(self) -> None:
+        """_x (single char after underscore) is too short — should not be extracted."""
+        result = extract_symbols_from_query("_x _y")
+        assert "_x" not in result
+        assert "_y" not in result
