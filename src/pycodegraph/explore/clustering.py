@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ..search.query_utils import is_test_file
-from ..types import CONTAINER_KINDS, Node, NodeKind, Subgraph
+from ..types import CONTAINER_KINDS, Edge, EdgeKind, Node, NodeKind, Subgraph
 
 if TYPE_CHECKING:
     from ..fs import FileProvider
@@ -32,6 +32,24 @@ class FileCluster:
     end_line: int
     symbols: list[Node] = field(default_factory=list)
     importance: float = 0.0
+    max_importance: float = 0.0
+
+
+# Importance assigned to edge-source-location ranges (matches TS CodeGraph)
+_EDGE_RANGE_IMPORTANCE = 2.0
+
+
+@dataclass
+class _EdgeRange:
+    """A single-line range derived from an edge source location.
+
+    Used internally during clustering — edge source lines (e.g., the line
+    where a CALLS edge originates) add spatial spread to the range set,
+    preventing dense method blocks from merging into one monolithic cluster.
+    """
+
+    line: int
+    importance: float = _EDGE_RANGE_IMPORTANCE
 
 
 def cluster_nodes_in_file(
@@ -39,6 +57,7 @@ def cluster_nodes_in_file(
     scores: dict[str, float],
     gap_threshold: int = 15,
     file_line_count: int = 0,
+    edges: list[Edge] | None = None,
 ) -> list[FileCluster]:
     """Group nearby nodes in a file into contiguous clusters.
 
@@ -61,6 +80,13 @@ def cluster_nodes_in_file(
     giant envelopes don't collapse into one mega-cluster.  Score
     redistribution is skipped in this fallback path to avoid envelope-
     to-envelope score inflation.
+
+    **Edge source locations** (issue #46): When *edges* is provided,
+    non-CONTAINS edges with valid line numbers are added as single-line
+    ranges during clustering.  This increases the spatial spread of
+    ranges, preventing dense method blocks (e.g., 37 QuerySet methods
+    within gap_threshold) from merging into one monolithic cluster.
+    Ports the TS CodeGraph's edge-line logic (tools.ts:2257-2274).
     """
     if not nodes:
         return []
@@ -110,6 +136,7 @@ def cluster_nodes_in_file(
                     end_line=env.end_line,
                     symbols=[env],
                     importance=scores.get(env.id, 0.0),
+                    max_importance=scores.get(env.id, 0.0),
                 )
                 for env in sorted(removed_envelopes, key=lambda n: n.start_line)
             ]
@@ -129,43 +156,105 @@ def cluster_nodes_in_file(
             return min(env.start_line for env in enclosing)
         return start
 
-    sorted_nodes = sorted(nodes, key=lambda n: n.start_line)
-    clusters: list[FileCluster] = []
-
-    current_nodes = [sorted_nodes[0]]
-    current_end = sorted_nodes[0].end_line
-
-    for node in sorted_nodes[1:]:
-        if node.start_line <= current_end + gap_threshold:
-            current_nodes.append(node)
-            current_end = max(current_end, node.end_line)
-        else:
-            importance = sum(scores.get(n.id, 0.0) for n in current_nodes)
-            start = _extending_start(
-                current_nodes[0].start_line, current_nodes[0].file_path
+    # ── Edge source locations (issue #46) ──────────────────────────────
+    # Extract single-line ranges from non-CONTAINS edges with valid line
+    # numbers.  These add spatial spread, preventing dense method blocks
+    # from merging into one monolithic cluster.
+    # Ports TS CodeGraph tools.ts:2257-2274.
+    edge_ranges: list[_EdgeRange] = []
+    if edges:
+        seen_edge_lines: set[str] = set()  # dedup by "line:target"
+        node_ids = {n.id for n in nodes}
+        for edge in edges:
+            if not edge.line or edge.line <= 0:
+                continue
+            if edge.kind == EdgeKind.CONTAINS:
+                continue
+            # Only include edges whose source is one of the nodes in this file
+            if edge.source not in node_ids:
+                continue
+            key = f"{edge.line}:{edge.target}"
+            if key in seen_edge_lines:
+                continue
+            seen_edge_lines.add(key)
+            edge_ranges.append(
+                _EdgeRange(line=edge.line, importance=_EDGE_RANGE_IMPORTANCE)
             )
-            clusters.append(
-                FileCluster(
-                    file_path=current_nodes[0].file_path,
-                    start_line=start,
-                    end_line=current_end,
-                    symbols=list(current_nodes),
-                    importance=importance,
+
+    # ── Merge nodes + edge ranges into clusters ────────────────────────
+    # Build a unified sorted sequence of (start_line, end_line, importance, node|None)
+    # and merge by gap_threshold just like before.
+    @dataclass
+    class _Range:
+        start: int
+        end: int
+        importance: float
+        node: Node | None = None  # None for edge-derived ranges
+
+    ranges: list[_Range] = []
+    for n in nodes:
+        if n.start_line > 0 and n.end_line >= n.start_line:
+            ranges.append(
+                _Range(
+                    start=n.start_line,
+                    end=n.end_line,
+                    importance=scores.get(n.id, 0.0),
+                    node=n,
                 )
             )
-            current_nodes = [node]
-            current_end = node.end_line
+    for er in edge_ranges:
+        ranges.append(
+            _Range(start=er.line, end=er.line, importance=er.importance, node=None)
+        )
+    ranges.sort(key=lambda r: (r.start, r.end))
+
+    if not ranges:
+        return []
+
+    clusters: list[FileCluster] = []
+    current_ranges = [ranges[0]]
+    current_end = ranges[0].end
+
+    for r in ranges[1:]:
+        if r.start <= current_end + gap_threshold:
+            current_ranges.append(r)
+            current_end = max(current_end, r.end)
+        else:
+            # Emit cluster from accumulated ranges
+            cluster_nodes_list = [
+                cr.node for cr in current_ranges if cr.node is not None
+            ]
+            importance = sum(cr.importance for cr in current_ranges)
+            max_imp = max(cr.importance for cr in current_ranges)
+            fp = cluster_nodes_list[0].file_path if cluster_nodes_list else ""
+            start = _extending_start(current_ranges[0].start, fp)
+            clusters.append(
+                FileCluster(
+                    file_path=fp,
+                    start_line=start,
+                    end_line=current_end,
+                    symbols=cluster_nodes_list,
+                    importance=importance,
+                    max_importance=max_imp,
+                )
+            )
+            current_ranges = [r]
+            current_end = r.end
 
     # Final cluster
-    importance = sum(scores.get(n.id, 0.0) for n in current_nodes)
-    start = _extending_start(current_nodes[0].start_line, current_nodes[0].file_path)
+    cluster_nodes_list = [cr.node for cr in current_ranges if cr.node is not None]
+    importance = sum(cr.importance for cr in current_ranges)
+    max_imp = max(cr.importance for cr in current_ranges)
+    fp = cluster_nodes_list[0].file_path if cluster_nodes_list else ""
+    start = _extending_start(current_ranges[0].start, fp)
     clusters.append(
         FileCluster(
-            file_path=current_nodes[0].file_path,
+            file_path=fp,
             start_line=start,
             end_line=current_end,
-            symbols=list(current_nodes),
+            symbols=cluster_nodes_list,
             importance=importance,
+            max_importance=max_imp,
         )
     )
 

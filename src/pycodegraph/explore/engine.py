@@ -407,25 +407,96 @@ class ExploreEngine:
                     total_chars += len(section)
                     files_included += 1
                     continue
+                # Filter edges whose source node is in this file
+                # (edge source locations add spatial spread to clustering)
+                file_node_ids = {n.id for n in file_nodes}
+                file_edges = [e for e in subgraph.edges if e.source in file_node_ids]
                 clusters = cluster_nodes_in_file(
                     file_nodes,
                     node_importance,
                     gap_threshold=budget.gap_threshold,
                     file_line_count=file_line_count,
+                    edges=file_edges,
                 )
 
                 if not clusters:
                     _add_remaining(file_path, file_nodes)
                     continue
 
-                # Rank clusters by importance, select within per-file budget
-                ranked = sorted(clusters, key=lambda c: c.importance, reverse=True)
+                # Rank clusters by: max_importance desc, density desc, score desc, span asc
+                # (matches TS CodeGraph's rankedClusters sort)
+                ranked = sorted(
+                    clusters,
+                    key=lambda c: (
+                        -c.max_importance,
+                        -(c.importance / max(c.end_line - c.start_line + 1, 1)),
+                        -c.importance,
+                        c.end_line - c.start_line + 1,
+                    ),
+                )
                 file_budget = min(
                     budget.max_chars_per_file,
                     max(0, budget.max_output_chars - total_chars - 200),
                 )
 
                 selected_clusters = select_clusters_within_budget(ranked, file_budget)
+
+                # ── Defensive fallback (issue #46) ──────────────────────
+                # If the only selected cluster is estimated to produce
+                # output far exceeding the per-file budget (2x), and the
+                # file has named/entry symbols, fall back to skeletonization
+                # instead of emitting the raw oversized cluster.  This
+                # prevents a dense method block (e.g., 37 QuerySet methods)
+                # from producing 88K chars when the budget is 6,500.
+                _OVERSIZED_CLUSTER_FACTOR = 2
+                if (
+                    len(selected_clusters) == 1
+                    and (
+                        selected_clusters[0].end_line
+                        - selected_clusters[0].start_line
+                        + 1
+                    )
+                    * 60
+                    > budget.max_chars_per_file * _OVERSIZED_CLUSTER_FACTOR
+                ):
+                    # Force skeletonization as a fallback
+                    source, tag = render_skeletonized(
+                        file_nodes,
+                        file_lines,
+                        path_node_ids,
+                        named_node_ids,
+                        unique_named_node_ids,
+                        entry_node_ids,
+                        budget.max_chars_per_file,
+                    )
+                    if source:
+                        section = format_source_section(
+                            file_path,
+                            file_nodes,
+                            source,
+                            lang,
+                            budget.max_symbols_in_header,
+                            tag=tag,
+                        )
+                        is_necessary = any(
+                            n.id in entry_node_ids or n.id in named_node_ids
+                            for n in file_nodes
+                        )
+                        if (
+                            not is_necessary
+                            and total_chars + len(section)
+                            > budget.max_output_chars * 0.9
+                        ):
+                            _add_remaining(file_path, file_nodes)
+                            any_trimmed = True
+                            continue
+
+                        lines.append(section)
+                        total_chars += len(section)
+                        files_included += 1
+                        continue
+                    # If skeletonization produced nothing, fall through
+                    # to the cluster path (it's better than nothing)
 
                 source = extract_source_with_line_numbers(
                     self._file_provider, file_path, selected_clusters
