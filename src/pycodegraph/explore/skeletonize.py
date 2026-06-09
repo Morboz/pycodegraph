@@ -72,8 +72,7 @@ def should_skeletonize(
 
     A file is a "god-file" when the total body chars of high-priority
     callables (spine, uniquely-named, entry) exceeds
-    ``max_chars_per_file``.  This covers two scenarios from the TS
-    CodeGraph:
+    ``max_chars_per_file``.  This covers three scenarios:
 
     1. **On-spine god-file**: The file has nodes on the flow spine AND
        the spine + uniquely-named callable bodies exceed the budget AND
@@ -86,6 +85,14 @@ def should_skeletonize(
        common case where the query names methods in a large file but
        flow tracing doesn't produce a spine (e.g. class + method names
        that are related via CONTAINS, not CALLS).
+
+    3. **Density fallback**: When flow tracing produces an empty spine
+       (``path_node_ids`` is empty, typically because ``find_flow_chain``
+       cannot cross dynamic-dispatch boundaries), and no nodes are
+       uniquely-named or entry, a file with ≥20 callable nodes is still
+       a "god-file" that needs skeletonization.  Without this fallback,
+       such files fall through to the clustering path, which can produce
+       oversized clusters that swallow the output budget.
     """
     file_node_ids = {n.id for n in file_nodes}
     has_spine_node = bool(file_node_ids & path_node_ids)
@@ -107,7 +114,8 @@ def should_skeletonize(
             named_body_chars += len(body)
 
     # If named/entry bodies fit within budget, no skeletonization needed
-    if named_body_chars <= max_chars_per_file:
+    # (unless density fallback applies — see below)
+    if named_body_chars <= max_chars_per_file and high_prio_ids:
         return False
 
     # --- On-spine god-file check ---
@@ -136,7 +144,24 @@ def should_skeletonize(
         for n in file_nodes
         if n.kind in _CALLABLE_BODY_KINDS and n.id in high_prio_ids
     ]
-    return len(named_callables) >= 2
+    if len(named_callables) >= 2:
+        return True
+
+    # --- Density fallback (no spine, no high-prio coverage) ---
+    # When flow tracing produces an empty spine (path_node_ids is empty)
+    # and no nodes are uniquely-named or entry, a file with many callable
+    # nodes is still a "god-file" that needs skeletonization.  Without
+    # this fallback, such files fall through to the clustering path,
+    # which can produce oversized clusters that swallow the output budget.
+    # This matches the TS CodeGraph's behavior where
+    # buildFlowFromNamedSymbols usually finds a spine via full-graph
+    # BFS + synth edges; when it cannot, density still controls output.
+    if not has_spine_node:
+        callable_count = sum(1 for n in file_nodes if n.kind in _CALLABLE_BODY_KINDS)
+        if callable_count >= 20:
+            return True
+
+    return False
 
 
 def render_skeletonized(

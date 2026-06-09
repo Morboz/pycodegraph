@@ -230,6 +230,110 @@ class TestExploreFlow:
         assert result.chain == []
         assert result.path_node_ids == set()
 
+    def test_flow_chain_traverses_heuristic_edges(self):
+        """Heuristic (synth) edges with kind=CALLS should be traversed by
+        find_flow_chain, enabling it to cross dynamic-dispatch boundaries.
+
+        This models the Django ORM pattern where a callback synthesizer
+        would create an edge from ``_fetch_all`` through an unnamed
+        bridge (``_iterable_class``) to ``execute_sql`` via heuristic
+        provenance.
+        """
+
+        def make_node(node_id: str, name: str) -> Node:
+            return Node(
+                id=node_id,
+                kind=NodeKind.FUNCTION,
+                name=name,
+                qualified_name=name,
+                file_path=f"{name}.py",
+                language=Language.PYTHON,
+                start_line=1,
+                end_line=2,
+                start_column=0,
+                end_column=0,
+                updated_at=0,
+            )
+
+        fetch_all = make_node("fetch_all", "_fetch_all")
+        bridge = make_node("bridge", "_iterable_class")
+        execute_sql = make_node("execute_sql", "execute_sql")
+
+        # A heuristic/synth edge bridging dynamic dispatch
+        fetch_bridge = Edge(
+            source="fetch_all",
+            target="bridge",
+            kind=EdgeKind.CALLS,
+            provenance="heuristic:callback",
+        )
+        bridge_execute = Edge(
+            source="bridge",
+            target="execute_sql",
+            kind=EdgeKind.CALLS,
+        )
+
+        class Traverser:
+            def get_callees(self, node_id: str, max_depth: int = 1):
+                return {
+                    "fetch_all": [(bridge, fetch_bridge)],
+                    "bridge": [(execute_sql, bridge_execute)],
+                    "execute_sql": [],
+                }.get(node_id, [])
+
+        result = find_flow_chain([fetch_all, execute_sql], Traverser())
+
+        assert len(result.chain) == 3
+        assert [step["node"].name for step in result.chain] == [
+            "_fetch_all",
+            "_iterable_class",
+            "execute_sql",
+        ]
+        # All nodes including the unnamed bridge should be on the spine
+        assert "fetch_all" in result.path_node_ids
+        assert "bridge" in result.path_node_ids
+        assert "execute_sql" in result.path_node_ids
+
+    def test_flow_chain_empty_when_dynamic_dispatch_gap(self):
+        """When call graph has a dynamic-dispatch gap (no CALLS edge
+        across the boundary), find_flow_chain should return empty
+        chain and empty path_node_ids.
+
+        This models the actual Django ORM problem from #45:
+        _fetch_all → [dynamic dispatch] → execute_sql has no static
+        CALLS edge, so BFS cannot find the chain.
+        """
+
+        def make_node(node_id: str, name: str) -> Node:
+            return Node(
+                id=node_id,
+                kind=NodeKind.FUNCTION,
+                name=name,
+                qualified_name=name,
+                file_path=f"{name}.py",
+                language=Language.PYTHON,
+                start_line=1,
+                end_line=2,
+                start_column=0,
+                end_column=0,
+                updated_at=0,
+            )
+
+        fetch_all = make_node("fetch_all", "_fetch_all")
+        execute_sql = make_node("execute_sql", "execute_sql")
+
+        # No CALLS edge between fetch_all and execute_sql
+        class Traverser:
+            def get_callees(self, node_id: str, max_depth: int = 1):
+                return {
+                    "fetch_all": [],  # gap: no edge to execute_sql
+                    "execute_sql": [],
+                }.get(node_id, [])
+
+        result = find_flow_chain([fetch_all, execute_sql], Traverser())
+
+        assert result.chain == []
+        assert result.path_node_ids == set()
+
 
 class TestExploreOutput:
     """Tests for output format and structure."""
@@ -854,6 +958,66 @@ class TestShouldSkeletonize:
             max_chars_per_file=500,
         )
         # Only 1 named callable → not enough for overflow skeletonization
+        assert result is False
+
+    def test_density_fallback_when_no_spine_god_file(self):
+        """When path_node_ids is empty (no flow chain) and a file has many
+        callable nodes (god-file density), skeletonization should still
+        trigger as a fallback even if no nodes are in unique_named or entry.
+
+        This matches the Django ORM scenario from #45: find_flow_chain
+        returns empty path_node_ids because it can't cross dynamic-
+        dispatch boundaries, and the file's named symbols are overloaded
+        (not unique).  Without this fallback, the file falls through to
+        the clustering path, which produces a 728-line cluster that
+        swallows the entire output budget.
+        """
+        # 25 callable nodes — clearly a god-file
+        nodes = [
+            _make_node(
+                f"n{i}", f"method_{i}", start_line=10 + i * 30, end_line=35 + i * 30
+            )
+            for i in range(25)
+        ]
+        file_lines = [""] * 800
+        # Fill bodies with content so total chars >> budget
+        for i in range(25):
+            for j in range(10 + i * 30 - 1, 35 + i * 30):
+                file_lines[j] = "x" * 50
+
+        result = should_skeletonize(
+            nodes,
+            set(),  # no spine — flow chain was empty
+            set(),  # no unique named (all overloaded)
+            set(),  # no entry nodes
+            file_lines,
+            max_chars_per_file=6500,
+        )
+        # 25 callables x 25 lines x 50 chars = 31,250 chars >> 6,500 budget
+        # Density fallback should trigger skeletonization
+        assert result is True
+
+    def test_density_fallback_not_triggered_for_small_file(self):
+        """A small file with <20 callables should NOT trigger the density
+        fallback, even when there is no spine/unique/entry."""
+        # 5 callable nodes — not a god-file
+        nodes = [
+            _make_node(
+                f"n{i}", f"method_{i}", start_line=10 + i * 10, end_line=15 + i * 10
+            )
+            for i in range(5)
+        ]
+        file_lines = [""] * 100
+
+        result = should_skeletonize(
+            nodes,
+            set(),  # no spine
+            set(),  # no unique named
+            set(),  # no entry
+            file_lines,
+            max_chars_per_file=6500,
+        )
+        # <20 callables, no high-prio nodes → no skeletonization
         assert result is False
 
 
