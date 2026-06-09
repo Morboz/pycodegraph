@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -121,6 +122,8 @@ class TreeSitterExtractor:
         self.unresolved_refs: list[UnresolvedReference] = []
         self.errors: list[ExtractionError] = []
         self.node_stack: list[str] = []
+        # Decorator context: names of decorators on the current decorated_definition
+        self._pending_decorator_names: list[str] = []
 
     def extract(self) -> ExtractionResult:
         start = time.time()
@@ -206,6 +209,14 @@ class TreeSitterExtractor:
 
         node_type = node.type
         skip_children = False
+
+        # Decorated definitions (e.g. Python @decorator def foo(): ...)
+        # We extract decorator names here and pass them to the inner definition
+        # handler so that Node.decorators, DECORATES refs, and is_static/is_property
+        # are populated correctly.
+        if node_type in (self.extractor.decorated_definition_types or []):
+            self._handle_decorated_definition(node)
+            skip_children = True
 
         # Function declarations
         if node_type in self.extractor.function_types:
@@ -384,6 +395,88 @@ class TreeSitterExtractor:
         )
 
     # =========================================================================
+    # Decorator Handling
+    # =========================================================================
+
+    def _handle_decorated_definition(self, node: TSNode) -> None:
+        """Handle a decorated_definition node by extracting decorator names,
+        then visiting the inner definition so it picks up the pending decorators."""
+        decorator_names: list[str] = []
+
+        for i in range(node.named_child_count):
+            child = node.named_child(i)
+            if not child:
+                continue
+            if child.type == "decorator":
+                name = self._extract_decorator_name(child)
+                if name:
+                    decorator_names.append(name)
+
+        # Store pending decorators for the inner definition to pick up
+        self._pending_decorator_names = decorator_names
+
+        # Visit the inner (non-decorator) children
+        for i in range(node.named_child_count):
+            child = node.named_child(i)
+            if not child:
+                continue
+            if child.type != "decorator":
+                self._visit_node(child)
+
+        # Clear pending decorators after processing the inner definition
+        self._pending_decorator_names = []
+
+    def _extract_decorator_name(self, decorator_node: TSNode) -> str | None:
+        """Extract the name from a decorator node.
+
+        Handles:
+          @name             -> "name"
+          @dotted.name      -> "dotted.name"
+          @name(args)       -> "name"
+          @dotted.name(args)-> "dotted.name"
+        """
+        # The decorator node has named children: identifier, attribute, or call
+        for i in range(decorator_node.named_child_count):
+            child = decorator_node.named_child(i)
+            if not child:
+                continue
+
+            if child.type == "identifier":
+                return get_node_text(child, self.source_bytes)
+
+            if child.type == "attribute":
+                # e.g. app.route — reconstruct the dotted name
+                return get_node_text(child, self.source_bytes)
+
+            if child.type == "call":
+                # Decorator with arguments: @name(args) or @dotted.name(args)
+                # The function part is the first named child
+                func = child.named_child(0)
+                if func:
+                    if func.type == "identifier":
+                        return get_node_text(func, self.source_bytes)
+                    if func.type == "attribute":
+                        return get_node_text(func, self.source_bytes)
+                # Fallback: text of the first named child
+                return get_node_text(func, self.source_bytes) if func else None
+
+        # Fallback: try to get text from the node itself (strip the @)
+        return None
+
+    def _emit_decorates_refs(self, decorated_node_id: str) -> None:
+        """Emit UnresolvedReference with kind=DECORATES for each pending decorator."""
+        for dec_name in self._pending_decorator_names:
+            self.unresolved_refs.append(
+                UnresolvedReference(
+                    from_node_id=decorated_node_id,
+                    reference_name=dec_name,
+                    reference_kind=EdgeKind.DECORATES,
+                    line=0,
+                    column=0,
+                )
+            )
+
+    # =========================================================================
     # Symbol Extractors
     # =========================================================================
 
@@ -479,7 +572,16 @@ class TreeSitterExtractor:
             else None
         )
         is_async = self.extractor.is_async(node) if self.extractor.is_async else None
-        is_static = self.extractor.is_static(node) if self.extractor.is_static else None
+        is_static = (
+            self.extractor.is_static(node, self._pending_decorator_names)
+            if self.extractor.is_static
+            else None
+        )
+
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
 
         func_node = self._create_node(
             NodeKind.FUNCTION,
@@ -491,9 +593,13 @@ class TreeSitterExtractor:
             is_exported=bool(is_exported) if is_exported else False,
             is_async=bool(is_async) if is_async else False,
             is_static=bool(is_static) if is_static else False,
+            **extra_kwargs,
         )
         if not func_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(func_node.id)
 
         self.node_stack.append(func_node.id)
         body = get_child_by_field(node, self.extractor.body_field)
@@ -532,12 +638,31 @@ class TreeSitterExtractor:
             else None
         )
         is_async = self.extractor.is_async(node) if self.extractor.is_async else None
-        is_static = self.extractor.is_static(node) if self.extractor.is_static else None
+        is_static = (
+            self.extractor.is_static(node, self._pending_decorator_names)
+            if self.extractor.is_static
+            else None
+        )
+
+        # Check if this is a @property
+        is_prop = (
+            self.extractor.is_property(node, self._pending_decorator_names)
+            if self.extractor.is_property
+            else False
+        )
 
         qname = f"{receiver_type}::{name}" if receiver_type else None
 
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
+
+        # Use NodeKind.PROPERTY for @property-decorated methods inside a class
+        node_kind = NodeKind.PROPERTY if is_prop else NodeKind.METHOD
+
         method_node = self._create_node(
-            NodeKind.METHOD,
+            node_kind,
             name,
             node,
             docstring=docstring,
@@ -546,9 +671,13 @@ class TreeSitterExtractor:
             is_async=bool(is_async) if is_async else False,
             is_static=bool(is_static) if is_static else False,
             qualified_name=qname,
+            **extra_kwargs,
         )
         if not method_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(method_node.id)
 
         self.node_stack.append(method_node.id)
         body = get_child_by_field(node, self.extractor.body_field)
