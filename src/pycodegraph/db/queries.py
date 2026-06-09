@@ -129,6 +129,26 @@ class QueryBuilder:
     # Edge write operations
     # =========================================================================
 
+    def delete_edges_by_provenance_prefix(self, prefix: str) -> int:
+        """Delete edges whose provenance starts with *prefix*. Returns count deleted."""
+        from sqlalchemy import func as _func
+
+        # Count first for logging purposes.
+        count_stmt = (
+            select(_func.count())
+            .select_from(edges)
+            .where(edges.c.provenance.like(f"{prefix}%"))
+        )
+        count = self._conn.execute(count_stmt).scalar_one()
+
+        if count:
+            self._conn.execute(
+                delete(edges).where(edges.c.provenance.like(f"{prefix}%"))
+            )
+            self._conn.commit()
+
+        return count
+
     def insert_edges(self, edges_data: list[Edge]) -> None:
         if not edges_data:
             return
