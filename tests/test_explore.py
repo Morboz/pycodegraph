@@ -1435,13 +1435,12 @@ class TestExploreNecessaryFileBudget:
             )
             assert isinstance(result, str)
             # The output should be bounded — either via truncation marker
-            # or via skeletonization (which is better, issue #46 fallback)
-            is_bounded = (
-                "section trimmed to fit budget" in result
-                or "focused" in result
-                or "skeleton" in result
-            )
-            assert is_bounded, (
+            # or via skeletonization (which is better, issue #46 fallback).
+            # Use specific section-header patterns to avoid false positives
+            # from variable names or code comments containing these words.
+            is_trimmed = "section trimmed to fit budget" in result
+            is_skeletonized = "· focused" in result or "· skeleton" in result
+            assert is_trimmed or is_skeletonized, (
                 "A necessary file exceeding the section cap via cluster path "
                 "should show truncation marker or be skeletonized"
             )
