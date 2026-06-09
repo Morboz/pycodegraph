@@ -43,6 +43,7 @@ class LanguageExtractor:
     is_exported: Callable | None = None
     is_async: Callable | None = None
     is_static: Callable | None = None
+    is_classmethod: Callable | None = None
     is_const: Callable | None = None
     is_property: Callable | None = None
     extract_import: Callable | None = None

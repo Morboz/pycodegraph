@@ -122,8 +122,9 @@ class TreeSitterExtractor:
         self.unresolved_refs: list[UnresolvedReference] = []
         self.errors: list[ExtractionError] = []
         self.node_stack: list[str] = []
-        # Decorator context: names of decorators on the current decorated_definition
-        self._pending_decorator_names: list[str] = []
+        # Decorator context: (name, line, column) tuples for decorators on the
+        # current decorated_definition
+        self._pending_decorators: list[tuple[str, int, int]] = []
 
     def extract(self) -> ExtractionResult:
         start = time.time()
@@ -219,7 +220,7 @@ class TreeSitterExtractor:
             skip_children = True
 
         # Function declarations
-        if node_type in self.extractor.function_types:
+        elif node_type in self.extractor.function_types:
             if (
                 self._is_inside_class_like()
                 and node_type in self.extractor.method_types
@@ -394,6 +395,24 @@ class TreeSitterExtractor:
             NodeKind.MODULE,
         )
 
+    @property
+    def _pending_decorator_names(self) -> list[str]:
+        """Convenience: list of just the decorator names from pending decorators."""
+        return [name for name, _line, _col in self._pending_decorators]
+
+    def _call_hook_with_decorator_names(
+        self, hook: callable, node: TSNode
+    ) -> bool | None:
+        """Call an is_static/is_property/is_classmethod hook safely.
+
+        Some hooks accept (node, decorator_names) while others only accept (node).
+        Try the extended signature first; fall back to the basic one on TypeError.
+        """
+        try:
+            return hook(node, self._pending_decorator_names)  # type: ignore[call-arg]
+        except TypeError:
+            return hook(node)  # type: ignore[call-arg]
+
     # =========================================================================
     # Decorator Handling
     # =========================================================================
@@ -401,7 +420,7 @@ class TreeSitterExtractor:
     def _handle_decorated_definition(self, node: TSNode) -> None:
         """Handle a decorated_definition node by extracting decorator names,
         then visiting the inner definition so it picks up the pending decorators."""
-        decorator_names: list[str] = []
+        decorators: list[tuple[str, int, int]] = []
 
         for i in range(node.named_child_count):
             child = node.named_child(i)
@@ -410,10 +429,12 @@ class TreeSitterExtractor:
             if child.type == "decorator":
                 name = self._extract_decorator_name(child)
                 if name:
-                    decorator_names.append(name)
+                    decorators.append(
+                        (name, child.start_point[0] + 1, child.start_point[1])
+                    )
 
         # Store pending decorators for the inner definition to pick up
-        self._pending_decorator_names = decorator_names
+        self._pending_decorators = decorators
 
         # Visit the inner (non-decorator) children
         for i in range(node.named_child_count):
@@ -424,7 +445,7 @@ class TreeSitterExtractor:
                 self._visit_node(child)
 
         # Clear pending decorators after processing the inner definition
-        self._pending_decorator_names = []
+        self._pending_decorators = []
 
     def _extract_decorator_name(self, decorator_node: TSNode) -> str | None:
         """Extract the name from a decorator node.
@@ -465,14 +486,14 @@ class TreeSitterExtractor:
 
     def _emit_decorates_refs(self, decorated_node_id: str) -> None:
         """Emit UnresolvedReference with kind=DECORATES for each pending decorator."""
-        for dec_name in self._pending_decorator_names:
+        for dec_name, dec_line, dec_column in self._pending_decorators:
             self.unresolved_refs.append(
                 UnresolvedReference(
                     from_node_id=decorated_node_id,
                     reference_name=dec_name,
                     reference_kind=EdgeKind.DECORATES,
-                    line=0,
-                    column=0,
+                    line=dec_line,
+                    column=dec_column,
                 )
             )
 
@@ -573,7 +594,7 @@ class TreeSitterExtractor:
         )
         is_async = self.extractor.is_async(node) if self.extractor.is_async else None
         is_static = (
-            self.extractor.is_static(node, self._pending_decorator_names)
+            self._call_hook_with_decorator_names(self.extractor.is_static, node)
             if self.extractor.is_static
             else None
         )
@@ -639,14 +660,14 @@ class TreeSitterExtractor:
         )
         is_async = self.extractor.is_async(node) if self.extractor.is_async else None
         is_static = (
-            self.extractor.is_static(node, self._pending_decorator_names)
+            self._call_hook_with_decorator_names(self.extractor.is_static, node)
             if self.extractor.is_static
             else None
         )
 
         # Check if this is a @property
         is_prop = (
-            self.extractor.is_property(node, self._pending_decorator_names)
+            self._call_hook_with_decorator_names(self.extractor.is_property, node)
             if self.extractor.is_property
             else False
         )
@@ -702,6 +723,11 @@ class TreeSitterExtractor:
             else None
         )
 
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
+
         class_node = self._create_node(
             kind,
             name,
@@ -709,9 +735,13 @@ class TreeSitterExtractor:
             docstring=docstring,
             visibility=visibility,
             is_exported=bool(is_exported) if is_exported else False,
+            **extra_kwargs,
         )
         if not class_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(class_node.id)
 
         self._extract_inheritance(node, class_node.id)
 
@@ -735,15 +765,24 @@ class TreeSitterExtractor:
             else None
         )
 
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
+
         iface_node = self._create_node(
             NodeKind.INTERFACE,
             name,
             node,
             docstring=docstring,
             is_exported=bool(is_exported) if is_exported else False,
+            **extra_kwargs,
         )
         if not iface_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(iface_node.id)
 
         self._extract_inheritance(node, iface_node.id)
 
@@ -770,11 +809,24 @@ class TreeSitterExtractor:
             else None
         )
 
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
+
         struct_node = self._create_node(
-            NodeKind.STRUCT, name, node, docstring=docstring, visibility=visibility
+            NodeKind.STRUCT,
+            name,
+            node,
+            docstring=docstring,
+            visibility=visibility,
+            **extra_kwargs,
         )
         if not struct_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(struct_node.id)
 
         self._extract_inheritance(node, struct_node.id)
 
@@ -800,11 +852,24 @@ class TreeSitterExtractor:
             else None
         )
 
+        # Build extra kwargs for decorators
+        extra_kwargs: dict = {}
+        if self._pending_decorator_names:
+            extra_kwargs["decorators"] = json.dumps(self._pending_decorator_names)
+
         enum_node = self._create_node(
-            NodeKind.ENUM, name, node, docstring=docstring, visibility=visibility
+            NodeKind.ENUM,
+            name,
+            node,
+            docstring=docstring,
+            visibility=visibility,
+            **extra_kwargs,
         )
         if not enum_node:
             return
+
+        # Emit DECORATES unresolved refs for each decorator
+        self._emit_decorates_refs(enum_node.id)
 
         self._extract_inheritance(node, enum_node.id)
 

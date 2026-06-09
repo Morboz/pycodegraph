@@ -81,6 +81,7 @@ PYTHON_EXTRACTOR = LanguageExtractor(
     get_signature=_python_get_signature,
     is_async=_python_is_async,
     is_static=_python_is_static,
+    is_classmethod=_python_is_classmethod,
     is_property=_python_is_property,
     extract_import=_python_extract_import,
 )
