@@ -322,7 +322,7 @@ class ContextBuilder:
                 del nodes[nid]
 
         # Cap non-production nodes
-        if not is_test_query:
+        if not is_test_query(query):
             max_non_prod = max(3, opts.max_nodes * 15 // 100)
             non_prod = [nid for nid, n in nodes.items() if is_test_file(n.file_path)]
             if len(non_prod) > max_non_prod:
