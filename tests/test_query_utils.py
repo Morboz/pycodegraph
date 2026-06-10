@@ -1,6 +1,6 @@
 """Tests for extract_symbols_from_query — symbol extraction from NL queries."""
 
-from pycodegraph.search.query_utils import extract_symbols_from_query
+from pycodegraph.search.query_utils import extract_symbols_from_query, is_test_query
 
 
 class TestExtractSymbolsFromQuery:
@@ -138,3 +138,27 @@ class TestPathRelevanceScoring:
             )
             == 5
         )
+
+
+class TestIsTestQuery:
+    """Unit tests for the is_test_query heuristic."""
+
+    def test_plain_test_keyword(self) -> None:
+        assert is_test_query("test the payment flow")
+
+    def test_spec_keyword(self) -> None:
+        assert is_test_query("find the auth spec")
+
+    def test_both_keywords(self) -> None:
+        assert is_test_query("test spec for user model")
+
+    def test_case_insensitive(self) -> None:
+        assert is_test_query("Test the handler")
+        assert is_test_query("SPEC for routing")
+
+    def test_no_test_keyword(self) -> None:
+        assert not is_test_query("how does authentication work")
+
+    def test_substring_match_is_intentional(self) -> None:
+        """Substring match is the current design — 'latest' triggers 'test'."""
+        assert is_test_query("find the latest changes")

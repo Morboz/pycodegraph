@@ -12,6 +12,7 @@ from ..search import (
     get_stem_variants,
     is_test_file,
 )
+from ..search.query_utils import is_test_query
 
 if TYPE_CHECKING:
     from ..search.searcher import NodeSearcher
@@ -219,9 +220,7 @@ class ContextBuilder:
                 search_results.append(r)
 
         # Deprioritize test files
-        query_lower = query.lower()
-        is_test_query = "test" in query_lower or "spec" in query_lower
-        if not is_test_query:
+        if not is_test_query(query):
             for r in search_results:
                 if is_test_file(r.node.file_path):
                     r.score *= 0.3
@@ -323,7 +322,7 @@ class ContextBuilder:
                 del nodes[nid]
 
         # Cap non-production nodes
-        if not is_test_query:
+        if not is_test_query(query):
             max_non_prod = max(3, opts.max_nodes * 15 // 100)
             non_prod = [nid for nid, n in nodes.items() if is_test_file(n.file_path)]
             if len(non_prod) > max_non_prod:
