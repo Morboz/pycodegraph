@@ -146,7 +146,7 @@ class ResolutionContext:
     def set_file_provider(self, file_provider: FileProvider) -> None:
         """Replace the :class:`FileProvider` and clear file-content cache."""
         self._file_provider = file_provider
-        self._file_contents = _LRUCache(1000)
+        self._file_contents._cache.clear()
 
     @property
     def known_names(self) -> set[str]:
