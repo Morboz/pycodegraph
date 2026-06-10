@@ -37,6 +37,10 @@ class ReferenceResolver:
             queries, project_root, extract_import_mappings, file_provider
         )
 
+    def set_file_provider(self, file_provider: FileProvider) -> None:
+        """Replace the :class:`FileProvider` used for resolution."""
+        self._context.set_file_provider(file_provider)
+
     def warm_caches(self) -> None:
         self._context.warm_caches()
 

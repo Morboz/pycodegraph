@@ -13,7 +13,6 @@ from .config import (
     load_config,
     save_config,
 )
-from .context.builder import ContextBuilder
 from .db import DatabaseConnection
 from .db.queries import QueryBuilder
 from .explore.engine import ExploreEngine
@@ -21,10 +20,10 @@ from .extraction import ExtractionOrchestrator
 from .fs import FileProvider, LocalFileProvider
 from .graph import GraphQueryManager, GraphTraverser
 from .resolution import create_resolver
+from .resolution.resolver import ReferenceResolver
 from .search.query_utils import derive_project_name_tokens
 from .search.searcher import NodeSearcher
 from .types import (
-    BuildContextOptions,
     Context,
     Edge,
     ExploreOptions,
@@ -44,8 +43,8 @@ def _create_components(
     ExtractionOrchestrator,
     GraphTraverser,
     GraphQueryManager,
-    ContextBuilder,
     ExploreEngine,
+    ReferenceResolver,
 ]:
     """Build all collaborator objects for CodeGraph."""
     if file_provider is None:
@@ -58,19 +57,17 @@ def _create_components(
     orchestrator = ExtractionOrchestrator(project_root, config, queries)
     traverser = GraphTraverser(queries)
     graph_manager = GraphQueryManager(queries)
-    context_builder = ContextBuilder(
-        project_root, queries, traverser, searcher, file_provider
-    )
     explore_engine = ExploreEngine(
         project_root, queries, traverser, searcher, file_provider
     )
+    resolver = create_resolver(project_root, queries, file_provider)
     return (
         searcher,
         orchestrator,
         traverser,
         graph_manager,
-        context_builder,
         explore_engine,
+        resolver,
     )
 
 
@@ -88,9 +85,8 @@ class CodeGraph:
         orchestrator: ExtractionOrchestrator,
         traverser: GraphTraverser,
         graph_manager: GraphQueryManager,
-        context_builder: ContextBuilder,
         explore_engine: ExploreEngine,
-        file_provider: FileProvider | None = None,
+        resolver: ReferenceResolver,
     ):
         self._db = db
         self._conn = db.get_connection()
@@ -101,11 +97,8 @@ class CodeGraph:
         self._orchestrator = orchestrator
         self._traverser = traverser
         self._graph_manager = graph_manager
-        self._context_builder = context_builder
         self._explore_engine = explore_engine
-        self._file_provider: FileProvider = file_provider or LocalFileProvider(
-            project_root
-        )
+        self._resolver = resolver
 
     # =========================================================================
     # Lifecycle
@@ -160,8 +153,8 @@ class CodeGraph:
             orchestrator,
             traverser,
             graph_manager,
-            context_builder,
             explore_engine,
+            resolver,
         ) = _create_components(root, config, queries)
         return cls(
             db,
@@ -172,8 +165,8 @@ class CodeGraph:
             orchestrator=orchestrator,
             traverser=traverser,
             graph_manager=graph_manager,
-            context_builder=context_builder,
             explore_engine=explore_engine,
+            resolver=resolver,
         )
 
     @classmethod
@@ -199,8 +192,8 @@ class CodeGraph:
             orchestrator,
             traverser,
             graph_manager,
-            context_builder,
             explore_engine,
+            resolver,
         ) = _create_components(root, config, queries)
         return cls(
             db,
@@ -211,8 +204,8 @@ class CodeGraph:
             orchestrator=orchestrator,
             traverser=traverser,
             graph_manager=graph_manager,
-            context_builder=context_builder,
             explore_engine=explore_engine,
+            resolver=resolver,
         )
 
     @classmethod
@@ -253,8 +246,8 @@ class CodeGraph:
             orchestrator,
             traverser,
             graph_manager,
-            context_builder,
             explore_engine,
+            resolver,
         ) = _create_components(project_root, config, queries, file_provider)
         return cls(
             db,
@@ -265,9 +258,8 @@ class CodeGraph:
             orchestrator=orchestrator,
             traverser=traverser,
             graph_manager=graph_manager,
-            context_builder=context_builder,
             explore_engine=explore_engine,
-            file_provider=file_provider,
+            resolver=resolver,
         )
 
     def close(self) -> None:
@@ -290,14 +282,7 @@ class CodeGraph:
         result = self._orchestrator.index_all(on_progress)
 
         if result.success:
-            # getattr for compat with callers that bypass __init__
-            # (e.g. tests that construct CodeGraph directly).
-            resolver = create_resolver(
-                self._project_root,
-                self._queries,
-                getattr(self, "_file_provider", None),
-            )
-            resolution_result = resolver.resolve_and_persist(on_progress)
+            resolution_result = self._resolver.resolve_and_persist(on_progress)
             result.edges_created += resolution_result.stats.get("resolved", 0)
             result.refs_resolved = resolution_result.stats.get("resolved", 0)
             result.refs_unresolved = resolution_result.stats.get("unresolved", 0)
@@ -360,14 +345,7 @@ class CodeGraph:
 
         fatal_errors = [e for e in errors if e.severity == "error"]
         if not fatal_errors:
-            # getattr for compat with callers that bypass __init__
-            # (e.g. tests that construct CodeGraph directly).
-            resolver = create_resolver(
-                self._project_root,
-                self._queries,
-                getattr(self, "_file_provider", None),
-            )
-            resolution_result = resolver.resolve_and_persist(on_progress)
+            resolution_result = self._resolver.resolve_and_persist(on_progress)
             total_edges += resolution_result.stats.get("resolved", 0)
             refs_resolved = resolution_result.stats.get("resolved", 0)
             refs_unresolved = resolution_result.stats.get("unresolved", 0)
@@ -454,16 +432,6 @@ class CodeGraph:
         """Get all files that import from this file."""
         return self._graph_manager.get_file_dependents(file_path)
 
-    # --- Context building ---
-
-    def build_context(
-        self,
-        task_input,
-        options: BuildContextOptions | None = None,
-    ):
-        """Build rich context for a task using hybrid search + graph traversal."""
-        return self._context_builder.build_context(task_input, options)
-
     # --- Exploration ---
 
     def explore(
@@ -473,9 +441,8 @@ class CodeGraph:
     ) -> str:
         """Explore the codebase for a query using graph-based ranking.
 
-        Unlike ``build_context`` (which returns symbol-level code blocks),
-        ``explore`` groups source by file with line numbers, traces call
-        chains among named symbols, and respects adaptive output budgets.
+        Groups source by file with line numbers, traces call chains among
+        named symbols, and respects adaptive output budgets.
         Returns a formatted string suitable for LLM context windows.
         """
         return self._explore_engine.explore(query, options)
@@ -495,10 +462,8 @@ class CodeGraph:
         opened without a provider and a later caller needs to inject one
         (e.g. after an LRU-cache hit in a store).
         """
-        self._file_provider = file_provider
-        self._explore_engine._file_provider = file_provider
-        self._explore_engine._context_builder._file_provider = file_provider
-        self._context_builder._file_provider = file_provider
+        self._explore_engine.set_file_provider(file_provider)
+        self._resolver.set_file_provider(file_provider)
 
     @property
     def config(self) -> CodeGraphConfig:

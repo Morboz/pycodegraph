@@ -158,15 +158,18 @@ class ExploreEngine:
         )
         # Reuse ContextBuilder for the initial subgraph
         self._context_builder = ContextBuilder(
-            project_root, queries, traverser, searcher, self._file_provider
+            project_root, queries, traverser, searcher
         )
+
+    def set_file_provider(self, file_provider: FileProvider) -> None:
+        """Replace the :class:`FileProvider` used for file reading."""
+        self._file_provider = file_provider
 
     def explore(self, query: str, options: ExploreOptions | None = None) -> str:
         """Run the full explore pipeline and return LLM-ready formatted text.
 
-        Unlike ``build_context`` (which returns symbol-level code blocks),
-        ``explore`` groups source by file with line numbers, traces call
-        chains among named symbols, and respects adaptive output budgets.
+        Groups source by file with line numbers, traces call chains among
+        named symbols, and respects adaptive output budgets.
         """
         opts = options or ExploreOptions()
 
