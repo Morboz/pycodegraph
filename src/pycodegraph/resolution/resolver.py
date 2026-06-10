@@ -9,7 +9,7 @@ from ..db.queries import QueryBuilder
 from ..fs import FileProvider
 from ..types import Edge, EdgeKind, NodeKind, UnresolvedReference
 from ._context import ResolutionContext
-from ._types import ResolutionResult, ResolvedRef, UnresolvedRef
+from ._types import ResolutionResult, ResolvedRef
 from .builtins import is_builtin_or_external
 from .import_resolver import (
     extract_import_mappings,
@@ -42,7 +42,7 @@ class ReferenceResolver:
 
     def resolve_all(
         self,
-        refs: list[UnresolvedRef],
+        refs: list[UnresolvedReference],
         on_progress: Callable | None = None,
     ) -> ResolutionResult:
         result = ResolutionResult()
@@ -66,7 +66,7 @@ class ReferenceResolver:
         }
         return result
 
-    def resolve_one(self, ref: UnresolvedRef) -> ResolvedRef | None:
+    def resolve_one(self, ref: UnresolvedReference) -> ResolvedRef | None:
         if not ref.reference_name or len(ref.reference_name) < 2:
             return None
 
@@ -106,7 +106,7 @@ class ReferenceResolver:
         # Then name-based strategies
         return match_reference(ref, self._context)
 
-    def _resolve_imports_ref(self, ref: UnresolvedRef) -> ResolvedRef | None:
+    def _resolve_imports_ref(self, ref: UnresolvedReference) -> ResolvedRef | None:
         """Resolve an IMPORTS reference to the import node in the same file."""
         nodes_in_file = self._context.get_nodes_in_file(ref.file_path)
         for node in nodes_in_file:
@@ -148,7 +148,7 @@ class ReferenceResolver:
 
         return False
 
-    def _matches_any_import(self, ref: UnresolvedRef) -> bool:
+    def _matches_any_import(self, ref: UnresolvedReference) -> bool:
         """Check if the reference name matches any import in its file."""
         imports = self._context.get_import_mappings(ref.file_path, ref.language)
         for imp in imports:
@@ -187,10 +187,9 @@ class ReferenceResolver:
             return ResolutionResult()
 
         total = len(all_db_refs)
-        internal_refs = [self._to_internal_ref(r) for r in all_db_refs]
 
         # Resolve all in memory (zero DB queries for node lookups)
-        result = self.resolve_all(internal_refs, on_progress)
+        result = self.resolve_all(all_db_refs, on_progress)
 
         # Bulk insert edges (single query)
         if result.resolved:
@@ -232,18 +231,6 @@ class ReferenceResolver:
         ):
             return EdgeKind.IMPLEMENTS
         return original_kind
-
-    @staticmethod
-    def _to_internal_ref(r: UnresolvedReference) -> UnresolvedRef:
-        return UnresolvedRef(
-            from_node_id=r.from_node_id,
-            reference_name=r.reference_name,
-            reference_kind=r.reference_kind,
-            line=r.line,
-            column=r.column,
-            file_path=r.file_path,
-            language=r.language,
-        )
 
     @staticmethod
     def _count_by_method(resolved: list[ResolvedRef]) -> dict[str, int]:

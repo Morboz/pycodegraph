@@ -2,42 +2,17 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from collections.abc import Callable
-from typing import Generic, TypeVar
 
 from ..db.queries import QueryBuilder
 from ..fs import FileProvider, LocalFileProvider
 from ..types import Node
+from ..utils.cache import LRUCache
 from ._types import ImportMapping
-
-T = TypeVar("T")
 
 # Sentinel cached in place of ``None`` to distinguish "file not found"
 # from an empty (but valid) file.
 _FILE_MISSING = "\x00pycodegraph:missing\x00"
-
-
-class _LRUCache(Generic[T]):
-    """Simple LRU cache backed by OrderedDict."""
-
-    def __init__(self, max_size: int = 5000) -> None:
-        self._cache: OrderedDict[str, T] = OrderedDict()
-        self._max_size = max_size
-
-    def get(self, key: str) -> T | None:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-            return self._cache[key]
-        return None
-
-    def put(self, key: str, value: T) -> None:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-        else:
-            if len(self._cache) >= self._max_size:
-                self._cache.popitem(last=False)
-        self._cache[key] = value
 
 
 class ResolutionContext:
@@ -70,8 +45,8 @@ class ResolutionContext:
         self._lower_name_index: dict[str, list[Node]] = {}
 
         # Per-file data (LRU-bounded to limit memory)
-        self._import_mappings: _LRUCache[list[ImportMapping]] = _LRUCache(5000)
-        self._file_contents: _LRUCache[str] = _LRUCache(1000)
+        self._import_mappings: LRUCache[list[ImportMapping]] = LRUCache(5000)
+        self._file_contents: LRUCache[str] = LRUCache(1000)
 
         self._known_files: set[str] = set()
         self._known_names: set[str] = set()

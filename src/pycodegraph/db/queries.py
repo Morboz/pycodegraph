@@ -17,7 +17,7 @@ from ..types import (
     SearchResult,
     UnresolvedReference,
 )
-from ._cache import LRUCache
+from ..utils.cache import LRUCache
 from .backend import get_backend
 from .tables import edges, files, nodes, unresolved_refs
 
@@ -60,7 +60,6 @@ _REF_COLUMNS = (
     unresolved_refs.c.reference_kind,
     unresolved_refs.c.line,
     unresolved_refs.c.col,
-    unresolved_refs.c.candidates,
     unresolved_refs.c.file_path,
     unresolved_refs.c.language,
 )
@@ -137,7 +136,6 @@ def _ref_row(r: UnresolvedReference) -> dict:
         "reference_kind": r.reference_kind.value,
         "line": r.line,
         "col": r.column,
-        "candidates": _json_field(r.candidates),
         "file_path": r.file_path,
         "language": r.language,
     }
@@ -727,7 +725,6 @@ class QueryBuilder:
             reference_kind=EdgeKind(row[2]) if isinstance(row[2], str) else row[2],
             line=row[3],
             column=row[4],
-            candidates=row[5],
-            file_path=row[6],
-            language=row[7],
+            file_path=row[5],
+            language=row[6],
         )

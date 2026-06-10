@@ -85,7 +85,6 @@ unresolved_refs = Table(
     Column("reference_kind", Text, nullable=False),
     Column("line", Integer, nullable=False),
     Column("col", Integer, nullable=False),
-    Column("candidates", Text),
     Column("file_path", Text, nullable=False, server_default=""),
     Column("language", Text, nullable=False, server_default="unknown"),
 )
