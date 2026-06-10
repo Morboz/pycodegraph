@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from ..search.query_utils import (
     extract_symbols_from_query,
     is_test_file,
+    is_test_query,
     normalize_name_token,
 )
 from ..types import Node, NodeKind, SearchOptions
@@ -84,8 +85,7 @@ def seed_named_symbols(
 
     # Whether the query explicitly asks about tests — if so, keep
     # test-file candidates in the pool (matching TS CodeGraph).
-    query_lower = query.lower()
-    is_test_query = "test" in query_lower or "spec" in query_lower
+    _is_test_q = is_test_query(query)
 
     named: list[tuple[Node, float]] = []
     seen_ids: set[str] = set()
@@ -103,7 +103,7 @@ def seed_named_symbols(
         # Test files rarely contain the answer; their presence inflates
         # heuristic scores and pollutes file ranking.  Skip them unless
         # the agent explicitly asks about tests.
-        if not is_test_query:
+        if not _is_test_q:
             candidates = [r for r in candidates if not is_test_file(r.node.file_path)]
 
         # Sort: larger body first (skip stubs).  When is_test_query=True,

@@ -302,12 +302,16 @@ def score_path_relevance(
         elif any(term in path_lower for term in terms):
             score += 3
 
-    query_lower = query.lower()
-    is_test_query = "test" in query_lower or "spec" in query_lower
-    if not is_test_query and is_test_file(file_path):
+    if not is_test_query(query) and is_test_file(file_path):
         score -= 15
 
     return score
+
+
+def is_test_query(query: str) -> bool:
+    """Check whether a free-text query explicitly asks about tests/specs."""
+    query_lower = query.lower()
+    return "test" in query_lower or "spec" in query_lower
 
 
 # ── Test-file detection regexes (aligned with TS CodeGraph isTestPath) ──

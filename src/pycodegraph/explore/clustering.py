@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, NamedTuple
 
-from ..search.query_utils import is_test_file
+from ..search.query_utils import is_test_file, is_test_query
 from ..types import CONTAINER_KINDS, Edge, EdgeKind, Node, NodeKind, Subgraph
 
 if TYPE_CHECKING:
@@ -347,8 +347,7 @@ def select_files(
     Ordering: named-symbol files first, then by score.
     Test/spec files are deprioritized unless the query mentions tests.
     """
-    query_lower = query.lower()
-    is_test_query = "test" in query_lower or "spec" in query_lower
+    _is_test_q = is_test_query(query)
 
     # Determine which files contain named symbols
     named_files: set[str] = set()
@@ -361,7 +360,7 @@ def select_files(
         # Named files first (0 before 1)
         is_named = 0 if fp in named_files else 1
         # Non-test before test
-        is_low = 1 if (not is_test_query and is_test_file(fp)) else 0
+        is_low = 1 if (not _is_test_q and is_test_file(fp)) else 0
         # Score descending → negate
         score = -file_scores.get(fp, 0.0)
         return (is_named, is_low, score)
