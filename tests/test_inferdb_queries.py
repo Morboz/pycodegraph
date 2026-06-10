@@ -510,9 +510,9 @@ class TestCodeGraphDeleteFile:
         from types import SimpleNamespace
 
         from pycodegraph.config import CodeGraphConfig
-        from pycodegraph.context.builder import ContextBuilder
         from pycodegraph.extraction import ExtractionOrchestrator
         from pycodegraph.graph import GraphQueryManager, GraphTraverser
+        from pycodegraph.resolution.resolver import ReferenceResolver
         from pycodegraph.search.searcher import NodeSearcher
 
         config = CodeGraphConfig()
@@ -527,7 +527,7 @@ class TestCodeGraphDeleteFile:
         cg._orchestrator = ExtractionOrchestrator(tmp_dir, config, queries)
         cg._traverser = GraphTraverser(queries)
         cg._graph_manager = GraphQueryManager(queries)
-        cg._context_builder = ContextBuilder(tmp_dir, queries, cg._traverser, searcher)
+        cg._resolver = ReferenceResolver(tmp_dir, queries)
         return cg
 
     def test_delete_file_is_public_method_on_codegraph_class(self):
@@ -575,9 +575,9 @@ class TestCodeGraphApplyDelta:
         from types import SimpleNamespace
 
         from pycodegraph.config import CodeGraphConfig
-        from pycodegraph.context.builder import ContextBuilder
         from pycodegraph.extraction import ExtractionOrchestrator
         from pycodegraph.graph import GraphQueryManager, GraphTraverser
+        from pycodegraph.resolution.resolver import ReferenceResolver
         from pycodegraph.search.searcher import NodeSearcher
 
         config = CodeGraphConfig()
@@ -592,7 +592,7 @@ class TestCodeGraphApplyDelta:
         cg._orchestrator = ExtractionOrchestrator(tmp_dir, config, queries)
         cg._traverser = GraphTraverser(queries)
         cg._graph_manager = GraphQueryManager(queries)
-        cg._context_builder = ContextBuilder(tmp_dir, queries, cg._traverser, searcher)
+        cg._resolver = ReferenceResolver(tmp_dir, queries)
         return cg
 
     def test_apply_delta_is_public_method_on_codegraph_class(self):
@@ -633,7 +633,7 @@ class TestCodeGraphApplyDelta:
     def test_apply_delta_runs_resolution_on_success(self):
         """apply_delta must call resolve_and_persist — this was the key missing step
         in the old index_file() and the main reason apply_delta was requested."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         queries, conn, engine = _sqlite_queries()
         try:
@@ -643,16 +643,12 @@ class TestCodeGraphApplyDelta:
 
                 fake_resolution = MagicMock()
                 fake_resolution.stats = {"resolved": 3, "unresolved": 0}
-                fake_resolver = MagicMock()
-                fake_resolver.resolve_and_persist.return_value = fake_resolution
+                cg._resolver = MagicMock()
+                cg._resolver.resolve_and_persist.return_value = fake_resolution
 
-                with patch(
-                    "pycodegraph.codegraph.create_resolver", return_value=fake_resolver
-                ) as mock_cr:
-                    result = cg.apply_delta(changed_files=["mod.py"], removed_files=[])
+                result = cg.apply_delta(changed_files=["mod.py"], removed_files=[])
 
-                mock_cr.assert_called_once()
-                fake_resolver.resolve_and_persist.assert_called_once()
+                cg._resolver.resolve_and_persist.assert_called_once()
                 assert result.success
         finally:
             conn.close()
@@ -661,18 +657,18 @@ class TestCodeGraphApplyDelta:
     def test_apply_delta_skips_resolution_on_errors(self):
         """apply_delta must NOT run resolution when extraction errors occurred,
         matching the documented behaviour."""
-        from unittest.mock import patch
+        from unittest.mock import MagicMock
 
         queries, conn, engine = _sqlite_queries()
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 # "nonexistent.py" will cause a read error
                 cg = self._make_codegraph(queries, conn, tmp_dir)
-                with patch("pycodegraph.codegraph.create_resolver") as mock_cr:
-                    result = cg.apply_delta(
-                        changed_files=["nonexistent.py"], removed_files=[]
-                    )
-                mock_cr.assert_not_called()
+                cg._resolver = MagicMock()
+                result = cg.apply_delta(
+                    changed_files=["nonexistent.py"], removed_files=[]
+                )
+                cg._resolver.resolve_and_persist.assert_not_called()
                 assert not result.success
                 assert result.errors
         finally:

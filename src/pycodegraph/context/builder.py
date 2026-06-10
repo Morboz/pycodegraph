@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..db.queries import QueryBuilder
-from ..fs import FileProvider, LocalFileProvider
 from ..graph.traversal import GraphTraverser
 from ..search import (
     extract_search_terms,
@@ -17,8 +16,6 @@ from ..search import (
 if TYPE_CHECKING:
     from ..search.searcher import NodeSearcher
 from ..types import (
-    BuildContextOptions,
-    CodeBlock,
     Edge,
     EdgeKind,
     FindRelevantContextOptions,
@@ -27,10 +24,8 @@ from ..types import (
     SearchOptions,
     SearchResult,
     Subgraph,
-    TaskContext,
     TraversalOptions,
 )
-from .formatter import format_context_as_json, format_context_as_markdown
 
 # Node kinds with high information value in context results
 _HIGH_VALUE_NODE_KINDS: list[NodeKind] = [
@@ -50,14 +45,13 @@ _HIGH_VALUE_NODE_KINDS: list[NodeKind] = [
     NodeKind.NAMESPACE,
 ]
 
-_DEFAULT_BUILD_OPTIONS = BuildContextOptions()
 _DEFAULT_FIND_OPTIONS = FindRelevantContextOptions(
     node_kinds=_HIGH_VALUE_NODE_KINDS,
 )
 
 
 class ContextBuilder:
-    """Coordinates semantic search and graph traversal to build context."""
+    """Coordinates semantic search and graph traversal to find relevant context."""
 
     def __init__(
         self,
@@ -65,87 +59,11 @@ class ContextBuilder:
         queries: QueryBuilder,
         traverser: GraphTraverser,
         searcher: NodeSearcher,
-        file_provider: FileProvider | None = None,
     ) -> None:
         self._project_root = project_root
         self._queries = queries
         self._searcher = searcher
         self._traverser = traverser
-        self._file_provider: FileProvider = file_provider or LocalFileProvider(
-            project_root
-        )
-
-    def build_context(
-        self,
-        task_input: str | dict,
-        options: BuildContextOptions | None = None,
-    ) -> TaskContext | str:
-        """Build context for a task."""
-        if options is None:
-            opts = _DEFAULT_BUILD_OPTIONS
-        elif isinstance(options, dict):
-            opts = BuildContextOptions(**options)
-        else:
-            opts = options
-
-        query = (
-            task_input
-            if isinstance(task_input, str)
-            else task_input.get("title", "")
-            + (
-                f": {task_input['description']}"
-                if task_input.get("description")
-                else ""
-            )
-        )
-
-        subgraph = self.find_relevant_context(
-            query,
-            FindRelevantContextOptions(
-                search_limit=opts.search_limit,
-                traversal_depth=opts.traversal_depth,
-                max_nodes=opts.max_nodes,
-                min_score=opts.min_score,
-            ),
-        )
-
-        entry_points = [
-            subgraph.nodes[rid] for rid in subgraph.roots if rid in subgraph.nodes
-        ]
-
-        code_blocks = (
-            self._extract_code_blocks(
-                subgraph, opts.max_code_blocks, opts.max_code_block_size
-            )
-            if opts.include_code
-            else []
-        )
-
-        related_files = sorted({n.file_path for n in subgraph.nodes.values()})
-        summary = self._generate_summary(query, subgraph, entry_points)
-        stats = {
-            "node_count": len(subgraph.nodes),
-            "edge_count": len(subgraph.edges),
-            "file_count": len(related_files),
-            "code_block_count": len(code_blocks),
-            "total_code_size": sum(len(b.content) for b in code_blocks),
-        }
-
-        context = TaskContext(
-            query=query,
-            subgraph=subgraph,
-            entry_points=entry_points,
-            code_blocks=code_blocks,
-            related_files=related_files,
-            summary=summary,
-            stats=stats,
-        )
-
-        if opts.format == "markdown":
-            return format_context_as_markdown(context)
-        elif opts.format == "json":
-            return format_context_as_json(context)
-        return context
 
     def find_relevant_context(
         self,
@@ -437,77 +355,6 @@ class ContextBuilder:
 
         return Subgraph(nodes=nodes, edges=edges, roots=roots)
 
-    def get_code(self, node_id: str) -> str | None:
-        """Get source code for a node."""
-        node = self._queries.get_node_by_id(node_id)
-        if not node:
-            return None
-        return self._extract_node_code(node)
-
-    # =========================================================================
-    # Private helpers
-    # =========================================================================
-
-    def _extract_node_code(self, node: Node) -> str | None:
-        content = self._file_provider.read_file(node.file_path)
-        if content is None:
-            return None
-        lines = content.split("\n")
-        start = max(0, node.start_line - 1)
-        end = min(len(lines), node.end_line)
-        return "\n".join(lines[start:end])
-
-    def _extract_code_blocks(
-        self,
-        subgraph: Subgraph,
-        max_blocks: int,
-        max_size: int,
-    ) -> list[CodeBlock]:
-        blocks: list[CodeBlock] = []
-        priority: list[Node] = []
-
-        # Entry points first
-        for rid in subgraph.roots:
-            node = subgraph.nodes.get(rid)
-            if node:
-                priority.append(node)
-
-        # Functions/methods
-        for node in subgraph.nodes.values():
-            if node.id not in subgraph.roots and node.kind in (
-                NodeKind.FUNCTION,
-                NodeKind.METHOD,
-            ):
-                priority.append(node)
-
-        # Classes
-        for node in subgraph.nodes.values():
-            if node.id not in subgraph.roots and node.kind == NodeKind.CLASS:
-                priority.append(node)
-
-        for node in priority:
-            if len(blocks) >= max_blocks:
-                break
-            code = self._extract_node_code(node)
-            if code:
-                truncated = (
-                    code[:max_size] + "\n# ... truncated ..."
-                    if len(code) > max_size
-                    else code
-                )
-                blocks.append(
-                    CodeBlock(
-                        content=truncated,
-                        file_path=node.file_path,
-                        start_line=node.start_line,
-                        end_line=node.end_line,
-                        language=node.language,
-                        node=node,
-                    )
-                )
-
-        return blocks
-
     def _resolve_imports_to_definitions(
         self, results: list[SearchResult]
     ) -> list[SearchResult]:
@@ -536,27 +383,3 @@ class ContextBuilder:
                     resolved.append(SearchResult(node=target, score=r.score))
 
         return resolved
-
-    def _generate_summary(
-        self, query: str, subgraph: Subgraph, entry_points: list[Node]
-    ) -> str:
-        entry_names = ", ".join(n.name for n in entry_points[:3])
-        remaining = (
-            f" and {len(entry_points) - 3} more" if len(entry_points) > 3 else ""
-        )
-        files = sorted({n.file_path for n in subgraph.nodes.values()})
-        return (
-            f"Found {len(subgraph.nodes)} relevant code symbols across {len(files)} files. "
-            f"Key entry points: {entry_names}{remaining}. "
-            f"{len(subgraph.edges)} relationships identified."
-        )
-
-
-def create_context_builder(
-    project_root: str,
-    queries: QueryBuilder,
-    traverser: GraphTraverser,
-    searcher: NodeSearcher,
-    file_provider: FileProvider | None = None,
-) -> ContextBuilder:
-    return ContextBuilder(project_root, queries, traverser, searcher, file_provider)

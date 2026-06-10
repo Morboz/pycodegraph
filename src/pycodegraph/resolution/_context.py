@@ -118,6 +118,11 @@ class ResolutionContext:
     def file_exists(self, rel_path: str) -> bool:
         return rel_path in self._known_files
 
+    def set_file_provider(self, file_provider: FileProvider) -> None:
+        """Replace the :class:`FileProvider` and clear file-content cache."""
+        self._file_provider = file_provider
+        self._file_contents._cache.clear()
+
     @property
     def known_names(self) -> set[str]:
         return self._known_names

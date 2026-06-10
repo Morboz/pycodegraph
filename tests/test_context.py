@@ -1,13 +1,11 @@
-"""Integration tests for context building: get_context() and build_context()."""
+"""Integration tests for context building: get_context()."""
 
 from __future__ import annotations
-
-import json
 
 import pytest
 
 from pycodegraph import CodeGraph
-from pycodegraph.types import BuildContextOptions, Context, Node, TaskContext
+from pycodegraph.types import Context, Node
 
 
 def _find_node(cg: CodeGraph, name: str) -> Node | None:
@@ -107,146 +105,5 @@ class TestGetContext:
             assert isinstance(ctx.outgoing_refs, list)
             assert isinstance(ctx.types, list)
             assert isinstance(ctx.imports, list)
-        finally:
-            cg.close()
-
-
-class TestBuildContext:
-    """build_context() — hybrid search pipeline with multiple output formats."""
-
-    def test_build_context_returns_string_by_default(self, create_python_project):
-        root = create_python_project()
-        cg = CodeGraph.init(root)
-        cg.index_all()
-        try:
-            result = cg.build_context("How does User work?")
-            assert isinstance(result, str)
-            assert "User" in result
-        finally:
-            cg.close()
-
-    def test_build_context_markdown_format(self, create_python_project):
-        root = create_python_project()
-        cg = CodeGraph.init(root)
-        cg.index_all()
-        try:
-            result = cg.build_context(
-                "User class", BuildContextOptions(format="markdown")
-            )
-            assert isinstance(result, str)
-            assert "User" in result
-        finally:
-            cg.close()
-
-    def test_build_context_json_format(self, create_python_project):
-        root = create_python_project()
-        cg = CodeGraph.init(root)
-        cg.index_all()
-        try:
-            result = cg.build_context("User class", BuildContextOptions(format="json"))
-            assert isinstance(result, str)
-            parsed = json.loads(result)
-            # JSON format should have structured fields
-            assert isinstance(parsed, dict)
-        finally:
-            cg.close()
-
-    def test_build_context_raw_format(self, create_python_project):
-        root = create_python_project()
-        cg = CodeGraph.init(root)
-        cg.index_all()
-        try:
-            result = cg.build_context(
-                "User class", BuildContextOptions(format="raw", include_code=False)
-            )
-            assert isinstance(result, TaskContext)
-            assert isinstance(result.subgraph, type(result.subgraph))
-            assert isinstance(result.entry_points, list)
-            assert isinstance(result.related_files, list)
-        finally:
-            cg.close()
-
-    def test_build_context_finds_relevant_entry_points(self, create_python_project):
-        root = create_python_project()
-        cg = CodeGraph.init(root)
-        cg.index_all()
-        try:
-            result = cg.build_context(
-                "create_user function",
-                BuildContextOptions(format="raw", include_code=False),
-            )
-            assert isinstance(result, TaskContext)
-            ep_names = {n.name for n in result.entry_points}
-            assert "create_user" in ep_names
-        finally:
-            cg.close()
-
-    def test_build_context_with_dict_input(self, create_python_project):
-        root = create_python_project()
-        cg = CodeGraph.init(root)
-        cg.index_all()
-        try:
-            result = cg.build_context(
-                {"title": "User class", "description": "How is User used?"}
-            )
-            assert isinstance(result, str)
-            assert "User" in result
-        finally:
-            cg.close()
-
-    def test_build_context_includes_code_blocks(self, create_python_project):
-        root = create_python_project()
-        cg = CodeGraph.init(root)
-        cg.index_all()
-        try:
-            result = cg.build_context(
-                "User class", BuildContextOptions(format="raw", include_code=True)
-            )
-            assert isinstance(result, TaskContext)
-            # Code blocks should be populated when include_code=True
-            assert isinstance(result.code_blocks, list)
-        finally:
-            cg.close()
-
-    def test_build_context_respects_max_nodes(self, create_python_project):
-        root = create_python_project()
-        cg = CodeGraph.init(root)
-        cg.index_all()
-        try:
-            result = cg.build_context(
-                "User",
-                BuildContextOptions(format="raw", include_code=False, max_nodes=3),
-            )
-            assert isinstance(result, TaskContext)
-            # With max_nodes=3, the subgraph should be small
-            assert (
-                len(result.subgraph.nodes) <= 15
-            )  # Some slack for hierarchy expansion
-        finally:
-            cg.close()
-
-    def test_build_context_stats_populated(self, create_python_project):
-        root = create_python_project()
-        cg = CodeGraph.init(root)
-        cg.index_all()
-        try:
-            result = cg.build_context(
-                "User class", BuildContextOptions(format="raw", include_code=False)
-            )
-            assert isinstance(result, TaskContext)
-            assert result.stats is not None
-            assert isinstance(result.stats, dict)
-        finally:
-            cg.close()
-
-    def test_build_context_empty_query(self, create_python_project):
-        """An empty query should not crash."""
-        root = create_python_project()
-        cg = CodeGraph.init(root)
-        cg.index_all()
-        try:
-            result = cg.build_context("")
-            # Should return something (possibly minimal) without error
-            assert result is not None
         finally:
             cg.close()
