@@ -16,7 +16,10 @@ _DEFAULT_OPTIONS = TraversalOptions()
 
 
 class GraphTraverser:
-    """BFS and DFS traversal for the code knowledge graph."""
+    """BFS and DFS traversal for the code knowledge graph.
+
+    Constructed by ``CodeGraph._create_components``; inject where needed.
+    """
 
     def __init__(self, queries: QueryBuilder) -> None:
         self._queries = queries

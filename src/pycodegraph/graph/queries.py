@@ -13,9 +13,9 @@ from .traversal import GraphTraverser
 class GraphQueryManager:
     """Complex graph queries using traversal algorithms."""
 
-    def __init__(self, queries: QueryBuilder) -> None:
+    def __init__(self, queries: QueryBuilder, traverser: GraphTraverser) -> None:
         self._queries = queries
-        self._traverser = GraphTraverser(queries)
+        self._traverser = traverser
 
     def get_context(self, node_id: str) -> Context:
         """Get full context for a node: ancestors, children, refs, types, imports."""

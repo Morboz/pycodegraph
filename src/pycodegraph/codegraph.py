@@ -56,7 +56,7 @@ def _create_components(
     searcher = NodeSearcher(queries, project_name_tokens=project_name_tokens)
     orchestrator = ExtractionOrchestrator(project_root, config, queries)
     traverser = GraphTraverser(queries)
-    graph_manager = GraphQueryManager(queries)
+    graph_manager = GraphQueryManager(queries, traverser)
     explore_engine = ExploreEngine(
         project_root, queries, traverser, searcher, file_provider
     )
