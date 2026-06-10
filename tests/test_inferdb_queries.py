@@ -525,8 +525,9 @@ class TestCodeGraphDeleteFile:
         searcher = NodeSearcher(queries)
         cg._searcher = searcher
         cg._orchestrator = ExtractionOrchestrator(tmp_dir, config, queries)
-        cg._traverser = GraphTraverser(queries)
-        cg._graph_manager = GraphQueryManager(queries)
+        traverser = GraphTraverser(queries)
+        cg._traverser = traverser
+        cg._graph_manager = GraphQueryManager(queries, traverser)
         cg._resolver = ReferenceResolver(tmp_dir, queries)
         return cg
 
@@ -590,8 +591,9 @@ class TestCodeGraphApplyDelta:
         searcher = NodeSearcher(queries)
         cg._searcher = searcher
         cg._orchestrator = ExtractionOrchestrator(tmp_dir, config, queries)
-        cg._traverser = GraphTraverser(queries)
-        cg._graph_manager = GraphQueryManager(queries)
+        traverser = GraphTraverser(queries)
+        cg._traverser = traverser
+        cg._graph_manager = GraphQueryManager(queries, traverser)
         cg._resolver = ReferenceResolver(tmp_dir, queries)
         return cg
 
