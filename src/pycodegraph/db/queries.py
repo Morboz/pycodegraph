@@ -14,6 +14,7 @@ from ..types import (
     Language,
     Node,
     NodeKind,
+    SearchResult,
     UnresolvedReference,
 )
 from ._cache import LRUCache
@@ -104,6 +105,44 @@ def _node_row(node: Node) -> dict:
     }
 
 
+def _json_field(value: object) -> str | None:
+    """Serialize a field value for JSON column storage.
+
+    ``str | None`` values pass through unchanged; non-truthy values become
+    ``None``; everything else is serialized with :func:`json.dumps`.
+    """
+    if isinstance(value, str | None):
+        return value
+    if not value:
+        return None
+    return json.dumps(value)
+
+
+def _edge_row(e: Edge) -> dict:
+    return {
+        "source": e.source,
+        "target": e.target,
+        "kind": e.kind.value,
+        "metadata": _json_field(e.metadata),
+        "line": e.line,
+        "col": e.col,
+        "provenance": e.provenance,
+    }
+
+
+def _ref_row(r: UnresolvedReference) -> dict:
+    return {
+        "from_node_id": r.from_node_id,
+        "reference_name": r.reference_name,
+        "reference_kind": r.reference_kind.value,
+        "line": r.line,
+        "col": r.column,
+        "candidates": _json_field(r.candidates),
+        "file_path": r.file_path,
+        "language": r.language,
+    }
+
+
 class QueryBuilder:
     def __init__(self, conn: Connection):
         self._conn = conn
@@ -152,49 +191,14 @@ class QueryBuilder:
     def insert_edges(self, edges_data: list[Edge]) -> None:
         if not edges_data:
             return
-        rows = [
-            {
-                "source": e.source,
-                "target": e.target,
-                "kind": e.kind.value,
-                "metadata": (
-                    e.metadata
-                    if isinstance(e.metadata, str | None)
-                    else json.dumps(e.metadata)
-                    if e.metadata
-                    else None
-                ),
-                "line": e.line,
-                "col": e.col,
-                "provenance": e.provenance,
-            }
-            for e in edges_data
-        ]
+        rows = [_edge_row(e) for e in edges_data]
         self._conn.execute(insert(edges), rows)
         self._conn.commit()
 
     def insert_unresolved_refs_batch(self, refs: list[UnresolvedReference]) -> None:
         if not refs:
             return
-        rows = [
-            {
-                "from_node_id": r.from_node_id,
-                "reference_name": r.reference_name,
-                "reference_kind": r.reference_kind.value,
-                "line": r.line,
-                "col": r.column,
-                "candidates": (
-                    r.candidates
-                    if isinstance(r.candidates, str | None)
-                    else json.dumps(r.candidates)
-                    if r.candidates
-                    else None
-                ),
-                "file_path": r.file_path,
-                "language": r.language,
-            }
-            for r in refs
-        ]
+        rows = [_ref_row(r) for r in refs]
         self._conn.execute(insert(unresolved_refs), rows)
         self._conn.commit()
 
@@ -393,7 +397,7 @@ class QueryBuilder:
         return [self._row_to_edge(r) for r in rows]
 
     # =========================================================================
-    # Search data primitives
+    # Search methods
     # =========================================================================
 
     def search_fts(
@@ -403,14 +407,13 @@ class QueryBuilder:
         languages: list[str] | None,
         limit: int,
         offset: int,
-    ) -> list[tuple]:
-        """Execute FTS search via the dialect layer. Returns raw rows.
+    ) -> list[SearchResult]:
+        """FTS search returning scored :class:`SearchResult` objects.
 
-        Each row has 20 node columns followed by the FTS score at index 20.
         Returns an empty list on any error (e.g. missing FTS index).
         """
         try:
-            return self._backend.search_nodes_fts(
+            rows = self._backend.search_nodes_fts(
                 self._conn,
                 text,
                 kinds,
@@ -420,6 +423,7 @@ class QueryBuilder:
             )
         except Exception:
             return []
+        return [SearchResult(node=self._row_to_node(r), score=abs(r[20])) for r in rows]
 
     def search_like(
         self,
@@ -428,11 +432,8 @@ class QueryBuilder:
         languages: list[str] | None,
         limit: int,
         offset: int,
-    ) -> list[tuple]:
-        """Execute LIKE-based search. Returns raw rows with a SQL-computed score.
-
-        Each row has 20 node columns followed by the LIKE score at index 20.
-        """
+    ) -> list[SearchResult]:
+        """LIKE-based search returning scored :class:`SearchResult` objects."""
         starts_with = f"{text}%"
         contains = f"%{text}%"
 
@@ -459,22 +460,25 @@ class QueryBuilder:
             .offset(offset)
         )
 
-        return [tuple(r) for r in self._conn.execute(stmt).fetchall()]
+        rows = self._conn.execute(stmt).fetchall()
+        return [SearchResult(node=self._row_to_node(r), score=r[20]) for r in rows]
 
-    def search_by_filters(
+    def list_nodes_by_filters(
         self,
         kinds: list[str] | None,
         languages: list[str] | None,
         limit: int,
-    ) -> list[tuple]:
+        offset: int = 0,
+    ) -> list[Node]:
         """Return nodes matching kind/language filters, ordered by name."""
         stmt = select(*_NODE_COLUMNS)
         if kinds:
             stmt = stmt.where(nodes.c.kind.in_(kinds))
         if languages:
             stmt = stmt.where(nodes.c.language.in_(languages))
-        stmt = stmt.order_by(nodes.c.name).limit(limit)
-        return [tuple(r) for r in self._conn.execute(stmt).fetchall()]
+        stmt = stmt.order_by(nodes.c.name).limit(limit).offset(offset)
+        rows = self._conn.execute(stmt).fetchall()
+        return [self._row_to_node(r) for r in rows]
 
     def find_exact_name_files(
         self, name: str, kinds: list[str] | None = None
@@ -633,47 +637,12 @@ class QueryBuilder:
 
         # Edges
         if edges_data:
-            rows = [
-                {
-                    "source": e.source,
-                    "target": e.target,
-                    "kind": e.kind.value,
-                    "metadata": (
-                        e.metadata
-                        if isinstance(e.metadata, str | None)
-                        else json.dumps(e.metadata)
-                        if e.metadata
-                        else None
-                    ),
-                    "line": e.line,
-                    "col": e.col,
-                    "provenance": e.provenance,
-                }
-                for e in edges_data
-            ]
+            rows = [_edge_row(e) for e in edges_data]
             self._conn.execute(insert(edges), rows)
 
         # Unresolved refs
         if refs_data:
-            rows = [
-                {
-                    "from_node_id": r.from_node_id,
-                    "reference_name": r.reference_name,
-                    "reference_kind": r.reference_kind.value,
-                    "line": r.line,
-                    "col": r.column,
-                    "candidates": (
-                        r.candidates
-                        if isinstance(r.candidates, str | None)
-                        else json.dumps(r.candidates)
-                        if r.candidates
-                        else None
-                    ),
-                    "file_path": r.file_path,
-                    "language": r.language,
-                }
-                for r in refs_data
-            ]
+            rows = [_ref_row(r) for r in refs_data]
             self._conn.execute(insert(unresolved_refs), rows)
 
         # Files
