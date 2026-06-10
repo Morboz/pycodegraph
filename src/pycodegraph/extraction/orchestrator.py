@@ -8,6 +8,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 from ..config import CodeGraphConfig
 from ..db.queries import QueryBuilder
@@ -200,6 +201,64 @@ def _walk_filesystem(
 _BATCH_SIZE = 200
 
 
+class _PreparedStorage(NamedTuple):
+    """Filtered and patched extraction results ready for persistence."""
+
+    valid_nodes: list[Node]
+    valid_edges: list[Edge]
+    patched_refs: list[UnresolvedReference]
+
+
+def _prepare_for_storage(
+    result: ExtractionResult,
+    rel_path: str,
+    language: Language,
+) -> _PreparedStorage:
+    """Filter valid nodes/edges and patch unresolved references.
+
+    - Only nodes with non-empty id, kind, name, and file_path are kept.
+    - Only edges whose source and target are both in the valid-node set are kept.
+    - Only refs whose from_node_id is in the valid-node set are kept;
+      missing file_path and language fields are backfilled from the file context.
+    """
+    valid_nodes = [
+        n for n in result.nodes if n.id and n.kind and n.name and n.file_path
+    ]
+    inserted_ids = {n.id for n in valid_nodes}
+
+    valid_edges = (
+        [
+            e
+            for e in result.edges
+            if e.source in inserted_ids and e.target in inserted_ids
+        ]
+        if result.edges
+        else []
+    )
+
+    patched_refs = (
+        [
+            UnresolvedReference(
+                from_node_id=r.from_node_id,
+                reference_name=r.reference_name,
+                reference_kind=r.reference_kind,
+                line=r.line,
+                column=r.column,
+                file_path=r.file_path or rel_path,
+                language=r.language
+                if r.language and r.language != "unknown"
+                else language.value,
+            )
+            for r in result.unresolved_references
+            if r.from_node_id in inserted_ids
+        ]
+        if result.unresolved_references
+        else []
+    )
+
+    return _PreparedStorage(valid_nodes, valid_edges, patched_refs)
+
+
 class ExtractionOrchestrator:
     def __init__(self, root_dir: str, config: CodeGraphConfig, queries: QueryBuilder):
         self.root_dir = root_dir
@@ -365,42 +424,10 @@ class ExtractionOrchestrator:
             for file_info, result in batch:
                 rel_path, content, language, file_size, mtime = file_info
 
-                valid_nodes = [
-                    n
-                    for n in result.nodes
-                    if n.id and n.kind and n.name and n.file_path
-                ]
-                all_nodes.extend(valid_nodes)
-
-                inserted_ids = {n.id for n in valid_nodes}
-                if result.edges:
-                    valid_edges = [
-                        e
-                        for e in result.edges
-                        if e.source in inserted_ids and e.target in inserted_ids
-                    ]
-                    all_edges.extend(valid_edges)
-
-                if result.unresolved_references:
-                    for r in result.unresolved_references:
-                        if r.from_node_id in inserted_ids:
-                            all_refs.append(
-                                UnresolvedReference(
-                                    from_node_id=r.from_node_id,
-                                    reference_name=r.reference_name,
-                                    reference_kind=r.reference_kind,
-                                    line=r.line,
-                                    column=r.column,
-                                    file_path=r.file_path or rel_path,
-                                    language=r.language
-                                    if r.language and r.language != "unknown"
-                                    else (
-                                        language.value
-                                        if isinstance(language, Language)
-                                        else str(language)
-                                    ),
-                                )
-                            )
+                prep = _prepare_for_storage(result, rel_path, language)
+                all_nodes.extend(prep.valid_nodes)
+                all_edges.extend(prep.valid_edges)
+                all_refs.extend(prep.patched_refs)
 
                 content_hash = hash_content(content)
                 file_records.append(
@@ -473,7 +500,7 @@ class ExtractionOrchestrator:
 
     def _store_result(
         self,
-        file_path: str,
+        rel_path: str,
         content: str,
         language: Language,
         stat: os.stat_result,
@@ -482,58 +509,25 @@ class ExtractionOrchestrator:
         content_hash = hash_content(content)
 
         # Skip if unchanged
-        existing = self.queries.get_file_by_path(file_path)
+        existing = self.queries.get_file_by_path(rel_path)
         if existing and existing.content_hash == content_hash:
             return
 
         if existing:
-            self.queries.delete_file(file_path)
+            self.queries.delete_file(rel_path)
 
-        # Filter valid nodes
-        valid_nodes = [
-            n for n in result.nodes if n.id and n.kind and n.name and n.file_path
-        ]
+        prep = _prepare_for_storage(result, rel_path, language)
 
-        if valid_nodes:
-            self.queries.insert_nodes(valid_nodes)
-
-        if result.edges:
-            inserted_ids = {n.id for n in valid_nodes}
-            valid_edges = [
-                e
-                for e in result.edges
-                if e.source in inserted_ids and e.target in inserted_ids
-            ]
-            if valid_edges:
-                self.queries.insert_edges(valid_edges)
-
-        if result.unresolved_references:
-            inserted_ids = {n.id for n in valid_nodes}
-            refs = [
-                UnresolvedReference(
-                    from_node_id=r.from_node_id,
-                    reference_name=r.reference_name,
-                    reference_kind=r.reference_kind,
-                    line=r.line,
-                    column=r.column,
-                    file_path=r.file_path or file_path,
-                    language=r.language
-                    if r.language and r.language != "unknown"
-                    else (
-                        language.value
-                        if isinstance(language, Language)
-                        else str(language)
-                    ),
-                )
-                for r in result.unresolved_references
-                if r.from_node_id in inserted_ids
-            ]
-            if refs:
-                self.queries.insert_unresolved_refs_batch(refs)
+        if prep.valid_nodes:
+            self.queries.insert_nodes(prep.valid_nodes)
+        if prep.valid_edges:
+            self.queries.insert_edges(prep.valid_edges)
+        if prep.patched_refs:
+            self.queries.insert_unresolved_refs_batch(prep.patched_refs)
 
         self.queries.upsert_file(
             FileRecord(
-                path=file_path,
+                path=rel_path,
                 content_hash=content_hash,
                 language=language,
                 size=stat.st_size,
