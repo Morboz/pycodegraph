@@ -5,15 +5,15 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from ..types import Node, NodeKind
-from ._types import ResolvedRef, UnresolvedRef
+from ..types import Node, NodeKind, UnresolvedReference
+from ._types import ResolvedRef
 
 if TYPE_CHECKING:
     from ._context import ResolutionContext
 
 
 def match_by_file_path(
-    ref: UnresolvedRef, context: ResolutionContext
+    ref: UnresolvedReference, context: ResolutionContext
 ) -> ResolvedRef | None:
     """Match path-like references (e.g., 'snippets/drawer-menu.liquid') by filename."""
     if "/" not in ref.reference_name:
@@ -64,7 +64,7 @@ def match_by_file_path(
 
 
 def match_by_qualified_name(
-    ref: UnresolvedRef, context: ResolutionContext
+    ref: UnresolvedReference, context: ResolutionContext
 ) -> ResolvedRef | None:
     """Match by qualified name (e.g., 'obj.method', 'Class::method')."""
     if "." not in ref.reference_name and "::" not in ref.reference_name:
@@ -98,7 +98,7 @@ def match_by_qualified_name(
 
 
 def match_method_call(
-    ref: UnresolvedRef, context: ResolutionContext
+    ref: UnresolvedReference, context: ResolutionContext
 ) -> ResolvedRef | None:
     """Match method calls like 'obj.method' or 'Class::method'."""
     dot_match = re.match(r"^(\w+)\.(\w+)$", ref.reference_name)
@@ -210,7 +210,7 @@ def match_method_call(
 
 
 def match_by_exact_name(
-    ref: UnresolvedRef, context: ResolutionContext
+    ref: UnresolvedReference, context: ResolutionContext
 ) -> ResolvedRef | None:
     """Match by exact symbol name."""
     candidates = context.get_nodes_by_name(ref.reference_name)
@@ -242,7 +242,9 @@ def match_by_exact_name(
     return None
 
 
-def match_fuzzy(ref: UnresolvedRef, context: ResolutionContext) -> ResolvedRef | None:
+def match_fuzzy(
+    ref: UnresolvedReference, context: ResolutionContext
+) -> ResolvedRef | None:
     """Case-insensitive fallback match."""
     lower_name = ref.reference_name.lower()
     candidates = context.get_nodes_by_lower_name(lower_name)
@@ -266,7 +268,7 @@ def match_fuzzy(ref: UnresolvedRef, context: ResolutionContext) -> ResolvedRef |
 
 
 def match_reference(
-    ref: UnresolvedRef, context: ResolutionContext
+    ref: UnresolvedReference, context: ResolutionContext
 ) -> ResolvedRef | None:
     """Try all matching strategies in order of confidence."""
     result = match_by_file_path(ref, context)
@@ -324,7 +326,7 @@ def _compute_path_proximity(path1: str, path2: str) -> int:
 
 
 def _find_best_match(
-    ref: UnresolvedRef,
+    ref: UnresolvedReference,
     candidates: list[Node],
     context: ResolutionContext,
 ) -> Node | None:

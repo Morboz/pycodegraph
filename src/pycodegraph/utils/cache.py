@@ -1,4 +1,4 @@
-"""Internal LRU cache for QueryBuilder."""
+"""LRU cache keyed by string."""
 
 from __future__ import annotations
 

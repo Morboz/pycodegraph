@@ -135,7 +135,6 @@ class UnresolvedReference:
     column: int
     file_path: str = ""
     language: str = "unknown"
-    candidates: str | None = None  # JSON
 
 
 @dataclass

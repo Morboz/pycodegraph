@@ -7,8 +7,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..types import Node
-from ._types import ImportMapping, ResolvedRef, UnresolvedRef
+from ..types import Node, UnresolvedReference
+from ._types import ImportMapping, ResolvedRef
 
 if TYPE_CHECKING:
     from ._context import ResolutionContext
@@ -167,7 +167,7 @@ _PYTHON_STDLIB_TOP = frozenset(
 
 
 def resolve_via_import(
-    ref: UnresolvedRef,
+    ref: UnresolvedReference,
     context: ResolutionContext,
 ) -> ResolvedRef | None:
     """Resolve a reference by matching it against the file's import declarations."""
@@ -414,7 +414,7 @@ def find_python_module_file(
 
 
 def resolve_python_module_member(
-    ref: UnresolvedRef,
+    ref: UnresolvedReference,
     context: ResolutionContext,
 ) -> ResolvedRef | None:
     """Resolve ``receiver.member`` references where *receiver* is an imported module.
