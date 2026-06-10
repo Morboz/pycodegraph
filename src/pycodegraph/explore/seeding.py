@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..search.query_utils import extract_symbols_from_query, is_test_file
+from ..search.query_utils import (
+    extract_symbols_from_query,
+    is_test_file,
+    normalize_name_token,
+)
 from ..types import Node, NodeKind, SearchOptions
 
 if TYPE_CHECKING:
@@ -69,7 +73,14 @@ def seed_named_symbols(
         return []
 
     # PascalCase tokens serve as type/file disambiguators
-    type_tokens = {t.lower() for t in tokens if t[0].isupper() and len(t) >= 4}
+    project_name_tokens = searcher.project_name_tokens
+    type_tokens = {
+        t.lower()
+        for t in tokens
+        if t[0].isupper()
+        and len(t) >= 4
+        and normalize_name_token(t) not in project_name_tokens
+    }
 
     # Whether the query explicitly asks about tests — if so, keep
     # test-file candidates in the pool (matching TS CodeGraph).

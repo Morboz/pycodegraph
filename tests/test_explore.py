@@ -547,6 +547,55 @@ class TestCalculator:
         finally:
             cg.close()
 
+    def test_project_name_token_does_not_defeat_overload_disambiguation(self, tmp_path):
+        """Project-name tokens should not make every overloaded candidate match."""
+        root = _write_project(
+            tmp_path / "superbizagent",
+            {
+                "backend_handler.py": """\
+class SuperBizAgentBackendHandler:
+    def process(self):
+        return 1
+""",
+                "frontend_handler.py": """\
+class SuperBizAgentFrontendHandler:
+    def process(self):
+        return 2
+""",
+                "backend_worker.py": """\
+class SuperBizAgentBackendWorker:
+    def process(self):
+        return 3
+""",
+                "frontend_worker.py": """\
+class SuperBizAgentFrontendWorker:
+    def process(self):
+        return 4
+""",
+                "pyproject.toml": "[project]\nname = 'superbizagent'\n",
+            },
+        )
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            from pycodegraph.explore.seeding import seed_named_symbols
+
+            seeds = seed_named_symbols(
+                "SuperBizAgent BackendHandler process",
+                cg._searcher,
+            )
+            process_seeds = [
+                (node, boost) for node, boost in seeds if node.name == "process"
+            ]
+
+            assert process_seeds, "expected overloaded process candidates"
+            assert all(
+                "backendhandler" in node.qualified_name.lower()
+                for node, _ in process_seeds
+            ), [(node.qualified_name, node.file_path) for node, _ in process_seeds]
+        finally:
+            cg.close()
+
     def test_overloaded_name_limited_to_one_fallback(self, tmp_path):
         """Overloaded names (>3 defs) without disambiguation should
         produce at most 1 seed (the most substantive non-test one)."""

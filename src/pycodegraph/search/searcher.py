@@ -7,6 +7,7 @@ queries to :class:`QueryBuilder`.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from ..types import Language, NodeKind, SearchOptions, SearchResult
@@ -25,8 +26,18 @@ class NodeSearcher:
     queries.
     """
 
-    def __init__(self, queries: QueryBuilder) -> None:
+    def __init__(
+        self,
+        queries: QueryBuilder,
+        project_name_tokens: Iterable[str] | None = None,
+    ) -> None:
         self._queries = queries
+        self._project_name_tokens = set(project_name_tokens or [])
+
+    @property
+    def project_name_tokens(self) -> set[str]:
+        """Normalized project-name tokens used to de-bias ranking heuristics."""
+        return set(self._project_name_tokens)
 
     # =========================================================================
     # Public search API
@@ -115,7 +126,11 @@ class NodeSearcher:
                         if hasattr(r.node.kind, "value")
                         else str(r.node.kind)
                     )
-                    + score_path_relevance(r.node.file_path, scoring_query)
+                    + score_path_relevance(
+                        r.node.file_path,
+                        scoring_query,
+                        self._project_name_tokens,
+                    )
                     + name_match_bonus(r.node.name, scoring_query),
                 )
                 for r in results

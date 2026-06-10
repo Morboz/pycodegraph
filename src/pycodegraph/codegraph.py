@@ -21,6 +21,7 @@ from .extraction import ExtractionOrchestrator
 from .fs import FileProvider, LocalFileProvider
 from .graph import GraphQueryManager, GraphTraverser
 from .resolution import create_resolver
+from .search.query_utils import derive_project_name_tokens
 from .search.searcher import NodeSearcher
 from .types import (
     BuildContextOptions,
@@ -49,7 +50,11 @@ def _create_components(
     """Build all collaborator objects for CodeGraph."""
     if file_provider is None:
         file_provider = LocalFileProvider(project_root)
-    searcher = NodeSearcher(queries)
+    try:
+        project_name_tokens = derive_project_name_tokens(project_root)
+    except Exception:
+        project_name_tokens = set()
+    searcher = NodeSearcher(queries, project_name_tokens=project_name_tokens)
     orchestrator = ExtractionOrchestrator(project_root, config, queries)
     traverser = GraphTraverser(queries)
     graph_manager = GraphQueryManager(queries)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import tomllib
+from pathlib import Path
 
 STOP_WORDS: frozenset[str] = frozenset(
     {
@@ -208,10 +210,70 @@ def extract_search_terms(query: str, stems: bool = True) -> list[str]:
     return list(tokens)
 
 
-def score_path_relevance(file_path: str, query: str) -> float:
+def normalize_name_token(raw: str) -> str:
+    """Normalize a project or symbol name for loose lexical comparison."""
+    return re.sub(r"[^a-z0-9]", "", raw.lower())
+
+
+def derive_project_name_tokens(project_root: str) -> set[str]:
+    """Derive normalized project-name tokens from manifests and root dir."""
+    tokens: set[str] = set()
+
+    def add(raw: str | None) -> None:
+        if not raw:
+            return
+        normalized = normalize_name_token(raw)
+        if len(normalized) >= 5:
+            tokens.add(normalized)
+
+    root = Path(project_root)
+
+    pyproject_path = root / "pyproject.toml"
+    if pyproject_path.is_file():
+        try:
+            data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            data = {}
+        project = data.get("project")
+        if isinstance(project, dict):
+            name = project.get("name")
+            if isinstance(name, str):
+                add(name)
+
+    package_json_path = root / "package.json"
+    if package_json_path.is_file():
+        try:
+            import json
+
+            package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            package_json = {}
+        name = package_json.get("name")
+        if isinstance(name, str):
+            add(name.removeprefix("@").split("/", 1)[-1])
+
+    go_mod_path = root / "go.mod"
+    if go_mod_path.is_file():
+        try:
+            go_mod = go_mod_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            go_mod = ""
+        match = re.search(r"^\s*module\s+(\S+)\s*$", go_mod, re.MULTILINE)
+        if match:
+            add(match.group(1).rsplit("/", 1)[-1])
+
+    add(root.name)
+    return tokens
+
+
+def score_path_relevance(
+    file_path: str,
+    query: str,
+    project_name_tokens: set[str] | None = None,
+) -> float:
     """Score path relevance to a query. Higher = more relevant."""
-    terms = extract_search_terms(query, stems=False)
-    if not terms:
+    words = [word for word in query.split() if word]
+    if not words:
         return 0.0
 
     path_lower = file_path.lower()
@@ -219,12 +281,25 @@ def score_path_relevance(file_path: str, query: str) -> float:
     dir_name = os.path.dirname(path_lower)
     score = 0.0
 
-    for term in terms:
-        if term in file_name:
+    filtered_words = words
+    if project_name_tokens:
+        non_project_words = [
+            word
+            for word in words
+            if normalize_name_token(word) not in project_name_tokens
+        ]
+        if non_project_words:
+            filtered_words = non_project_words
+
+    for word in filtered_words:
+        terms = extract_search_terms(word, stems=False)
+        if not terms:
+            continue
+        if any(term in file_name for term in terms):
             score += 10
-        elif term in dir_name:
+        elif any(term in dir_name for term in terms):
             score += 5
-        elif term in path_lower:
+        elif any(term in path_lower for term in terms):
             score += 3
 
     query_lower = query.lower()

@@ -74,3 +74,67 @@ class TestExtractSymbolsFromQuery:
         result = extract_symbols_from_query("_x _y")
         assert "_x" not in result
         assert "_y" not in result
+
+
+class TestPathRelevanceScoring:
+    """Regression tests for upstream search ranking drift (#720)."""
+
+    def test_pascal_case_word_counts_once_per_path_level(self) -> None:
+        from pycodegraph.search.query_utils import score_path_relevance
+
+        assert (
+            score_path_relevance("SuperBizAgentFrontend/app.js", "SuperBizAgent") == 5
+        )
+
+    def test_pascal_case_word_still_matches_snake_case_path(self) -> None:
+        from pycodegraph.search.query_utils import score_path_relevance
+
+        assert score_path_relevance("get_user_name.go", "getUserName") >= 10
+
+    def test_distinct_query_words_still_stack_scores(self) -> None:
+        from pycodegraph.search.query_utils import score_path_relevance
+
+        both = score_path_relevance("src/auth/login_handler.go", "auth handler")
+        auth_only = score_path_relevance("src/auth/login_handler.go", "auth")
+        assert both > auth_only
+
+    def test_project_name_word_is_dropped_when_other_terms_remain(
+        self, tmp_path
+    ) -> None:
+        from pycodegraph.search.query_utils import (
+            derive_project_name_tokens,
+            score_path_relevance,
+        )
+
+        root = tmp_path / "superbizagent"
+        root.mkdir()
+        (root / "pyproject.toml").write_text('[project]\nname = "superbizagent"\n')
+
+        tokens = derive_project_name_tokens(str(root))
+        with_drop = score_path_relevance(
+            "SuperBizAgentFrontend/app.js", "SuperBizAgent backend", tokens
+        )
+        no_drop = score_path_relevance(
+            "SuperBizAgentFrontend/app.js", "SuperBizAgent backend"
+        )
+
+        assert with_drop < no_drop
+        assert with_drop == 0
+
+    def test_project_name_word_is_kept_for_bare_query(self, tmp_path) -> None:
+        from pycodegraph.search.query_utils import (
+            derive_project_name_tokens,
+            score_path_relevance,
+        )
+
+        root = tmp_path / "superbizagent"
+        root.mkdir()
+        (root / "pyproject.toml").write_text('[project]\nname = "superbizagent"\n')
+
+        tokens = derive_project_name_tokens(str(root))
+        assert (
+            score_path_relevance(
+                "SuperBizAgentFrontend/app.js", "SuperBizAgent", tokens
+            )
+            == 5
+        )
