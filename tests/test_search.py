@@ -125,8 +125,7 @@ class TestSearchLike:
         cg = CodeGraph.init(root)
         cg.index_all()
         try:
-            # Direct query to the internal _search_like method
-            results = cg._searcher._search_like("run", None, None, 10, 0)
+            results = cg._searcher.search_nodes("run")
             names = {r.node.name for r in results}
             assert "run" in names
         finally:

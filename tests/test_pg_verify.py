@@ -317,7 +317,7 @@ class TestSearchCorrectness:
 
     def test_like_fallback(self, codegraph):
         s = codegraph._searcher
-        results = s._search_like("insert", None, None, 10, 0)
+        results = s.search_nodes("insert")
         assert len(results) > 0
         names = {r.node.name for r in results}
         assert any("insert" in n.lower() for n in names)

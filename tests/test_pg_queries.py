@@ -352,11 +352,11 @@ class TestSearchOperations:
         assert len(results) > 0
 
     def test_search_nodes_like_fallback(self, codegraph):
-        results = codegraph._searcher._search_like("ZzzNotExist", None, None, 5, 0)
+        results = codegraph._searcher.search_nodes("ZzzNotExist")
         assert isinstance(results, list)
 
     def test_search_nodes_like_with_match(self, codegraph):
-        results = codegraph._searcher._search_like("Graph", None, None, 5, 0)
+        results = codegraph._searcher.search_nodes("Graph")
         assert len(results) > 0
 
     def test_search_nodes_fuzzy(self, codegraph):
@@ -364,7 +364,11 @@ class TestSearchOperations:
         assert isinstance(results, list)
 
     def test_search_all_by_filters(self, codegraph):
-        results = codegraph._searcher._search_all_by_filters(["class"], None, 5)
+        from pycodegraph.types import SearchOptions
+
+        results = codegraph._searcher.search_nodes(
+            "", SearchOptions(kinds=["class"], limit=5)
+        )
         assert isinstance(results, list)
 
     def test_search_nodes_with_language_filter(self, codegraph):

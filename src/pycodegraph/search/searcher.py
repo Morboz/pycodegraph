@@ -76,15 +76,19 @@ class NodeSearcher:
         )
 
         # Strategy 1: FTS
-        results = (
-            self._search_fts(text, kind_strs, lang_strs, limit, offset)
-            if text
-            else self._search_all_by_filters(kind_strs, lang_strs, limit * 5)
-        )
+        if text:
+            results = self._queries.search_fts(
+                text, kind_strs, lang_strs, limit, offset
+            )
+        else:
+            nodes = self._queries.list_nodes_by_filters(kind_strs, lang_strs, limit * 5)
+            results = [SearchResult(node=n, score=1.0) for n in nodes]
 
         # Strategy 2: LIKE
         if not results and text and len(text) >= 2:
-            results = self._search_like(text, kind_strs, lang_strs, limit, offset)
+            results = self._queries.search_like(
+                text, kind_strs, lang_strs, limit, offset
+            )
 
         # Strategy 3: Fuzzy
         if not results and text and len(text) >= 3:
@@ -228,44 +232,6 @@ class NodeSearcher:
     # Private strategy helpers
     # =========================================================================
 
-    def _search_fts(
-        self,
-        text: str,
-        kinds: list[str] | None,
-        languages: list[str] | None,
-        limit: int,
-        offset: int,
-    ) -> list[SearchResult]:
-        rows = self._queries.search_fts(text, kinds, languages, limit, offset)
-        if not rows:
-            return []
-        return [
-            SearchResult(
-                node=self._queries._row_to_node(r[:20]),
-                score=abs(r[20]),
-            )
-            for r in rows
-        ]
-
-    def _search_like(
-        self,
-        text: str,
-        kinds: list[str] | None,
-        languages: list[str] | None,
-        limit: int,
-        offset: int,
-    ) -> list[SearchResult]:
-        rows = self._queries.search_like(text, kinds, languages, limit, offset)
-        if not rows:
-            return []
-        return [
-            SearchResult(
-                node=self._queries._row_to_node(r[:20]),
-                score=r[20],
-            )
-            for r in rows
-        ]
-
     def _search_fuzzy(
         self,
         text: str,
@@ -306,14 +272,3 @@ class NodeSearcher:
                     break
 
         return results
-
-    def _search_all_by_filters(
-        self,
-        kinds: list[str] | None,
-        languages: list[str] | None,
-        limit: int,
-    ) -> list[SearchResult]:
-        rows = self._queries.search_by_filters(kinds, languages, limit)
-        return [
-            SearchResult(node=self._queries._row_to_node(r), score=1.0) for r in rows
-        ]
