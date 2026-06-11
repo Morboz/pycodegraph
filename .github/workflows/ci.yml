@@ -14,7 +14,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.11"
-      - run: uv sync --extra dev
+      - run: uv sync --extra dev --group dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run lint-imports
@@ -26,7 +26,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.11"
-      - run: uv sync --extra dev
+      - run: uv sync --extra dev --group dev
       - run: uv run pytest tests/ --tb=short -q
 
   type-check:
@@ -36,5 +36,5 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.11"
-      - run: uv sync --extra dev
+      - run: uv sync --extra dev --group dev
       - run: uv run mypy src/pycodegraph
