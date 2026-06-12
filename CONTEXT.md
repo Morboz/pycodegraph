@@ -40,6 +40,22 @@ _Avoid_: linking, binding, resolution pass
 The third stage of Indexing — identifying test Nodes and their tested targets by combining file context, naming conventions, decorator detection, and call graph analysis. Produces `tests` Edges from test Nodes to the Nodes they exercise. Runs after Resolution so that all call and import edges are available.
 _Avoid_: test detection, test linking
 
+**Dataflow Analysis**:
+The fourth stage of Indexing — extracting intra-procedural definition-use chains from function bodies. For each function/method, identifies which statements define variables (assignment, for-target, with-target, parameters, global/nonlocal declarations) and which statements use them (name references in load context), then creates directed Dataflow Edges from definition statements to use statements. Runs after Test Analysis. Python-only in MVP.
+_Avoid_: program graph analysis, def-use analysis (too vague)
+
+**Dataflow Edge**:
+A directed relationship stored in the independent `dataflow_edges` table, connecting a definition statement to a use statement within the same function. Identified by `(file_path, start_line, end_line)` triples rather than Node IDs. Each edge carries the variable name it flows through.
+_Avoid_: data flow link, dependency edge
+
+**Dataflow Slice**:
+A bounded BFS traversal over Dataflow Edges starting from a seed `(file_path, line, variable?)`. Backward slices trace incoming Dataflow Edges to find where a variable was defined; forward slices trace outgoing edges to find where it is consumed. Results include source text for each statement in the slice.
+_Avoid_: program slice, code trace
+
+**Statement**:
+A top-level AST node within a function body — the granularity unit for Dataflow Edges. Statements are not stored as Nodes; they are identified by their `(file_path, start_line, end_line)` position in source text.
+_Avoid_: instruction, line (too granular)
+
 **Database**:
 The persistence layer for the graph — storage and querying. Encompasses Backend implementations, QueryBuilder, and connection management.
 _Avoid_: store, repository
