@@ -514,6 +514,7 @@ class TestCodeGraphDeleteFile:
         from pycodegraph.graph import GraphQueryManager, GraphTraverser
         from pycodegraph.resolution.resolver import ReferenceResolver
         from pycodegraph.search.searcher import NodeSearcher
+        from pycodegraph.test_analysis import TestAnalyzer
 
         config = CodeGraphConfig()
         cg = CodeGraph.__new__(CodeGraph)
@@ -529,6 +530,7 @@ class TestCodeGraphDeleteFile:
         cg._traverser = traverser
         cg._graph_manager = GraphQueryManager(queries, traverser)
         cg._resolver = ReferenceResolver(tmp_dir, queries)
+        cg._test_analyzer = TestAnalyzer(queries)
         return cg
 
     def test_delete_file_is_public_method_on_codegraph_class(self):
@@ -580,6 +582,7 @@ class TestCodeGraphApplyDelta:
         from pycodegraph.graph import GraphQueryManager, GraphTraverser
         from pycodegraph.resolution.resolver import ReferenceResolver
         from pycodegraph.search.searcher import NodeSearcher
+        from pycodegraph.test_analysis import TestAnalyzer
 
         config = CodeGraphConfig()
         cg = CodeGraph.__new__(CodeGraph)
@@ -595,6 +598,7 @@ class TestCodeGraphApplyDelta:
         cg._traverser = traverser
         cg._graph_manager = GraphQueryManager(queries, traverser)
         cg._resolver = ReferenceResolver(tmp_dir, queries)
+        cg._test_analyzer = TestAnalyzer(queries)
         return cg
 
     def test_apply_delta_is_public_method_on_codegraph_class(self):

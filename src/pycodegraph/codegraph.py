@@ -23,6 +23,7 @@ from .resolution import create_resolver
 from .resolution.resolver import ReferenceResolver
 from .search.query_utils import derive_project_name_tokens
 from .search.searcher import NodeSearcher
+from .test_analysis import TestAnalyzer
 from .types import (
     Context,
     Edge,
@@ -45,6 +46,7 @@ def _create_components(
     GraphQueryManager,
     ExploreEngine,
     ReferenceResolver,
+    TestAnalyzer,
 ]:
     """Build all collaborator objects for CodeGraph."""
     if file_provider is None:
@@ -61,6 +63,7 @@ def _create_components(
         project_root, queries, traverser, searcher, file_provider
     )
     resolver = create_resolver(project_root, queries, file_provider)
+    test_analyzer = TestAnalyzer(queries)
     return (
         searcher,
         orchestrator,
@@ -68,6 +71,7 @@ def _create_components(
         graph_manager,
         explore_engine,
         resolver,
+        test_analyzer,
     )
 
 
@@ -87,6 +91,7 @@ class CodeGraph:
         graph_manager: GraphQueryManager,
         explore_engine: ExploreEngine,
         resolver: ReferenceResolver,
+        test_analyzer: TestAnalyzer,
     ):
         self._db = db
         self._conn = db.get_connection()
@@ -99,6 +104,7 @@ class CodeGraph:
         self._graph_manager = graph_manager
         self._explore_engine = explore_engine
         self._resolver = resolver
+        self._test_analyzer = test_analyzer
 
     # =========================================================================
     # Lifecycle
@@ -155,6 +161,7 @@ class CodeGraph:
             graph_manager,
             explore_engine,
             resolver,
+            test_analyzer,
         ) = _create_components(root, config, queries)
         return cls(
             db,
@@ -167,6 +174,7 @@ class CodeGraph:
             graph_manager=graph_manager,
             explore_engine=explore_engine,
             resolver=resolver,
+            test_analyzer=test_analyzer,
         )
 
     @classmethod
@@ -194,6 +202,7 @@ class CodeGraph:
             graph_manager,
             explore_engine,
             resolver,
+            test_analyzer,
         ) = _create_components(root, config, queries)
         return cls(
             db,
@@ -206,6 +215,7 @@ class CodeGraph:
             graph_manager=graph_manager,
             explore_engine=explore_engine,
             resolver=resolver,
+            test_analyzer=test_analyzer,
         )
 
     @classmethod
@@ -248,6 +258,7 @@ class CodeGraph:
             graph_manager,
             explore_engine,
             resolver,
+            test_analyzer,
         ) = _create_components(project_root, config, queries, file_provider)
         return cls(
             db,
@@ -260,6 +271,7 @@ class CodeGraph:
             graph_manager=graph_manager,
             explore_engine=explore_engine,
             resolver=resolver,
+            test_analyzer=test_analyzer,
         )
 
     def close(self) -> None:
@@ -286,6 +298,9 @@ class CodeGraph:
             result.edges_created += resolution_result.stats.get("resolved", 0)
             result.refs_resolved = resolution_result.stats.get("resolved", 0)
             result.refs_unresolved = resolution_result.stats.get("unresolved", 0)
+
+            test_analysis_result = self._test_analyzer.analyze_and_persist(on_progress)
+            result.edges_created += test_analysis_result.get("edges_created", 0)
 
         return result
 
@@ -349,6 +364,9 @@ class CodeGraph:
             total_edges += resolution_result.stats.get("resolved", 0)
             refs_resolved = resolution_result.stats.get("resolved", 0)
             refs_unresolved = resolution_result.stats.get("unresolved", 0)
+
+            test_analysis_result = self._test_analyzer.analyze_and_persist(on_progress)
+            total_edges += test_analysis_result.get("edges_created", 0)
 
         return IndexResult(
             success=not fatal_errors,
