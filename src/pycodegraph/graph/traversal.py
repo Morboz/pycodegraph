@@ -112,6 +112,20 @@ class GraphTraverser:
         self._get_callees_recursive(node_id, max_depth, 0, result, visited)
         return result
 
+    def get_testers(self, node_id: str, max_depth: int = 1) -> list[tuple[Node, Edge]]:
+        result: list[tuple[Node, Edge]] = []
+        visited: set[str] = set()
+        self._get_testers_recursive(node_id, max_depth, 0, result, visited)
+        return result
+
+    def get_tested_targets(
+        self, node_id: str, max_depth: int = 1
+    ) -> list[tuple[Node, Edge]]:
+        result: list[tuple[Node, Edge]] = []
+        visited: set[str] = set()
+        self._get_tested_targets_recursive(node_id, max_depth, 0, result, visited)
+        return result
+
     def get_call_graph(self, node_id: str, depth: int = 2) -> Subgraph:
         focal = self._queries.get_node_by_id(node_id)
         if not focal:
@@ -327,6 +341,54 @@ class GraphTraverser:
                 result.append((callee, edge))
                 self._get_callees_recursive(
                     callee.id, max_depth, current_depth + 1, result, visited
+                )
+
+    def _get_testers_recursive(
+        self,
+        node_id: str,
+        max_depth: int,
+        current_depth: int,
+        result: list[tuple[Node, Edge]],
+        visited: set[str],
+    ) -> None:
+        if current_depth >= max_depth or node_id in visited:
+            return
+        visited.add(node_id)
+
+        incoming = self._queries.get_incoming_edges(
+            node_id,
+            [EdgeKind.TESTS.value],
+        )
+        for edge in incoming:
+            tester = self._queries.get_node_by_id(edge.source)
+            if tester and tester.id not in visited:
+                result.append((tester, edge))
+                self._get_testers_recursive(
+                    tester.id, max_depth, current_depth + 1, result, visited
+                )
+
+    def _get_tested_targets_recursive(
+        self,
+        node_id: str,
+        max_depth: int,
+        current_depth: int,
+        result: list[tuple[Node, Edge]],
+        visited: set[str],
+    ) -> None:
+        if current_depth >= max_depth or node_id in visited:
+            return
+        visited.add(node_id)
+
+        outgoing = self._queries.get_outgoing_edges(
+            node_id,
+            [EdgeKind.TESTS.value],
+        )
+        for edge in outgoing:
+            target = self._queries.get_node_by_id(edge.target)
+            if target and target.id not in visited:
+                result.append((target, edge))
+                self._get_tested_targets_recursive(
+                    target.id, max_depth, current_depth + 1, result, visited
                 )
 
     def _get_type_ancestors(

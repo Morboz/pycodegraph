@@ -14,6 +14,89 @@ def _find_node(cg: CodeGraph, name: str) -> Node | None:
     return nodes[0] if nodes else None
 
 
+# =============================================================================
+# Test project fixtures for test-analysis-aware tests
+# =============================================================================
+
+_PROD_MODELS = """\
+class User:
+    def __init__(self, name: str, email: str):
+        self.name = name
+        self.email = email
+
+    def greet(self) -> str:
+        return f"Hello, {self.name}!"
+
+class Admin(User):
+    def greet(self) -> str:
+        return f"Hello, admin {self.name}!"
+"""
+
+_PROD_SERVICES = """\
+from src.models import User
+
+
+def create_user(name: str, email: str) -> User:
+    return User(name, email)
+
+
+def notify_user(user: User) -> str:
+    return user.greet()
+"""
+
+_TEST_MODELS = """\
+from src.models import User, Admin
+
+
+def test_user_creation():
+    user = User("Alice", "alice@example.com")
+    assert user.name == "Alice"
+
+
+def test_user_greet():
+    user = User("Bob", "bob@example.com")
+    greeting = user.greet()
+    assert "Bob" in greeting
+
+
+def helper_build_user(name: str) -> User:
+    return User(name, f"{name}@example.com")
+
+
+def test_admin_greet():
+    admin = Admin("Carol", "carol@example.com")
+    assert "admin" in admin.greet()
+"""
+
+_TEST_SERVICES = """\
+from src.models import User
+from src.services import create_user, notify_user
+
+
+def test_create_user():
+    user = create_user("Dave", "dave@example.com")
+    assert user.name == "Dave"
+
+
+def test_notify_user():
+    user = User("Eve", "eve@example.com")
+    result = notify_user(user)
+    assert "Eve" in result
+"""
+
+
+def _write_test_project(root: str) -> None:
+    """Write a synthetic Python project with src/ and tests/ directories."""
+    from tests.conftest import write_file
+
+    write_file(root, "src/__init__.py", "")
+    write_file(root, "src/models.py", _PROD_MODELS)
+    write_file(root, "src/services.py", _PROD_SERVICES)
+    write_file(root, "tests/__init__.py", "")
+    write_file(root, "tests/test_models.py", _TEST_MODELS)
+    write_file(root, "tests/test_services.py", _TEST_SERVICES)
+
+
 class TestGetCallers:
     """get_callers() returns incoming CALLS edges."""
 
@@ -364,5 +447,116 @@ class TestGetImpactRadius:
             shallow = cg.get_impact_radius(cu.id, max_depth=1)
             deep = cg.get_impact_radius(cu.id, max_depth=3)
             assert len(deep.nodes) >= len(shallow.nodes)
+        finally:
+            cg.close()
+
+
+class TestGetTesters:
+    """get_testers() returns Nodes that have TESTS edges to the given Node."""
+
+    def test_get_testers_of_production_function(self, tmp_path):
+        """A production function called by tests should have testers."""
+        root = str(tmp_path)
+        _write_test_project(root)
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            notify_user = _find_node(cg, "notify_user")
+            if notify_user is None:
+                pytest.skip("notify_user not found")
+            testers = cg.get_testers(notify_user.id)
+            tester_nodes = [n for n, _ in testers]
+            tester_names = {n.name for n in tester_nodes}
+            assert "test_notify_user" in tester_names
+        finally:
+            cg.close()
+
+    def test_get_testers_empty_for_untested_production(self, tmp_path):
+        """A production function with no test coverage should have empty testers."""
+        root = str(tmp_path)
+        _write_test_project(root)
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            test_create_user = _find_node(cg, "test_create_user")
+            if test_create_user is None:
+                pytest.skip("test_create_user not found")
+            # A test node should have no testers (nothing tests a test)
+            testers = cg.get_testers(test_create_user.id)
+            assert testers == []
+        finally:
+            cg.close()
+
+    def test_get_testers_round_trip(self, tmp_path):
+        """If A tests B, then get_testers(B) includes A and get_tested_targets(A) includes B."""
+        root = str(tmp_path)
+        _write_test_project(root)
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            create_user = _find_node(cg, "create_user")
+            test_create_user = _find_node(cg, "test_create_user")
+            if create_user is None or test_create_user is None:
+                pytest.skip("create_user or test_create_user not found")
+            # Round trip: get_testers(create_user) should include test_create_user
+            testers = cg.get_testers(create_user.id)
+            tester_names = {n.name for n, _ in testers}
+            assert "test_create_user" in tester_names
+            # get_tested_targets(test_create_user) should include create_user
+            targets = cg.get_tested_targets(test_create_user.id)
+            target_names = {n.name for n, _ in targets}
+            assert "create_user" in target_names
+        finally:
+            cg.close()
+
+
+class TestGetTestedTargets:
+    """get_tested_targets() returns Nodes that the given Node has TESTS edges to."""
+
+    def test_get_tested_targets_of_test_function(self, tmp_path):
+        """A test function should have TESTS edges to the production functions it calls."""
+        root = str(tmp_path)
+        _write_test_project(root)
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            test_create_user = _find_node(cg, "test_create_user")
+            if test_create_user is None:
+                pytest.skip("test_create_user not found")
+            targets = cg.get_tested_targets(test_create_user.id)
+            target_names = {n.name for n, _ in targets}
+            assert "create_user" in target_names
+        finally:
+            cg.close()
+
+    def test_get_tested_targets_empty_for_production_node(self, tmp_path):
+        """A production node (non-test) should have empty tested targets."""
+        root = str(tmp_path)
+        _write_test_project(root)
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            create_user = _find_node(cg, "create_user")
+            if create_user is None:
+                pytest.skip("create_user not found")
+            targets = cg.get_tested_targets(create_user.id)
+            assert targets == []
+        finally:
+            cg.close()
+
+    def test_get_tested_targets_no_tests_relations(self, tmp_path):
+        """A node with no TESTS edges returns empty list."""
+        root = str(tmp_path)
+        _write_test_project(root)
+        cg = CodeGraph.init(root)
+        cg.index_all()
+        try:
+            # helper_build_user is in a test file but is not a test node,
+            # so it should have no outgoing TESTS edges
+            helper = _find_node(cg, "helper_build_user")
+            if helper is None:
+                pytest.skip("helper_build_user not found")
+            targets = cg.get_tested_targets(helper.id)
+            assert targets == []
         finally:
             cg.close()
