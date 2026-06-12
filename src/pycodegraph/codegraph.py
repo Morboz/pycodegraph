@@ -426,6 +426,16 @@ class CodeGraph:
         """Find all functions/methods called by a function up to *max_depth* hops."""
         return self._traverser.get_callees(node_id, max_depth)
 
+    def get_testers(self, node_id: str, max_depth: int = 1) -> list[tuple[Node, Edge]]:
+        """Find all test nodes that have TESTS edges pointing to the given Node."""
+        return self._traverser.get_testers(node_id, max_depth)
+
+    def get_tested_targets(
+        self, node_id: str, max_depth: int = 1
+    ) -> list[tuple[Node, Edge]]:
+        """Find all Nodes that the given Node has TESTS edges pointing to."""
+        return self._traverser.get_tested_targets(node_id, max_depth)
+
     def get_call_graph(self, node_id: str, depth: int = 2) -> Subgraph:
         """Get the call graph (callers + callees) for a function."""
         return self._traverser.get_call_graph(node_id, depth)
