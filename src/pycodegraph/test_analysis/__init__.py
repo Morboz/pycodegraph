@@ -28,6 +28,6 @@ def is_test_node(node: Node) -> bool:
 
 
 # Imported after is_test_node to avoid circular imports with analyzer.
-from .analyzer import TestAnalyzer  # noqa: E402
+from .analyzer import TestAnalysisResult, TestAnalyzer  # noqa: E402
 
-__all__ = ["TestAnalyzer", "is_test_node"]
+__all__ = ["TestAnalysisResult", "TestAnalyzer", "is_test_node"]

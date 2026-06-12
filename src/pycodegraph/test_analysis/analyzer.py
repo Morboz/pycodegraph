@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from ..db.queries import QueryBuilder
 from ..types import Edge, EdgeKind, Node
@@ -16,6 +17,16 @@ logger = logging.getLogger(__name__)
 _RELEVANT_EDGE_KINDS = frozenset(
     {EdgeKind.CALLS, EdgeKind.INSTANTIATES, EdgeKind.REFERENCES}
 )
+
+# Default limit on get_all_nodes() — warn if we hit it.
+_NODE_LIMIT = 50_000
+
+
+@dataclass
+class TestAnalysisResult:
+    """Result of a Test Analysis pass."""
+
+    edges_created: int = 0
 
 
 class TestAnalyzer:
@@ -34,19 +45,27 @@ class TestAnalyzer:
     def analyze_and_persist(
         self,
         on_progress: Callable | None = None,
-    ) -> dict:
+    ) -> TestAnalysisResult:
         """Run test analysis and persist TESTS edges.
 
-        Returns a stats dict with ``edges_created``.
+        Returns a :class:`TestAnalysisResult` with stats.
         """
         # 1. Load all nodes
-        all_nodes_list = self._queries.get_all_nodes()
+        all_nodes_list = self._queries.get_all_nodes(limit=_NODE_LIMIT)
         all_nodes = {n.id: n for n in all_nodes_list}
+
+        if len(all_nodes_list) >= _NODE_LIMIT:
+            logger.warning(
+                "get_all_nodes() returned %d nodes (limit=%d); "
+                "test analysis may be incomplete for large projects",
+                len(all_nodes_list),
+                _NODE_LIMIT,
+            )
 
         # 2. Identify test nodes
         test_node_ids = {nid for nid, n in all_nodes.items() if is_test_node(n)}
         if not test_node_ids:
-            return {"edges_created": 0}
+            return TestAnalysisResult(edges_created=0)
 
         # 3. Build file-level import index: test_file -> set of imported file paths
         test_file_imports: dict[str, set[str]] = {}
@@ -60,8 +79,9 @@ class TestAnalyzer:
         seen_pairs: set[tuple[str, str]] = set()
 
         total = len(test_node_ids)
+        progress_step = max(1, total // 20) if total > 20 else 1
         for i, test_id in enumerate(sorted(test_node_ids)):
-            if on_progress and i % 100 == 0:
+            if on_progress and i % progress_step == 0:
                 on_progress("test-analysis", i, total, "")
 
             test_node = all_nodes[test_id]
@@ -101,7 +121,7 @@ class TestAnalyzer:
         if tests_edges:
             self._queries.insert_edges(tests_edges)
 
-        return {"edges_created": len(tests_edges)}
+        return TestAnalysisResult(edges_created=len(tests_edges))
 
 
 # ------------------------------------------------------------------
@@ -122,6 +142,9 @@ def _build_import_index(
     targets.  Files that are themselves test files are excluded (test
     helpers / fixtures don't count as production targets).
     """
+    # Local import to avoid circular dependency: is_test_file lives in
+    # search.query_utils which Sphinx/type-checkers may load before
+    # test_analysis is fully initialized.
     from ..search.query_utils import is_test_file as _is_test_file
 
     # Group test node IDs by their file_path

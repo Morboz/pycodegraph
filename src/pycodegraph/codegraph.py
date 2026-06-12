@@ -300,7 +300,7 @@ class CodeGraph:
             result.refs_unresolved = resolution_result.stats.get("unresolved", 0)
 
             test_analysis_result = self._test_analyzer.analyze_and_persist(on_progress)
-            result.edges_created += test_analysis_result.get("edges_created", 0)
+            result.edges_created += test_analysis_result.edges_created
 
         return result
 
@@ -366,7 +366,7 @@ class CodeGraph:
             refs_unresolved = resolution_result.stats.get("unresolved", 0)
 
             test_analysis_result = self._test_analyzer.analyze_and_persist(on_progress)
-            total_edges += test_analysis_result.get("edges_created", 0)
+            total_edges += test_analysis_result.edges_created
 
         return IndexResult(
             success=not fatal_errors,
