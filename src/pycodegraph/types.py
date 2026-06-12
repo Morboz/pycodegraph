@@ -64,6 +64,7 @@ class EdgeKind(StrEnum):
     INSTANTIATES = "instantiates"
     OVERRIDES = "overrides"
     DECORATES = "decorates"
+    TESTS = "tests"
 
 
 class Language(StrEnum):
