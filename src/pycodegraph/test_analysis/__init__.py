@@ -36,7 +36,7 @@ def _parse_decorators(node: Node) -> list[str]:
     if not node.decorators:
         return []
     try:
-        return json.loads(node.decorators)
+        return json.loads(node.decorators)  # type: ignore[no-any-return]
     except (json.JSONDecodeError, TypeError):
         return []
 
