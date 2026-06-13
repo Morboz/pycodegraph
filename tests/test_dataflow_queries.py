@@ -88,9 +88,15 @@ class TestGetDataflowByStatement:
     def setup_one_edge(self, cg):
         """One edge: source spans lines 10-12, target spans lines 20-22."""
         cg._queries.insert_dataflow_edges(
-            [_edge(source_start_line=10, source_end_line=12,
-                   target_start_line=20, target_end_line=22,
-                   variable="user")]
+            [
+                _edge(
+                    source_start_line=10,
+                    source_end_line=12,
+                    target_start_line=20,
+                    target_end_line=22,
+                    variable="user",
+                )
+            ]
         )
 
     def test_line_inside_source_span(self, empty_codegraph):
@@ -117,7 +123,9 @@ class TestGetDataflowByStatement:
         cg = empty_codegraph
         self.setup_one_edge(cg)
         for line in (10, 12, 20, 22):
-            assert len(cg._queries.get_dataflow_edges_by_statement("models.py", line)) == 1
+            assert (
+                len(cg._queries.get_dataflow_edges_by_statement("models.py", line)) == 1
+            )
 
     def test_scoped_to_file(self, empty_codegraph):
         cg = empty_codegraph
@@ -209,9 +217,7 @@ class TestDeleteFileCleansDataflow:
 
         cg.delete_file("models.py")
 
-        assert (
-            cg._queries.get_dataflow_edges_by_function("models.py::User") == []
-        )
+        assert cg._queries.get_dataflow_edges_by_function("models.py::User") == []
         # The untouched file's edges survive.
         assert (
             len(cg._queries.get_dataflow_edges_by_function("services.py::create_user"))
@@ -236,12 +242,8 @@ class TestDeleteFileCleansDataflow:
 
         cg._queries.delete_files_batch(["models.py", "utils.py"])
 
-        assert (
-            cg._queries.get_dataflow_edges_by_function("models.py::User") == []
-        )
-        assert (
-            cg._queries.get_dataflow_edges_by_function("utils.py::format_date") == []
-        )
+        assert cg._queries.get_dataflow_edges_by_function("models.py::User") == []
+        assert cg._queries.get_dataflow_edges_by_function("utils.py::format_date") == []
         assert (
             len(cg._queries.get_dataflow_edges_by_function("services.py::create_user"))
             == 1

@@ -269,10 +269,7 @@ class QueryBuilder:
         stmt = select(*_DATAFLOW_COLUMNS).where(
             dataflow_edges.c.function_id == function_id
         )
-        return [
-            self._row_to_dataflow(r)
-            for r in self._conn.execute(stmt).fetchall()
-        ]
+        return [self._row_to_dataflow(r) for r in self._conn.execute(stmt).fetchall()]
 
     def get_dataflow_edges_by_statement(
         self, file_path: str, line: int
@@ -290,10 +287,7 @@ class QueryBuilder:
                 & (line <= dataflow_edges.c.target_end_line),
             ),
         )
-        return [
-            self._row_to_dataflow(r)
-            for r in self._conn.execute(stmt).fetchall()
-        ]
+        return [self._row_to_dataflow(r) for r in self._conn.execute(stmt).fetchall()]
 
     # =========================================================================
     # File operations
@@ -713,9 +707,7 @@ class QueryBuilder:
                 )
                 self._conn.execute(delete(nodes).where(nodes.c.file_path.in_(chunk)))
             self._conn.execute(
-                delete(dataflow_edges).where(
-                    dataflow_edges.c.file_path.in_(chunk)
-                )
+                delete(dataflow_edges).where(dataflow_edges.c.file_path.in_(chunk))
             )
             self._conn.execute(delete(files).where(files.c.path.in_(chunk)))
             self._node_cache.invalidate_by_attr_in("file_path", set(chunk))
