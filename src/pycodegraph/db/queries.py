@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import Connection, case, delete, func, insert, or_, select, tuple_
 
 from ..types import (
+    DataflowEdge,
     Edge,
     EdgeKind,
     FileRecord,
@@ -19,7 +20,7 @@ from ..types import (
 )
 from ..utils.cache import LRUCache
 from .backend import get_backend
-from .tables import edges, files, nodes, unresolved_refs
+from .tables import dataflow_edges, edges, files, nodes, unresolved_refs
 
 _NODE_COLUMNS = (
     nodes.c.id,
@@ -62,6 +63,17 @@ _REF_COLUMNS = (
     unresolved_refs.c.col,
     unresolved_refs.c.file_path,
     unresolved_refs.c.language,
+)
+
+_DATAFLOW_COLUMNS = (
+    dataflow_edges.c.file_path,
+    dataflow_edges.c.source_start_line,
+    dataflow_edges.c.source_end_line,
+    dataflow_edges.c.target_start_line,
+    dataflow_edges.c.target_end_line,
+    dataflow_edges.c.variable,
+    dataflow_edges.c.function_id,
+    dataflow_edges.c.provenance,
 )
 
 
@@ -141,6 +153,19 @@ def _ref_row(r: UnresolvedReference) -> dict:
     }
 
 
+def _dataflow_row(d: DataflowEdge) -> dict:
+    return {
+        "file_path": d.file_path,
+        "source_start_line": d.source_start_line,
+        "source_end_line": d.source_end_line,
+        "target_start_line": d.target_start_line,
+        "target_end_line": d.target_end_line,
+        "variable": d.variable,
+        "function_id": d.function_id,
+        "provenance": d.provenance,
+    }
+
+
 class QueryBuilder:
     def __init__(self, conn: Connection):
         self._conn = conn
@@ -199,6 +224,76 @@ class QueryBuilder:
         rows = [_ref_row(r) for r in refs]
         self._conn.execute(insert(unresolved_refs), rows)
         self._conn.commit()
+
+    # =========================================================================
+    # Dataflow edge operations
+    # =========================================================================
+
+    def insert_dataflow_edges(self, edges_data: list[DataflowEdge]) -> None:
+        if not edges_data:
+            return
+        rows = [_dataflow_row(d) for d in edges_data]
+        self._conn.execute(insert(dataflow_edges), rows)
+        self._conn.commit()
+
+    def delete_dataflow_edges_by_file(self, file_path: str) -> None:
+        self._conn.execute(
+            delete(dataflow_edges).where(dataflow_edges.c.file_path == file_path)
+        )
+        self._conn.commit()
+
+    def delete_dataflow_edges_by_provenance_prefix(self, prefix: str) -> int:
+        """Delete dataflow edges whose provenance starts with *prefix*.
+
+        Returns the count deleted. Idempotent: a second call with the same
+        prefix deletes nothing and returns 0.
+        """
+        count_stmt = (
+            select(func.count())
+            .select_from(dataflow_edges)
+            .where(dataflow_edges.c.provenance.like(f"{prefix}%"))
+        )
+        count = self._conn.execute(count_stmt).scalar_one()
+
+        if count:
+            self._conn.execute(
+                delete(dataflow_edges).where(
+                    dataflow_edges.c.provenance.like(f"{prefix}%")
+                )
+            )
+            self._conn.commit()
+
+        return count
+
+    def get_dataflow_edges_by_function(self, function_id: str) -> list[DataflowEdge]:
+        stmt = select(*_DATAFLOW_COLUMNS).where(
+            dataflow_edges.c.function_id == function_id
+        )
+        return [
+            self._row_to_dataflow(r)
+            for r in self._conn.execute(stmt).fetchall()
+        ]
+
+    def get_dataflow_edges_by_statement(
+        self, file_path: str, line: int
+    ) -> list[DataflowEdge]:
+        """Return dataflow edges in *file_path* whose source OR target span
+        contains *line*. Used to locate the flows touching a given statement
+        (a seed for Dataflow Analysis).
+        """
+        stmt = select(*_DATAFLOW_COLUMNS).where(
+            dataflow_edges.c.file_path == file_path,
+            or_(
+                (dataflow_edges.c.source_start_line <= line)
+                & (line <= dataflow_edges.c.source_end_line),
+                (dataflow_edges.c.target_start_line <= line)
+                & (line <= dataflow_edges.c.target_end_line),
+            ),
+        )
+        return [
+            self._row_to_dataflow(r)
+            for r in self._conn.execute(stmt).fetchall()
+        ]
 
     # =========================================================================
     # File operations
@@ -291,6 +386,9 @@ class QueryBuilder:
                 )
             )
             self._conn.execute(delete(nodes).where(nodes.c.file_path == file_path))
+        self._conn.execute(
+            delete(dataflow_edges).where(dataflow_edges.c.file_path == file_path)
+        )
         self._conn.execute(delete(files).where(files.c.path == file_path))
         self._node_cache.invalidate_by_attr("file_path", file_path)
         self._backend.after_nodes_changed(self._conn)
@@ -614,6 +712,11 @@ class QueryBuilder:
                     )
                 )
                 self._conn.execute(delete(nodes).where(nodes.c.file_path.in_(chunk)))
+            self._conn.execute(
+                delete(dataflow_edges).where(
+                    dataflow_edges.c.file_path.in_(chunk)
+                )
+            )
             self._conn.execute(delete(files).where(files.c.path.in_(chunk)))
             self._node_cache.invalidate_by_attr_in("file_path", set(chunk))
         self._backend.after_nodes_changed(self._conn)
@@ -715,6 +818,19 @@ class QueryBuilder:
             line=row[4],
             col=row[5],
             provenance=row[6],
+        )
+
+    @staticmethod
+    def _row_to_dataflow(row: Any) -> DataflowEdge:
+        return DataflowEdge(
+            file_path=row[0],
+            source_start_line=row[1],
+            source_end_line=row[2],
+            target_start_line=row[3],
+            target_end_line=row[4],
+            variable=row[5],
+            function_id=row[6],
+            provenance=row[7],
         )
 
     @staticmethod
