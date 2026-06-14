@@ -347,6 +347,21 @@ def _init_inferdb_schema(engine: Engine) -> None:
         )
         conn.execute(
             text(
+                "CREATE TABLE IF NOT EXISTS dataflow_edges ("
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
+                "file_path VARCHAR(768) NOT NULL,"
+                "source_start_line INT NOT NULL,"
+                "source_end_line INT NOT NULL,"
+                "target_start_line INT NOT NULL,"
+                "target_end_line INT NOT NULL,"
+                "variable VARCHAR(512) NOT NULL,"
+                "function_id VARCHAR(512) NOT NULL,"
+                "provenance TEXT"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE TABLE IF NOT EXISTS project_metadata ("
                 "`key` VARCHAR(255) PRIMARY KEY,"
                 "value TEXT NOT NULL,"
