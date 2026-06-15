@@ -151,6 +151,49 @@ class DataflowEdge:
 
 
 @dataclass
+class StatementRef:
+    """A reference to one statement in source text.
+
+    The consumer-side handle for the Dataflow Slice API. A statement is the
+    granularity unit of Dataflow Edges — identified by its position
+    ``(file_path, start_line, end_line)`` in source text, never stored as a Node.
+    """
+
+    file_path: str
+    start_line: int
+    end_line: int
+    source_text: str | None = None  # actual source, filled lazily by the slicer
+    function_name: str | None = None  # function the statement lives in
+
+
+@dataclass
+class DataflowSliceEdge:
+    """A data-flow edge as exposed to slice consumers.
+
+    Maps a storage-layer :class:`DataflowEdge` to :class:`StatementRef`
+    endpoints. Distinct from :class:`DataflowEdge` (the storage row), which is
+    keyed by raw line ranges.
+    """
+
+    source: StatementRef
+    target: StatementRef
+    variable: str
+
+
+@dataclass
+class DataflowSlice:
+    """The result of a bounded BFS over Dataflow Edges.
+
+    ``seed`` is ``None`` when no dataflow edge touches the requested line
+    (an empty slice).
+    """
+
+    statements: list[StatementRef] = field(default_factory=list)
+    edges: list[DataflowSliceEdge] = field(default_factory=list)
+    seed: StatementRef | None = None
+
+
+@dataclass
 class UnresolvedReference:
     from_node_id: str
     reference_name: str
