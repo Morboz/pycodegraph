@@ -13,6 +13,7 @@ from .config import (
     load_config,
     save_config,
 )
+from .dataflow import DataflowSlicer
 from .db import DatabaseConnection
 from .db.queries import QueryBuilder
 from .explore.engine import ExploreEngine
@@ -26,6 +27,7 @@ from .search.searcher import NodeSearcher
 from .test_analysis import TestAnalyzer
 from .types import (
     Context,
+    DataflowSlice,
     Edge,
     ExploreOptions,
     IndexResult,
@@ -47,6 +49,7 @@ def _create_components(
     ExploreEngine,
     ReferenceResolver,
     TestAnalyzer,
+    DataflowSlicer,
 ]:
     """Build all collaborator objects for CodeGraph."""
     if file_provider is None:
@@ -64,6 +67,7 @@ def _create_components(
     )
     resolver = create_resolver(project_root, queries, file_provider)
     test_analyzer = TestAnalyzer(queries)
+    dataflow_slicer = DataflowSlicer(queries, file_provider)
     return (
         searcher,
         orchestrator,
@@ -72,6 +76,7 @@ def _create_components(
         explore_engine,
         resolver,
         test_analyzer,
+        dataflow_slicer,
     )
 
 
@@ -92,6 +97,7 @@ class CodeGraph:
         explore_engine: ExploreEngine,
         resolver: ReferenceResolver,
         test_analyzer: TestAnalyzer,
+        dataflow_slicer: DataflowSlicer,
     ):
         self._db = db
         self._conn = db.get_connection()
@@ -105,6 +111,7 @@ class CodeGraph:
         self._explore_engine = explore_engine
         self._resolver = resolver
         self._test_analyzer = test_analyzer
+        self._dataflow_slicer = dataflow_slicer
 
     # =========================================================================
     # Lifecycle
@@ -162,6 +169,7 @@ class CodeGraph:
             explore_engine,
             resolver,
             test_analyzer,
+            dataflow_slicer,
         ) = _create_components(root, config, queries)
         return cls(
             db,
@@ -175,6 +183,7 @@ class CodeGraph:
             explore_engine=explore_engine,
             resolver=resolver,
             test_analyzer=test_analyzer,
+            dataflow_slicer=dataflow_slicer,
         )
 
     @classmethod
@@ -203,6 +212,7 @@ class CodeGraph:
             explore_engine,
             resolver,
             test_analyzer,
+            dataflow_slicer,
         ) = _create_components(root, config, queries)
         return cls(
             db,
@@ -216,6 +226,7 @@ class CodeGraph:
             explore_engine=explore_engine,
             resolver=resolver,
             test_analyzer=test_analyzer,
+            dataflow_slicer=dataflow_slicer,
         )
 
     @classmethod
@@ -259,6 +270,7 @@ class CodeGraph:
             explore_engine,
             resolver,
             test_analyzer,
+            dataflow_slicer,
         ) = _create_components(project_root, config, queries, file_provider)
         return cls(
             db,
@@ -272,6 +284,7 @@ class CodeGraph:
             explore_engine=explore_engine,
             resolver=resolver,
             test_analyzer=test_analyzer,
+            dataflow_slicer=dataflow_slicer,
         )
 
     def close(self) -> None:
@@ -459,6 +472,36 @@ class CodeGraph:
     def get_file_dependents(self, file_path: str) -> list[str]:
         """Get all files that import from this file."""
         return self._graph_manager.get_file_dependents(file_path)
+
+    # --- Dataflow slicing ---
+
+    def get_dataflow_slice(
+        self,
+        file_path: str,
+        line: int,
+        variable: str | None = None,
+        direction: str = "both",
+        max_depth: int = 10,
+    ) -> DataflowSlice:
+        """Return the Dataflow Slice rooted at ``(file_path, line)``.
+
+        Traverses Dataflow Edges (def→use statements) with a bounded BFS. A
+        *forward* slice follows where a value is consumed; a *backward* slice
+        follows where it was defined. Each :class:`StatementRef` carries its
+        ``source_text`` so the whole causal chain is readable in one call.
+
+        Args:
+            file_path: File containing the seed statement.
+            line: A line inside the seed statement.
+            variable: Optional filter — restrict the slice to one variable.
+                When omitted, every variable touching the seed line is sliced.
+            direction: ``"forward"`` (outgoing edges), ``"backward"``
+                (incoming edges), or ``"both"`` (default).
+            max_depth: Maximum BFS hop count from the seed (default 10).
+        """
+        return self._dataflow_slicer.slice(
+            file_path, line, variable=variable, direction=direction, max_depth=max_depth
+        )
 
     # --- Exploration ---
 

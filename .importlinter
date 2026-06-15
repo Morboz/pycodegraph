@@ -115,6 +115,21 @@ forbidden_modules =
     pycodegraph.integrations
     pycodegraph.config
 
+[importlinter:dataflow-no-business-imports]
+name = dataflow/C1: dataflow must not import business modules
+type = forbidden
+source_modules =
+    pycodegraph.dataflow
+forbidden_modules =
+    pycodegraph.codegraph
+    pycodegraph.context
+    pycodegraph.extraction
+    pycodegraph.graph
+    pycodegraph.resolution
+    pycodegraph.search
+    pycodegraph.integrations
+    pycodegraph.config
+
 [importlinter:resolution-no-business-imports]
 name = resolution/C1: resolution must not import business modules
 type = forbidden
