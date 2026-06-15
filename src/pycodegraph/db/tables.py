@@ -89,6 +89,20 @@ unresolved_refs = Table(
     Column("language", Text, nullable=False, server_default="unknown"),
 )
 
+dataflow_edges = Table(
+    "dataflow_edges",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("file_path", Text, nullable=False),
+    Column("source_start_line", Integer, nullable=False),
+    Column("source_end_line", Integer, nullable=False),
+    Column("target_start_line", Integer, nullable=False),
+    Column("target_end_line", Integer, nullable=False),
+    Column("variable", Text, nullable=False),
+    Column("function_id", Text, nullable=False),
+    Column("provenance", Text),
+)
+
 project_metadata = Table(
     "project_metadata",
     metadata,

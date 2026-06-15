@@ -278,6 +278,26 @@ class TestInferDBSchema:
         )
         assert "reference_name TEXT NOT NULL" in unresolved_sql
 
+    def test_creates_dataflow_edges_table(self):
+        """InferDB uses manual DDL (not metadata.create_all), so the
+        dataflow_edges table must be created explicitly here — otherwise the
+        dataflow QueryBuilder methods raise at runtime on this backend.
+        """
+        engine = _FakeEngine()
+        InferDBBackend.initialize_schema(engine)
+        dataflow_sql = next(
+            stmt
+            for stmt in engine.conn.sql
+            if "CREATE TABLE IF NOT EXISTS dataflow_edges" in stmt
+        )
+        # Endpoints are line ranges + variable + function_id, not Node IDs.
+        assert "source_start_line INT NOT NULL" in dataflow_sql
+        assert "source_end_line INT NOT NULL" in dataflow_sql
+        assert "target_start_line INT NOT NULL" in dataflow_sql
+        assert "target_end_line INT NOT NULL" in dataflow_sql
+        assert "variable VARCHAR(512) NOT NULL" in dataflow_sql
+        assert "function_id VARCHAR(512) NOT NULL" in dataflow_sql
+
 
 class TestInferDBBackend:
     def test_resolves_to_inferdb(self):

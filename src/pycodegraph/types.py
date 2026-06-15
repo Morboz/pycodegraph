@@ -65,6 +65,9 @@ class EdgeKind(StrEnum):
     OVERRIDES = "overrides"
     DECORATES = "decorates"
     TESTS = "tests"
+    # Semantic marker only — dataflow edges are NOT stored in the ``edges``
+    # table; they live in ``dataflow_edges`` keyed by line ranges, not Node IDs.
+    DATAFLOW = "dataflow"
 
 
 class Language(StrEnum):
@@ -124,6 +127,26 @@ class Edge:
     metadata: str | None = None  # JSON
     line: int | None = None
     col: int | None = None
+    provenance: str | None = None
+
+
+@dataclass
+class DataflowEdge:
+    """A data-flow fact: a *variable* flows from a source statement to a target
+    statement, both line ranges within a single *function_id*.
+
+    Unlike :class:`Edge`, endpoints are ``(file_path, start_line, end_line)``
+    triples, not Node IDs — Statements are not Symbols and are not stored in the
+    ``nodes`` table. Dataflow edges live in their own ``dataflow_edges`` table.
+    """
+
+    file_path: str
+    source_start_line: int
+    source_end_line: int
+    target_start_line: int
+    target_end_line: int
+    variable: str
+    function_id: str
     provenance: str | None = None
 
 
