@@ -87,11 +87,7 @@ class SQLiteBackend(Backend):
         limit: int,
         offset: int,
     ) -> list[Any]:
-        fts_terms = " OR ".join(
-            f'"{term}"*'
-            for term in query_text.split()
-            if term and term.upper() not in ("AND", "OR", "NOT", "NEAR")
-        )
+        fts_terms = _build_fts_match(query_text)
         if not fts_terms:
             return []
 
@@ -111,6 +107,31 @@ class SQLiteBackend(Backend):
         params["lim"] = fts_limit
         params["off"] = offset
 
+        return list(conn.execute(text(sql), params).fetchall())
+
+    def search_claims_fts(
+        self,
+        conn: Connection,
+        query_text: str,
+        claim_type: str | None,
+        limit: int,
+    ) -> list[Any]:
+        fts_terms = _build_fts_match(query_text)
+        if not fts_terms:
+            return []
+
+        sql = (
+            "SELECT sc.id, sc.claim_type, sc.claim_text, "
+            "bm25(claims_fts) as score "
+            "FROM claims_fts fts JOIN summary_claims sc ON sc.rowid = fts.rowid "
+            "WHERE claims_fts MATCH :match"
+        )
+        params: dict[str, Any] = {"match": fts_terms}
+        if claim_type:
+            sql += " AND sc.claim_type = :ct"
+            params["ct"] = claim_type
+        sql += " ORDER BY score LIMIT :lim"
+        params["lim"] = limit
         return list(conn.execute(text(sql), params).fetchall())
 
     def after_nodes_changed(self, conn: Connection) -> None:
@@ -183,6 +204,66 @@ def _init_sqlite_fts(engine: Engine) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_nodes_lower_name ON nodes(lower(name))"
             )
         )
+        _init_claims_fts(conn)
+
+
+def _init_claims_fts(conn: Connection) -> None:
+    """Create the Summary Claims FTS5 index (porter stemming) and sync triggers.
+
+    Mirrors :func:`_init_sqlite_fts`'s nodes_fts pattern: an external-content
+    FTS5 table over ``summary_claims`` kept in sync by AFTER INSERT/DELETE/
+    UPDATE triggers. Only ``claim_text`` is indexed — the claim ``id`` is a
+    UUID hex string that can otherwise prefix-match natural-language query
+    terms (e.g. ``face``, ``dead``). The ``porter`` tokenizer stems claim text
+    so paraphrased natural-language queries match (e.g. "decompression" vs
+    "decompress").
+    """
+    conn.execute(
+        text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS claims_fts USING fts5("
+            "claim_text,"
+            "content='summary_claims', content_rowid='rowid', tokenize='porter')"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE TRIGGER IF NOT EXISTS claims_ai AFTER INSERT ON summary_claims BEGIN"
+            "  INSERT INTO claims_fts(rowid, claim_text)"
+            "  VALUES (NEW.rowid, NEW.claim_text);"
+            "END"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE TRIGGER IF NOT EXISTS claims_ad AFTER DELETE ON summary_claims BEGIN"
+            "  INSERT INTO claims_fts(claims_fts, rowid, claim_text)"
+            "  VALUES ('delete', OLD.rowid, OLD.claim_text);"
+            "END"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE TRIGGER IF NOT EXISTS claims_au AFTER UPDATE ON summary_claims BEGIN"
+            "  INSERT INTO claims_fts(claims_fts, rowid, claim_text)"
+            "  VALUES ('delete', OLD.rowid, OLD.claim_text);"
+            "  INSERT INTO claims_fts(rowid, claim_text)"
+            "  VALUES (NEW.rowid, NEW.claim_text);"
+            "END"
+        )
+    )
+
+
+def _build_fts_match(query_text: str) -> str:
+    """Build an FTS5 MATCH expression: each non-keyword term as a prefix term.
+
+    Returns an empty string when *query_text* has no usable terms, signalling
+    the caller to short-circuit with no results.
+    """
+    return " OR ".join(
+        f'"{term}"*'
+        for term in query_text.split()
+        if term and term.upper() not in ("AND", "OR", "NOT", "NEAR")
+    )
 
 
 def _append_filters(

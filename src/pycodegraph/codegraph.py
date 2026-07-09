@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from .claims import ClaimOverlay
 from .config import (
     CODEGRAPH_DIR,
     CodeGraphConfig,
@@ -25,12 +26,14 @@ from .search.query_utils import derive_project_name_tokens
 from .search.searcher import NodeSearcher
 from .test_analysis import TestAnalyzer
 from .types import (
+    ClaimHit,
     Context,
     Edge,
     ExploreOptions,
     IndexResult,
     Node,
     Subgraph,
+    SummaryClaim,
 )
 
 
@@ -105,6 +108,7 @@ class CodeGraph:
         self._explore_engine = explore_engine
         self._resolver = resolver
         self._test_analyzer = test_analyzer
+        self._claim_overlay = ClaimOverlay(queries)
 
     # =========================================================================
     # Lifecycle
@@ -392,6 +396,29 @@ class CodeGraph:
             r.node
             for r in self._searcher.search_nodes(query, SearchOptions(limit=limit))
         ]
+
+    # --- Summary Claims (ADR-0004 semantic overlay) ---
+
+    def load_claims(self, claims: list[SummaryClaim]) -> None:
+        """Bulk-load hand-authored Summary Claims with their grounding spans."""
+        self._claim_overlay.load_claims(claims)
+
+    def clear_claims(self) -> None:
+        """Remove all Summary Claims and their grounding spans."""
+        self._claim_overlay.clear_claims()
+
+    def search_claims_fts(
+        self,
+        query: str,
+        claim_type: str | None = None,
+        limit: int = 20,
+    ) -> list[ClaimHit]:
+        """Retrieve Summary Claims by natural-language full-text search.
+
+        Each result bundles the claim's grounding spans as line ranges; no Node
+        objects are returned. Results are ranked by FTS score.
+        """
+        return self._claim_overlay.search_claims_fts(query, claim_type, limit)
 
     def get_callers(self, node_id: str) -> list[Edge]:
         return self._queries.get_callers(node_id)

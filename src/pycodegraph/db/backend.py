@@ -159,6 +159,23 @@ class Backend(ABC):
     ) -> list[Any]:
         """Execute a full-text search and return node rows with an FTS score."""
 
+    def search_claims_fts(
+        self,
+        conn: Connection,
+        query_text: str,
+        claim_type: str | None,
+        limit: int,
+    ) -> list[Any]:
+        """Execute a full-text search over Summary Claims.
+
+        Returns rows (id, claim_type, claim_text, score). Backends without a
+        claim FTS index raise :class:`NotImplementedError`; the caller treats
+        any failure as "no results".
+        """
+        raise NotImplementedError(
+            f"{self.name} backend does not implement claim full-text search"
+        )
+
     @abstractmethod
     def after_nodes_changed(self, conn: Connection) -> None:
         """Hook for backends that maintain external node search indexes."""
