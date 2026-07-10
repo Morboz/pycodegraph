@@ -102,6 +102,28 @@ class PostgreSQLBackend(Backend):
 
         return list(conn.execute(text(sql), params).fetchall())
 
+    def search_claims_fts(
+        self,
+        conn: Connection,
+        query_text: str,
+        claim_type: str | None,
+        limit: int,
+    ) -> list[Any]:
+        sql = (
+            "SELECT sc.id, sc.claim_type, sc.claim_text, "
+            "ts_rank(sc.fts, sub.ts_q) as score "
+            "FROM summary_claims sc, "
+            "(SELECT replace(plainto_tsquery('english', :query)::text, '&', '|')::tsquery AS ts_q) sub "
+            "WHERE sc.fts @@ sub.ts_q"
+        )
+        params: dict[str, Any] = {"query": query_text}
+        if claim_type:
+            sql += " AND sc.claim_type = :ct"
+            params["ct"] = claim_type
+        sql += " ORDER BY score DESC LIMIT :lim"
+        params["lim"] = limit
+        return list(conn.execute(text(sql), params).fetchall())
+
     def after_nodes_changed(self, conn: Connection) -> None:
         """PostgreSQL tsvector auto-updates via GENERATED column — no-op."""
 
@@ -119,7 +141,7 @@ class PostgreSQLBackend(Backend):
 
 
 def _init_postgresql_fts(engine: Engine) -> None:
-    """Create tsvector column, GIN index, and auto-update trigger for PostgreSQL."""
+    """Create tsvector columns, GIN indexes, and auto-update trigger for PostgreSQL."""
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         conn.execute(
@@ -146,6 +168,32 @@ def _init_postgresql_fts(engine: Engine) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_nodes_name_trgm ON nodes USING GIN (name gin_trgm_ops)"
             )
         )
+        _init_postgresql_claims_fts(conn)
+
+
+def _init_postgresql_claims_fts(conn: Connection) -> None:
+    """Create the Summary Claims tsvector (english stemming) + GIN index.
+
+    Mirrors :func:`_init_postgresql_fts`'s nodes pattern: a GENERATED tsvector
+    column over ``summary_claims.claim_text`` kept fresh automatically by PG
+    (no triggers needed). The ``'english'`` configuration stems claim text so
+    paraphrased natural-language queries match (e.g. ``\"decompression\"`` vs
+    ``\"decompress\"``), equivalent to SQLite's ``porter`` tokenizer.
+    """
+    conn.execute(
+        text(
+            "ALTER TABLE summary_claims ADD COLUMN IF NOT EXISTS fts tsvector"
+            " GENERATED ALWAYS AS ("
+            "  to_tsvector('english', coalesce(claim_text, ''))"
+            " ) STORED"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_summary_claims_fts"
+            " ON summary_claims USING GIN (fts)"
+        )
+    )
 
 
 def _append_filters(
