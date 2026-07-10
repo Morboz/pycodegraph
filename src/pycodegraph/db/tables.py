@@ -103,6 +103,35 @@ dataflow_edges = Table(
     Column("provenance", Text),
 )
 
+# --- Summary Claims semantic overlay (ADR-0004) ---------------------------
+# Independent storage, separate from nodes/edges: a Summary Claim is not a
+# Symbol (no qualified_name/source position) and is grounded through line-range
+# spans in claim_grounding, not through Node references.
+
+summary_claims = Table(
+    "summary_claims",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("claim_type", Text, nullable=False),
+    Column("claim_text", Text, nullable=False),
+)
+
+claim_grounding = Table(
+    "claim_grounding",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "claim_id",
+        Text,
+        ForeignKey("summary_claims.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("file_path", Text, nullable=False),
+    Column("start_line", Integer, nullable=False),
+    Column("end_line", Integer, nullable=False),
+    Column("relation", Text, nullable=False),
+)
+
 project_metadata = Table(
     "project_metadata",
     metadata,

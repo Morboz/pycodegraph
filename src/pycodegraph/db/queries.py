@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import Connection, case, delete, func, insert, or_, select, tuple_
 
 from ..types import (
+    ClaimGrounding,
     DataflowEdge,
     Edge,
     EdgeKind,
@@ -20,7 +21,15 @@ from ..types import (
 )
 from ..utils.cache import LRUCache
 from .backend import get_backend
-from .tables import dataflow_edges, edges, files, nodes, unresolved_refs
+from .tables import (
+    claim_grounding,
+    dataflow_edges,
+    edges,
+    files,
+    nodes,
+    summary_claims,
+    unresolved_refs,
+)
 
 _NODE_COLUMNS = (
     nodes.c.id,
@@ -288,6 +297,86 @@ class QueryBuilder:
             ),
         )
         return [self._row_to_dataflow(r) for r in self._conn.execute(stmt).fetchall()]
+
+    # =========================================================================
+    # Summary Claims operations (ADR-0004)
+    # =========================================================================
+
+    def insert_claims(
+        self,
+        claim_rows: list[dict],
+        grounding_rows: list[dict],
+    ) -> None:
+        """Bulk-insert Summary Claims and their grounding spans.
+
+        Claims are inserted before their groundings so the ``claim_grounding``
+        foreign key is satisfied; the claims_fts index auto-syncs via triggers.
+        """
+        if claim_rows:
+            self._conn.execute(insert(summary_claims), claim_rows)
+        if grounding_rows:
+            self._conn.execute(insert(claim_grounding), grounding_rows)
+        self._conn.commit()
+
+    def delete_all_claims(self) -> None:
+        """Remove every claim and its grounding spans (no orphan rows)."""
+        self._conn.execute(delete(claim_grounding))
+        self._conn.execute(delete(summary_claims))
+        self._conn.commit()
+
+    def search_claims_fts(
+        self,
+        query: str,
+        claim_type: str | None,
+        limit: int,
+    ) -> list[dict]:
+        """FTS search over claims, returning ``{id, claim_type, claim_text, score}``.
+
+        A backend without a claim FTS index degrades to no results; genuine
+        errors propagate.
+        """
+        try:
+            rows = self._backend.search_claims_fts(self._conn, query, claim_type, limit)
+        except NotImplementedError:
+            return []
+        return [
+            {
+                "id": r[0],
+                "claim_type": r[1],
+                "claim_text": r[2],
+                "score": abs(r[3]),
+            }
+            for r in rows
+        ]
+
+    def get_groundings_for_claims(
+        self, claim_ids: list[str]
+    ) -> dict[str, list[ClaimGrounding]]:
+        """Return grounding spans grouped by claim id (absent id -> no entry)."""
+        if not claim_ids:
+            return {}
+        stmt = (
+            select(
+                claim_grounding.c.claim_id,
+                claim_grounding.c.file_path,
+                claim_grounding.c.start_line,
+                claim_grounding.c.end_line,
+                claim_grounding.c.relation,
+            )
+            .where(claim_grounding.c.claim_id.in_(claim_ids))
+            .order_by(claim_grounding.c.id)
+        )
+        result: dict[str, list[ClaimGrounding]] = {}
+        for row in self._conn.execute(stmt).fetchall():
+            result.setdefault(row[0], []).append(
+                ClaimGrounding(
+                    file_path=row[1],
+                    start_line=row[2],
+                    end_line=row[3],
+                    relation=row[4],
+                )
+            )
+        return result
 
     # =========================================================================
     # File operations

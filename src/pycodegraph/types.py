@@ -339,3 +339,54 @@ class ExploreOutputBudget:
             return cls(24_000, 8, 6_500, 12, 10, True)
         else:
             return cls(24_000, 8, 7_000, 15, 15, True)
+
+
+# =============================================================================
+# Summary Claims (semantic overlay — ADR-0004)
+# =============================================================================
+
+
+@dataclass
+class ClaimGrounding:
+    """A code location a Summary Claim is grounded in.
+
+    Grounding spans are line ranges in source text, not Node references: a span
+    persists even when it corresponds to no indexed Node. ``relation`` is the
+    discriminator for how the claim relates to the location (e.g. ``subject``,
+    ``evidence``).
+    """
+
+    file_path: str
+    start_line: int
+    end_line: int
+    relation: str
+
+
+@dataclass
+class SummaryClaim:
+    """An external, LLM-derived proposition about code, stored independently of
+    the deterministic ``nodes``/``edges`` graph (ADR-0004).
+
+    A claim is not a Symbol — it has no ``qualified_name``, ``file_path``, or
+    source position of its own; it is grounded through its :class:`ClaimGrounding`
+    spans. ``claim_type`` is the single discriminator (e.g.
+    ``behavior_contract``) replacing the rejected multi-node-kind design.
+    """
+
+    claim_type: str
+    claim_text: str
+    groundings: list[ClaimGrounding] = field(default_factory=list)
+
+
+@dataclass
+class ClaimHit:
+    """A retrieved Summary Claim bundled with its grounding spans.
+
+    Returned by claim full-text search. No Node objects are attached — callers
+    receive line ranges only. ``score`` is the (positive) FTS relevance score.
+    """
+
+    claim_text: str
+    claim_type: str
+    groundings: list[ClaimGrounding] = field(default_factory=list)
+    score: float = 0.0
