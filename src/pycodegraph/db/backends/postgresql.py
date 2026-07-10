@@ -91,8 +91,8 @@ class PostgreSQLBackend(Backend):
             "n.is_static, n.is_abstract, n.decorators, n.type_parameters, n.updated_at, "
             "ts_rank(n.fts, ts_q) as score "
             "FROM nodes n, "
-            "(SELECT replace(plainto_tsquery('simple', :query)::text, '&', '|')::tsquery AS ts_q) sub "
-            "WHERE n.fts @@ sub.ts_q"
+            + _tsquery_subquery_sql("simple")
+            + "WHERE n.fts @@ sub.ts_q"
         )
         params: dict[str, Any] = {"query": query_text}
         sql, params = _append_filters(sql, params, kinds, languages)
@@ -113,8 +113,8 @@ class PostgreSQLBackend(Backend):
             "SELECT sc.id, sc.claim_type, sc.claim_text, "
             "ts_rank(sc.fts, sub.ts_q) as score "
             "FROM summary_claims sc, "
-            "(SELECT replace(plainto_tsquery('english', :query)::text, '&', '|')::tsquery AS ts_q) sub "
-            "WHERE sc.fts @@ sub.ts_q"
+            + _tsquery_subquery_sql("english")
+            + "WHERE sc.fts @@ sub.ts_q"
         )
         params: dict[str, Any] = {"query": query_text}
         if claim_type:
@@ -169,6 +169,19 @@ def _init_postgresql_fts(engine: Engine) -> None:
             )
         )
         _init_postgresql_claims_fts(conn)
+
+
+def _tsquery_subquery_sql(config: str) -> str:
+    """Derived-table SQL fragment building an OR-joined tsquery from user input.
+
+    ``plainto_tsquery`` ANDs lexemes with ``&``; replacing with ``|`` gives OR
+    semantics so any-term matches rank (mirrors SQLite FTS5's OR-by-default),
+    rather than requiring every query term to appear in the same document.
+    """
+    return (
+        f"(SELECT replace(plainto_tsquery('{config}', :query)::text, '&', '|')::tsquery"
+        " AS ts_q) sub "
+    )
 
 
 def _init_postgresql_claims_fts(conn: Connection) -> None:
