@@ -91,8 +91,8 @@ class PostgreSQLBackend(Backend):
             "n.is_static, n.is_abstract, n.decorators, n.type_parameters, n.updated_at, "
             "ts_rank(n.fts, ts_q) as score "
             "FROM nodes n, "
-            "(SELECT replace(plainto_tsquery('simple', :query)::text, '&', '|')::tsquery AS ts_q) sub "
-            "WHERE n.fts @@ sub.ts_q"
+            + _tsquery_subquery_sql("simple")
+            + "WHERE n.fts @@ sub.ts_q"
         )
         params: dict[str, Any] = {"query": query_text}
         sql, params = _append_filters(sql, params, kinds, languages)
@@ -100,6 +100,28 @@ class PostgreSQLBackend(Backend):
         params["lim"] = fts_limit
         params["off"] = offset
 
+        return list(conn.execute(text(sql), params).fetchall())
+
+    def search_claims_fts(
+        self,
+        conn: Connection,
+        query_text: str,
+        claim_type: str | None,
+        limit: int,
+    ) -> list[Any]:
+        sql = (
+            "SELECT sc.id, sc.claim_type, sc.claim_text, "
+            "ts_rank(sc.fts, sub.ts_q) as score "
+            "FROM summary_claims sc, "
+            + _tsquery_subquery_sql("english")
+            + "WHERE sc.fts @@ sub.ts_q"
+        )
+        params: dict[str, Any] = {"query": query_text}
+        if claim_type:
+            sql += " AND sc.claim_type = :ct"
+            params["ct"] = claim_type
+        sql += " ORDER BY score DESC LIMIT :lim"
+        params["lim"] = limit
         return list(conn.execute(text(sql), params).fetchall())
 
     def after_nodes_changed(self, conn: Connection) -> None:
@@ -119,7 +141,7 @@ class PostgreSQLBackend(Backend):
 
 
 def _init_postgresql_fts(engine: Engine) -> None:
-    """Create tsvector column, GIN index, and auto-update trigger for PostgreSQL."""
+    """Create tsvector columns, GIN indexes, and auto-update trigger for PostgreSQL."""
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         conn.execute(
@@ -146,6 +168,45 @@ def _init_postgresql_fts(engine: Engine) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_nodes_name_trgm ON nodes USING GIN (name gin_trgm_ops)"
             )
         )
+        _init_postgresql_claims_fts(conn)
+
+
+def _tsquery_subquery_sql(config: str) -> str:
+    """Derived-table SQL fragment building an OR-joined tsquery from user input.
+
+    ``plainto_tsquery`` ANDs lexemes with ``&``; replacing with ``|`` gives OR
+    semantics so any-term matches rank (mirrors SQLite FTS5's OR-by-default),
+    rather than requiring every query term to appear in the same document.
+    """
+    return (
+        f"(SELECT replace(plainto_tsquery('{config}', :query)::text, '&', '|')::tsquery"
+        " AS ts_q) sub "
+    )
+
+
+def _init_postgresql_claims_fts(conn: Connection) -> None:
+    """Create the Summary Claims tsvector (english stemming) + GIN index.
+
+    Mirrors :func:`_init_postgresql_fts`'s nodes pattern: a GENERATED tsvector
+    column over ``summary_claims.claim_text`` kept fresh automatically by PG
+    (no triggers needed). The ``'english'`` configuration stems claim text so
+    paraphrased natural-language queries match (e.g. ``\"decompression\"`` vs
+    ``\"decompress\"``), equivalent to SQLite's ``porter`` tokenizer.
+    """
+    conn.execute(
+        text(
+            "ALTER TABLE summary_claims ADD COLUMN IF NOT EXISTS fts tsvector"
+            " GENERATED ALWAYS AS ("
+            "  to_tsvector('english', coalesce(claim_text, ''))"
+            " ) STORED"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_summary_claims_fts"
+            " ON summary_claims USING GIN (fts)"
+        )
+    )
 
 
 def _append_filters(
