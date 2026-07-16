@@ -24,6 +24,7 @@ from .resolution import create_resolver
 from .resolution.resolver import ReferenceResolver
 from .search.query_utils import derive_project_name_tokens
 from .search.searcher import NodeSearcher
+from .semantic import SemanticBuildResult, SemanticLayerBuilder
 from .test_analysis import TestAnalyzer
 from .types import (
     ClaimHit,
@@ -381,6 +382,44 @@ class CodeGraph:
             refs_unresolved=refs_unresolved,
             errors=errors,
         )
+
+    # =========================================================================
+    # Semantic evidence layer (TOCS contract)
+    # =========================================================================
+
+    def build_semantic_layer(
+        self,
+        *,
+        repository_id: str,
+        revision_value: str,
+        built_at: int,
+        instance_id: str = "default",
+    ) -> SemanticBuildResult:
+        """Build the TOCS semantic evidence layer over the indexed graph.
+
+        Runs relation-specific extractors, measures capability support, and
+        publishes the dataset + capability manifests. Opt-in and separate
+        from :meth:`index_all` so existing users are unaffected while the
+        contract layer matures.
+
+        Caller supplies ``built_at`` (epoch seconds) and ``revision_value``
+        (full git commit id when available — COMMON-002) so the build stays
+        deterministic from the caller's perspective; this library does not
+        read the system clock or the git CLI.
+
+        Skeleton state: registered extractors return empty relation lists,
+        so the returned manifests will show every capability as
+        ``unavailable``. The pipeline shape and manifest computation are
+        what's exercised — real extraction logic lands one relation at a
+        time.
+        """
+        builder = SemanticLayerBuilder(
+            self._queries,
+            repository_id=repository_id,
+            revision_value=revision_value,
+            instance_id=instance_id,
+        )
+        return builder.build(built_at=built_at)
 
     # =========================================================================
     # Queries
