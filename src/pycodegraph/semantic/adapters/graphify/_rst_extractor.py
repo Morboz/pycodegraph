@@ -639,6 +639,20 @@ def _content_digest_for_span(rel_path: str, start: int, end: int) -> str:
 # ---------------------------------------------------------------------------
 
 #: Precedence-related path fragments to scan for.
+#:
+#: Ansible-specific (hardcoded for ansible-documentation repo, issue #106):
+#: these are the two known .rst files where precedence rules live —
+#: ``general_precedence.rst`` documents the four precedence categories
+#:   (config / CLI / playbook keywords / variables) and how they override
+#:   each other. Located at ``docs/docsite/rst/reference_appendices/``.
+#: ``playbooks_variables`` (``playbooks_variables.rst``) contains the
+#:   21-step variable precedence list (role defaults → extra vars).
+#:   Located at ``docs/docsite/rst/playbook_guide/``.
+#:
+#: If ansible-documentation adds other precedence .rst files in the future,
+#: they will still be caught by the content-scan fallback below
+#: (:func:`scan_rst_for_precedence`). But to avoid drift if filenames
+#: change, this set should be updated whenever the docs are reorganized.
 _PRECEDENCE_PATH_FRAGMENTS: frozenset[str] = frozenset(
     {
         "general_precedence",
@@ -816,6 +830,20 @@ def scan_rst_for_precedence(rst_root: str) -> list[str]:
 
     方案 A (issue #106): directly traverse the docs directory tree looking
     for files whose path contains precedence-related fragments.
+
+    Two-pass discovery (Ansible-specific, see :data:`_PRECEDENCE_PATH_FRAGMENTS`):
+
+    1. **Path fragment match** — fast, deterministic. Catches the two known
+       precedence .rst files (``general_precedence.rst``,
+       ``playbooks_variables.rst``) by filename.
+    2. **Content scan fallback** — reads the first 50 lines of every other
+       .rst file and checks for the substring "precedence". Catches future
+       / reorganized precedence docs that don't match the path fragments.
+
+    The 50-line limit is intentional: precedence docs always announce
+    themselves in the title or intro paragraph (well within 50 lines), so
+    reading the whole file would be wasted I/O on the long tail of
+    non-precedence .rst files in the docs tree.
     """
     precedence_files: list[str] = []
     docs_dir = os.path.join(rst_root, "docs")
@@ -827,13 +855,13 @@ def scan_rst_for_precedence(rst_root: str) -> list[str]:
             if not fname.endswith(".rst"):
                 continue
             rel_path = os.path.relpath(os.path.join(dirpath, fname), rst_root)
-            # Quick path-based check first.
+            # Pass 1: path-fragment match (Ansible-specific known files).
             for fragment in _PRECEDENCE_PATH_FRAGMENTS:
                 if fragment in fname:
                     precedence_files.append(rel_path)
                     break
             else:
-                # Content-based check: scan first ~50 lines for "precedence".
+                # Pass 2: content-scan fallback for unknown precedence docs.
                 full_path = os.path.join(dirpath, fname)
                 try:
                     with open(full_path) as f:
