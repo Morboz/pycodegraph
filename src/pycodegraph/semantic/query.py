@@ -16,13 +16,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from .store import read_relations
+from .store import read_latest_dataset_manifests, read_relations
 from .types import (
     CapabilityName,
+    CapabilitySupport,
+    GraphDatasetManifest,
+    GraphKind,
     QueryDiagnostics,
     QueryStatus,
     SemanticGraphQuery,
     SemanticGraphQueryResult,
+    SemanticRelation,
 )
 
 if TYPE_CHECKING:
@@ -93,10 +97,20 @@ class SemanticGraphQueryHandler:
         self._capability_map = _build_capability_map()
 
     def query(self, q: SemanticGraphQuery) -> SemanticGraphQueryResult:
-        """Execute one semantic query against the persisted layer."""
+        """Execute one semantic query against the persisted layer.
+
+        Cross-graph composition (XG-001~008, issue #107): fans out across
+        every dataset manifest in the DB. For each dataset whose capability
+        manifest declares the requested relation's capability as
+        ``SUPPORTED`` or ``PARTIAL``, reads matching relations and
+        accumulates observations. Observations from different datasets are
+        NOT deduplicated — overlapping or contradictory evidence stays as
+        separate observations with their own ``dataset_id`` provenance
+        (XG-007, XG-008).
+        """
         conn = self._queries.connection
-        dataset = read_latest_dataset_manifest_safely(conn)
-        if dataset is None:
+        datasets = read_latest_dataset_manifests(conn)
+        if not datasets:
             return self._failure(
                 q, QueryStatus.SOURCE_UNAVAILABLE, "no semantic layer built yet"
             )
@@ -115,44 +129,149 @@ class SemanticGraphQueryHandler:
         candidate_ids = self._resolve_subject(q)
         examined_entities = len(candidate_ids)
 
-        if not candidate_ids:
-            return SemanticGraphQueryResult(
-                status=QueryStatus.NO_MATCHING_EVIDENCE,
-                served_dataset=dataset,
+        # Fan out across every dataset. Check capability support if the
+        # capability manifest is addressable (the manifest's capabilities_ref
+        # may not match the dataset's lookup key in all builds — fall back to
+        # attempting a query regardless when that happens, rather than treating
+        # an addressability issue as "capability unavailable").
+        contributing_datasets: list[GraphDatasetManifest] = []
+        all_observations: list[SemanticRelation] = []
+        any_supported = False
+
+        from .store import read_capability_manifest
+
+        for ds in datasets:
+            cap_manifest = read_capability_manifest(conn, ds.capabilities_ref)
+            if cap_manifest is not None:
+                support = cap_manifest.capabilities.get(capability)
+                if support is not None and support == CapabilitySupport.UNAVAILABLE:
+                    continue
+                any_supported = True
+            else:
+                # Capability manifest not addressable by capabilities_ref —
+                # attempt the query anyway (best-effort).
+                any_supported = True
+
+            # DocGraph dataset: subject_entity_id is the source_file path or
+            # graphify-out node id, not resolvable via the CodeGraph `nodes`
+            # table. Drop the subject filter for DocGraph datasets so the
+            # query returns all matching-kind relations from that dataset;
+            # the caller can filter by excerpt/object_entity_id downstream.
+            # XG-005: a concept and a code symbol remain separate.
+            if ds.graph_kind == GraphKind.DOC_GRAPH:
+                ds_relations = read_relations(
+                    conn,
+                    relation_kind=q.expected_relation,
+                    subject_entity_ids=None,
+                    dataset_ids=[f"ds:{ds.build_id}"],
+                )
+            else:
+                if not candidate_ids:
+                    continue
+                ds_relations = read_relations(
+                    conn,
+                    relation_kind=q.expected_relation,
+                    subject_entity_ids=candidate_ids,
+                    dataset_ids=[f"ds:{ds.build_id}"],
+                )
+
+            if ds_relations:
+                contributing_datasets.append(ds)
+                all_observations.extend(ds_relations)
+
+        if not any_supported:
+            return self._build_result(
+                q,
+                QueryStatus.QUERY_NOT_SUPPORTED,
                 capability=capability,
+                served_datasets=datasets,
                 observations=[],
-                diagnostics=QueryDiagnostics(
-                    examined_entities=0,
-                ),
+                examined_entities=examined_entities,
+                examined_relations=0,
+                limitations=[
+                    f"capability {capability.value} is unavailable in all "
+                    f"{len(datasets)} persisted dataset(s)"
+                ],
             )
 
-        relations = read_relations(
-            conn,
-            relation_kind=q.expected_relation,
-            subject_entity_ids=candidate_ids,
+        if not all_observations:
+            return self._build_result(
+                q,
+                QueryStatus.NO_MATCHING_EVIDENCE,
+                capability=capability,
+                served_datasets=datasets,
+                observations=[],
+                examined_entities=examined_entities,
+                examined_relations=0,
+            )
+
+        return self._build_result(
+            q,
+            QueryStatus.SUCCEEDED,
+            capability=capability,
+            served_datasets=contributing_datasets,
+            observations=all_observations,
+            examined_entities=examined_entities,
+            examined_relations=len(all_observations),
         )
 
-        if not relations:
-            return SemanticGraphQueryResult(
-                status=QueryStatus.NO_MATCHING_EVIDENCE,
-                served_dataset=dataset,
-                capability=capability,
-                observations=[],
-                diagnostics=QueryDiagnostics(
-                    examined_entities=examined_entities,
-                    examined_relations=0,
-                ),
-            )
+    def _build_result(
+        self,
+        q: SemanticGraphQuery,
+        status: QueryStatus,
+        *,
+        capability: CapabilityName,
+        served_datasets: list,
+        observations: list[SemanticRelation],
+        examined_entities: int,
+        examined_relations: int,
+        limitations: list[str] | None = None,
+    ) -> SemanticGraphQueryResult:
+        """Construct a SemanticGraphQueryResult with both served_dataset and
+        served_datasets populated (XG-001~008 backward compat)."""
+        # served_dataset (legacy) = first served_dataset, or a placeholder.
+        if served_datasets:
+            primary = served_datasets[0]
+        else:
+            primary = self._placeholder_dataset(q)
 
         return SemanticGraphQueryResult(
-            status=QueryStatus.SUCCEEDED,
-            served_dataset=dataset,
+            status=status,
+            served_dataset=primary,
             capability=capability,
-            observations=relations,
+            observations=observations,
             diagnostics=QueryDiagnostics(
                 examined_entities=examined_entities,
-                examined_relations=len(relations),
+                examined_relations=examined_relations,
+                limitations=limitations or [],
             ),
+            served_datasets=served_datasets,
+        )
+
+    def _placeholder_dataset(self, q: SemanticGraphQuery):
+        """Fabricate a minimal dataset manifest when no real one is available."""
+        from .types import (
+            DatasetRevision,
+            GraphDatasetManifest,
+            GraphKind,
+            RevisionMappingStatus,
+            RevisionScheme,
+        )
+
+        return GraphDatasetManifest(
+            instance_id="unbuilt",
+            graph_kind=GraphKind.CODE_GRAPH,
+            repository_id=q.repository_id,
+            revision=DatasetRevision(
+                scheme=RevisionScheme.GIT_COMMIT,
+                value=q.requested_revision,
+                mapping_status=RevisionMappingStatus.UNKNOWN,
+            ),
+            build_id="unbuilt",
+            built_at=0,
+            schema_version="0",
+            extractor_versions={},
+            capabilities_ref="unbuilt",
         )
 
     # ------------------------------------------------------------------
@@ -250,6 +369,7 @@ class SemanticGraphQueryHandler:
             capability=capability,
             observations=[],
             diagnostics=QueryDiagnostics(limitations=[reason]),
+            served_datasets=[dataset] if dataset.instance_id != "unbuilt" else [],
         )
 
 

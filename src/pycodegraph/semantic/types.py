@@ -500,6 +500,12 @@ class SemanticGraphQueryResult:
     QUERY-003: providers must not broaden a missing relation into an unrelated
     lexical result and call it success. QUERY-004: result order must be
     deterministic for the same dataset and request.
+
+    Cross-graph composition (XG-001~008, issue #107): ``served_datasets``
+    lists every dataset manifest that contributed observations to this
+    result. The legacy ``served_dataset`` field is preserved for backward
+    compatibility and points at the first entry of ``served_datasets``
+    (or a placeholder when the result has no contributing dataset).
     """
 
     status: QueryStatus
@@ -507,6 +513,7 @@ class SemanticGraphQueryResult:
     capability: CapabilityName
     observations: list[SemanticRelation] = field(default_factory=list)
     diagnostics: QueryDiagnostics = field(default_factory=QueryDiagnostics)
+    served_datasets: list[GraphDatasetManifest] = field(default_factory=list)
 
 
 # =============================================================================

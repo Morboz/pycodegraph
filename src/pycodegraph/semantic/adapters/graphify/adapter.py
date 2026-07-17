@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection as _Connection
 
 from ....db.tables import metadata as db_metadata
 from ...extractor import _SCHEMA_VERSION, SemanticBuildResult, _compute_build_id
@@ -138,7 +138,8 @@ class GraphifyAdapter:
     """
 
     def __init__(
-        self, graph_json_path: str | Path, rst_root: str | None = None
+        self, graph_json_path: str | Path, rst_root: str | None = None,
+        db_conn: _Connection | None = None,
     ) -> None:
         path = Path(graph_json_path)
         if not path.exists():
@@ -164,7 +165,11 @@ class GraphifyAdapter:
         self._entity_map: dict[str, SemanticEntity] = {}
 
         # Lazy-init the DB connection (only when build() is called).
-        self._db_conn: Connection | None = None
+        self._db_conn: _Connection | None = None
+
+        # Optional external DB connection (issue #107, cross-graph composition).
+        # When set, _init_db() uses this instead of creating a new in-memory DB.
+        self._external_db_conn: _Connection | None = db_conn
 
     # ------------------------------------------------------------------
     # Public API
@@ -963,8 +968,17 @@ class GraphifyAdapter:
     # ------------------------------------------------------------------
 
     def _init_db(self) -> None:
-        """Create an in-memory SQLite DB with the semantic_* tables."""
+        """Create an in-memory SQLite DB with the semantic_* tables.
+
+        If ``_external_db_conn`` was provided at construction time (cross-graph
+        composition, issue #107), use that connection instead — the caller is
+        responsible for ensuring its metadata/schema includes the semantic_*
+        tables.
+        """
         if self._db_conn is not None:
+            return
+        if self._external_db_conn is not None:
+            self._db_conn = self._external_db_conn
             return
         engine = create_engine("sqlite:///:memory:", future=True)
         db_metadata.create_all(engine)
