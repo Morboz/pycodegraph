@@ -256,6 +256,124 @@ def extract_behavior_and_safety_relations(
     return behavior_results, safety_results
 
 
+# ---------------------------------------------------------------------------
+# seealso extraction (Phase 3 — issue #102)
+# ---------------------------------------------------------------------------
+
+
+def _extract_seealso_sections(
+    rst_text: str,
+    source_path: str = "",
+) -> list[dict[str, Any]]:
+    """Parse ``.. seealso::`` directives from RST text.
+
+    Returns a list of dicts::
+
+        {
+            "directive_line": int,        # 1-based line of ``.. seealso::``
+            "body_lines": list[str],      # body text lines after the directive
+            "refs": list[str],            # extracted :ref: and link targets
+        }
+    """
+    results: list[dict[str, Any]] = []
+    lines = rst_text.splitlines()
+
+    seealso_re = re.compile(r"^\.\.\s+seealso::\s*(.*)$")
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        m = seealso_re.match(stripped)
+        if not m:
+            continue
+
+        directive_line = i + 1  # 1-based
+
+        # Collect body text (indented lines after the directive).
+        body_lines: list[str] = []
+        refs: list[str] = []
+        ref_re = re.compile(r":ref:`([^`<]+)(?:\s*<([^`]+)>)?`")
+        link_re = re.compile(r"`[^`<]+\s*<([^`]+)>`_")
+
+        for j in range(i + 1, len(lines)):
+            next_line = lines[j]
+            # Body is indented; a non-indented line or a new directive ends it.
+            if (
+                next_line.strip()
+                and not next_line.startswith(" ")
+                and not next_line.startswith("\t")
+            ):
+                break
+            if next_line.startswith(".. ") and "::" in next_line:
+                break
+            body_text = next_line.strip()
+            if body_text:
+                body_lines.append(body_text)
+                # Extract :ref:`...` targets.
+                for ref_m in ref_re.finditer(body_text):
+                    label, target = ref_m.group(1), ref_m.group(2)
+                    refs.append(target if target else label)
+                # Extract hyperlink targets `<URL>`_.
+                for link_m in link_re.finditer(body_text):
+                    refs.append(link_m.group(1))
+
+        results.append(
+            {
+                "directive_line": directive_line,
+                "body_lines": body_lines,
+                "refs": refs,
+            }
+        )
+
+    return results
+
+
+def extract_validation_relations(
+    rst_rel_path: str,
+    rst_root: str,
+) -> list[dict[str, Any]]:
+    """Extract ``documents_validation`` relations from RST ``.. seealso::`` blocks.
+
+    Reads the RST file at ``rst_root / rst_rel_path`` (with the same path
+    normalization as :func:`extract_option_and_default_relations`) and
+    returns a list of result dicts.
+
+    Each result dict has::
+
+        {
+            "source_file": str,
+            "start_line": int,
+            "end_line": int,
+            "description": str,
+            "refs": list[str],        # extracted :ref: and link targets
+            "content_digest": str,
+        }
+    """
+    rst_text, used_path = _read_rst_file(rst_rel_path, rst_root)
+    if rst_text is None:
+        return []
+
+    results: list[dict[str, Any]] = []
+    sections = _extract_seealso_sections(rst_text, used_path)
+    for section in sections:
+        start_line = section["directive_line"]
+        body = " ".join(section["body_lines"])
+        end_line = start_line + max(len(section["body_lines"]), 1) + 1
+        content_digest = _content_digest_for_span(used_path, start_line, end_line)
+
+        results.append(
+            {
+                "source_file": used_path,
+                "start_line": start_line,
+                "end_line": end_line,
+                "description": body,
+                "refs": section["refs"],
+                "content_digest": content_digest,
+            }
+        )
+
+    return results
+
+
 _DOCUMENTATION_BLOCK_RE = re.compile(
     r"DOCUMENTATION\s*=\s*r?['\"]{3}(.*?)['\"]{3}",
     re.DOTALL,

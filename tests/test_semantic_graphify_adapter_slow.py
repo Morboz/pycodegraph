@@ -219,14 +219,15 @@ class TestGraphifyAdapterRSTExtraction:
             CapabilitySupport.SUPPORTED,
             CapabilitySupport.UNAVAILABLE,
         )
-        # Precedence and validation should remain unavailable (Phase 3).
+        # Precedence and validation should remain unavailable (Phase 2 comment).
+        # Now: validation is SUPPORTED (Phase 3); precedence stays unavailable.
         assert (
             cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
             == CapabilitySupport.UNAVAILABLE
         )
-        assert (
-            cap.capabilities[CapabilityName.DOCUMENTED_VALIDATION]
-            == CapabilitySupport.UNAVAILABLE
+        assert cap.capabilities[CapabilityName.DOCUMENTED_VALIDATION] in (
+            CapabilitySupport.SUPPORTED,
+            CapabilitySupport.UNAVAILABLE,
         )
 
     def test_evidence_ref_uses_rst_line_range_digest(self):
@@ -318,14 +319,15 @@ class TestGraphifyAdapterAdmonitionExtraction:
             cap.capabilities[CapabilityName.DOCUMENTED_SAFETY]
             == CapabilitySupport.SUPPORTED
         )
-        # Precedence and validation should remain unavailable (Phase 3).
+        # Precedence and validation should remain unavailable (Phase 2 baseline).
+        # Now: validation is SUPPORTED (Phase 3); precedence stays unavailable.
         assert (
             cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
             == CapabilitySupport.UNAVAILABLE
         )
-        assert (
-            cap.capabilities[CapabilityName.DOCUMENTED_VALIDATION]
-            == CapabilitySupport.UNAVAILABLE
+        assert cap.capabilities[CapabilityName.DOCUMENTED_VALIDATION] in (
+            CapabilitySupport.SUPPORTED,
+            CapabilitySupport.UNAVAILABLE,
         )
 
     def test_admonition_relations_have_rst_digest(self):
@@ -358,3 +360,63 @@ class TestGraphifyAdapterAdmonitionExtraction:
             in (RelationKind.DOCUMENTS_BEHAVIOR, RelationKind.DOCUMENTS_SAFETY)
         ]
         assert len(admonition_rels) == 0
+
+
+@pytest.mark.slow
+class TestGraphifyAdapterSeealsoExtraction:
+    """Phase 3 — validation extraction from RST .. seealso:: blocks."""
+
+    def test_validation_relations_emitted(self):
+        """Adapter with rst_root should emit documents_validation relations."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        assert result.success
+
+        validation_rels = [
+            r
+            for r in result._relations
+            if r.relation_kind == RelationKind.DOCUMENTS_VALIDATION
+        ]
+        assert len(validation_rels) >= 1, (
+            "Expected at least 1 documents_validation relation from .. seealso::"
+        )
+
+    def test_total_relations_increased_by_validation(self):
+        """Phase 3 should produce more relations than Phase 2 baseline."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        # Phase 2 baseline was ~113; Phase 3 adds seealso.
+        assert result.relations_emitted > 113
+
+    def test_capability_manifest_marks_validation_supported(self):
+        """Capability manifest should mark validation as SUPPORTED, precedence unavailable."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        cap = result.capability_manifest
+
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_VALIDATION]
+            == CapabilitySupport.SUPPORTED
+        )
+        # Precedence stays unavailable (separate follow-up ticket).
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
+            == CapabilitySupport.UNAVAILABLE
+        )
+
+    def test_validation_evidence_ref_structure(self, tmp_path, empty_codegraph):
+        """Validation relations should have proper evidence refs."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+
+        validation_rels = [
+            r
+            for r in result._relations
+            if r.relation_kind == RelationKind.DOCUMENTS_VALIDATION
+        ]
+        assert len(validation_rels) >= 1
+        for r in validation_rels:
+            for ev in r.evidence_refs:
+                assert ev.content_digest.startswith("sha256:")
+                assert ev.locator.path_or_document_id
+                assert ev.locator.start_line is not None

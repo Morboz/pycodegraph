@@ -12,10 +12,12 @@ from pycodegraph.semantic.adapters.graphify._rst_extractor import (
     _content_digest_for_span,
     _extract_admonition_sections,
     _extract_option_sections,
+    _extract_seealso_sections,
     _extract_yaml_documentation_block,
     _parse_documentation_yaml,
     extract_behavior_and_safety_relations,
     extract_option_and_default_relations,
+    extract_validation_relations,
 )
 
 # =============================================================================
@@ -577,3 +579,110 @@ Header
         assert len(behavior) == 1
         assert behavior[0]["start_line"] == 3  # 1-based line of `.. note::`
         assert behavior[0]["end_line"] > behavior[0]["start_line"]
+
+
+# =============================================================================
+# seealso extraction (Phase 3 — issue #102)
+# =============================================================================
+
+
+class TestExtractSeealsoSections:
+    def test_seealso_directive_detected(self):
+        rst = """\
+.. seealso::
+
+   :ref:`intro_adhoc`
+       Examples of ad-hoc commands.
+"""
+        results = _extract_seealso_sections(rst, "test.rst")
+        assert len(results) == 1
+        assert results[0]["directive_line"] == 1
+
+    def test_seealso_with_refs(self):
+        rst = """\
+.. seealso::
+
+   :ref:`intro_adhoc`
+       Examples of using modules in /usr/bin/ansible
+   :ref:`working_with_playbooks`
+       Examples of using modules with /usr/bin/ansible-playbook
+"""
+        results = _extract_seealso_sections(rst, "test.rst")
+        assert len(results) == 1
+        assert len(results[0]["refs"]) == 2
+        assert "intro_adhoc" in results[0]["refs"]
+        assert "working_with_playbooks" in results[0]["refs"]
+
+    def test_no_seealso(self):
+        rst = "Just a regular RST file.\n\n.. note:: Something.\n"
+        results = _extract_seealso_sections(rst, "test.rst")
+        assert len(results) == 0
+
+    def test_multiple_seealso_blocks(self):
+        rst = """\
+.. seealso::
+
+   :ref:`first_ref`
+
+Some text.
+
+.. seealso::
+
+   :ref:`second_ref`
+"""
+        results = _extract_seealso_sections(rst, "test.rst")
+        assert len(results) == 2
+
+
+class TestExtractValidationRelations:
+    def test_extract_from_seealso(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "test.rst"
+        rst_file.write_text(
+            """\
+.. seealso::
+
+   :ref:`sanity_test_ref`
+       Some sanity test.
+"""
+        )
+        rel_path = "docs/test.rst"
+        results = extract_validation_relations(str(rel_path), str(tmp_path))
+        assert len(results) == 1
+        assert results[0]["refs"] == ["sanity_test_ref"]
+        assert results[0]["content_digest"].startswith("sha256:")
+        assert results[0]["start_line"] == 1
+        assert results[0]["end_line"] > results[0]["start_line"]
+
+    def test_nonexistent_file_returns_empty(self, tmp_path: Path):
+        results = extract_validation_relations("docs/nonexistent.rst", str(tmp_path))
+        assert len(results) == 0
+
+    def test_file_without_seealso_returns_empty(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "plain.rst"
+        rst_file.write_text("No seealso here.\n")
+        rel_path = "docs/plain.rst"
+        results = extract_validation_relations(str(rel_path), str(tmp_path))
+        assert len(results) == 0
+
+    def test_seealso_with_line_range(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "test.rst"
+        rst_file.write_text(
+            """\
+Header
+
+.. seealso::
+
+   :ref:`some_ref`
+       Description.
+"""
+        )
+        rel_path = "docs/test.rst"
+        results = extract_validation_relations(str(rel_path), str(tmp_path))
+        assert len(results) == 1
+        assert results[0]["start_line"] == 3  # 1-based
