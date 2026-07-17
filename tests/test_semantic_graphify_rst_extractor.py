@@ -10,9 +10,11 @@ from pathlib import Path
 
 from pycodegraph.semantic.adapters.graphify._rst_extractor import (
     _content_digest_for_span,
+    _extract_admonition_sections,
     _extract_option_sections,
     _extract_yaml_documentation_block,
     _parse_documentation_yaml,
+    extract_behavior_and_safety_relations,
     extract_option_and_default_relations,
 )
 
@@ -353,3 +355,225 @@ options:
             assert opt["content_digest"].startswith("sha256:")
         for dft in default_results:
             assert dft["content_digest"].startswith("sha256:")
+
+
+# =============================================================================
+# Admonition extraction (Phase 2 — issue #102)
+# =============================================================================
+
+
+class TestExtractAdmonitionSections:
+    def test_note_directive_is_behavior(self):
+        rst = """\
+.. note::
+
+   This is a note about behavior.
+"""
+        results = _extract_admonition_sections(rst, "test.rst")
+        assert len(results) == 1
+        assert results[0]["admonition_kind"] == "note"
+        assert results[0]["category"] == "behavior"
+        assert results[0]["directive_line"] == 1
+
+    def test_warning_directive_is_safety(self):
+        rst = """\
+.. warning::
+
+   This is a warning about safety.
+"""
+        results = _extract_admonition_sections(rst, "test.rst")
+        assert len(results) == 1
+        assert results[0]["admonition_kind"] == "warning"
+        assert results[0]["category"] == "safety"
+
+    def test_danger_directive_is_safety(self):
+        rst = """\
+.. danger::
+
+   This is dangerous.
+"""
+        results = _extract_admonition_sections(rst, "test.rst")
+        assert len(results) == 1
+        assert results[0]["admonition_kind"] == "danger"
+        assert results[0]["category"] == "safety"
+
+    def test_tip_and_important_are_behavior(self):
+        rst = """\
+.. tip::
+
+   Use this trick.
+
+.. important::
+
+   Don't forget this.
+"""
+        results = _extract_admonition_sections(rst, "test.rst")
+        assert len(results) == 2
+        assert all(r["category"] == "behavior" for r in results)
+        kinds = {r["admonition_kind"] for r in results}
+        assert kinds == {"tip", "important"}
+
+    def test_caution_is_safety(self):
+        rst = """\
+.. caution::
+
+   Be careful.
+"""
+        results = _extract_admonition_sections(rst, "test.rst")
+        assert len(results) == 1
+        assert results[0]["admonition_kind"] == "caution"
+        assert results[0]["category"] == "safety"
+
+    def test_non_admonition_directive_ignored(self):
+        rst = """\
+.. option:: ANSIBLE_FOO
+
+   Some option.
+
+.. code-block:: bash
+
+   echo hello
+"""
+        results = _extract_admonition_sections(rst, "test.rst")
+        assert len(results) == 0
+
+    def test_admonition_body_collected(self):
+        rst = """\
+.. note::
+
+   First line of note.
+
+   Second paragraph of note.
+"""
+        results = _extract_admonition_sections(rst, "test.rst")
+        assert len(results) == 1
+        assert len(results[0]["body_lines"]) >= 1
+        assert "First line of note" in " ".join(results[0]["body_lines"])
+
+    def test_multiple_admonitions(self):
+        rst = """\
+.. note::
+
+   Note one.
+
+.. warning::
+
+   Warning one.
+
+.. note::
+
+   Note two.
+"""
+        results = _extract_admonition_sections(rst, "test.rst")
+        assert len(results) == 3
+        behavior_count = sum(1 for r in results if r["category"] == "behavior")
+        safety_count = sum(1 for r in results if r["category"] == "safety")
+        assert behavior_count == 2
+        assert safety_count == 1
+
+
+class TestExtractBehaviorAndSafetyRelations:
+    def test_extract_from_note(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "test.rst"
+        rst_file.write_text(
+            """\
+.. note::
+
+   Important behavior note.
+"""
+        )
+        rel_path = "docs/test.rst"
+        behavior, safety = extract_behavior_and_safety_relations(
+            str(rel_path), str(tmp_path)
+        )
+        assert len(behavior) == 1
+        assert len(safety) == 0
+        assert behavior[0]["admonition_kind"] == "note"
+        assert behavior[0]["content_digest"].startswith("sha256:")
+
+    def test_extract_from_warning(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "test.rst"
+        rst_file.write_text(
+            """\
+.. warning::
+
+   Safety warning.
+"""
+        )
+        rel_path = "docs/test.rst"
+        behavior, safety = extract_behavior_and_safety_relations(
+            str(rel_path), str(tmp_path)
+        )
+        assert len(behavior) == 0
+        assert len(safety) == 1
+        assert safety[0]["admonition_kind"] == "warning"
+
+    def test_extract_mixed_admonitions(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "test.rst"
+        rst_file.write_text(
+            """\
+.. note::
+
+   A note.
+
+.. warning::
+
+   A warning.
+
+.. danger::
+
+   A danger.
+"""
+        )
+        rel_path = "docs/test.rst"
+        behavior, safety = extract_behavior_and_safety_relations(
+            str(rel_path), str(tmp_path)
+        )
+        assert len(behavior) == 1
+        assert len(safety) == 2
+
+    def test_nonexistent_file_returns_empty(self, tmp_path: Path):
+        behavior, safety = extract_behavior_and_safety_relations(
+            "docs/nonexistent.rst", str(tmp_path)
+        )
+        assert len(behavior) == 0
+        assert len(safety) == 0
+
+    def test_file_with_no_admonitions_returns_empty(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "plain.rst"
+        rst_file.write_text("Just plain text.\n")
+        rel_path = "docs/plain.rst"
+        behavior, safety = extract_behavior_and_safety_relations(
+            str(rel_path), str(tmp_path)
+        )
+        assert len(behavior) == 0
+        assert len(safety) == 0
+
+    def test_results_have_line_spans(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "test.rst"
+        rst_file.write_text(
+            """\
+Header
+
+.. note::
+
+   Body text.
+"""
+        )
+        rel_path = "docs/test.rst"
+        behavior, _safety = extract_behavior_and_safety_relations(
+            str(rel_path), str(tmp_path)
+        )
+        assert len(behavior) == 1
+        assert behavior[0]["start_line"] == 3  # 1-based line of `.. note::`
+        assert behavior[0]["end_line"] > behavior[0]["start_line"]

@@ -209,17 +209,19 @@ class TestGraphifyAdapterRSTExtraction:
             CapabilitySupport.SUPPORTED,
             CapabilitySupport.UNAVAILABLE,
         )
-        # The remaining 4 should still be unavailable.
-        assert (
-            cap.capabilities[CapabilityName.DOCUMENTED_BEHAVIOR]
-            == CapabilitySupport.UNAVAILABLE
+        # documents_behavior/safety may be SUPPORTED (Phase 2) or UNAVAILABLE
+        # depending on whether any .rst file in the data has admonitions.
+        assert cap.capabilities[CapabilityName.DOCUMENTED_BEHAVIOR] in (
+            CapabilitySupport.SUPPORTED,
+            CapabilitySupport.UNAVAILABLE,
         )
+        assert cap.capabilities[CapabilityName.DOCUMENTED_SAFETY] in (
+            CapabilitySupport.SUPPORTED,
+            CapabilitySupport.UNAVAILABLE,
+        )
+        # Precedence and validation should remain unavailable (Phase 3).
         assert (
             cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
-            == CapabilitySupport.UNAVAILABLE
-        )
-        assert (
-            cap.capabilities[CapabilityName.DOCUMENTED_SAFETY]
             == CapabilitySupport.UNAVAILABLE
         )
         assert (
@@ -259,3 +261,100 @@ class TestGraphifyAdapterRSTExtraction:
             in (RelationKind.DOCUMENTS_OPTION, RelationKind.DOCUMENTS_DEFAULT)
         ]
         assert len(option_rels) == 0
+
+
+@pytest.mark.slow
+class TestGraphifyAdapterAdmonitionExtraction:
+    """Phase 2 — behavior + safety extraction from .rst admonitions."""
+
+    def test_behavior_relations_emitted(self):
+        """Adapter with rst_root should emit documents_behavior relations."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        assert result.success
+
+        behavior_rels = [
+            r
+            for r in result._relations
+            if r.relation_kind == RelationKind.DOCUMENTS_BEHAVIOR
+        ]
+        assert len(behavior_rels) >= 1, (
+            "Expected at least 1 documents_behavior relation from RST admonitions"
+        )
+
+    def test_safety_relations_emitted(self):
+        """Adapter with rst_root should emit documents_safety relations."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        assert result.success
+
+        safety_rels = [
+            r
+            for r in result._relations
+            if r.relation_kind == RelationKind.DOCUMENTS_SAFETY
+        ]
+        assert len(safety_rels) >= 1, (
+            "Expected at least 1 documents_safety relation from RST warnings"
+        )
+
+    def test_total_relations_increased_by_admonitions(self):
+        """Phase 2 should produce more relations than Phase 1 baseline."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        # Phase 1 baseline was ~75 relations; Phase 2 adds admonitions.
+        assert result.relations_emitted > 75
+
+    def test_capability_manifest_marks_behavior_safety_supported(self):
+        """Capability manifest should mark behavior + safety as SUPPORTED."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        cap = result.capability_manifest
+
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_BEHAVIOR]
+            == CapabilitySupport.SUPPORTED
+        )
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_SAFETY]
+            == CapabilitySupport.SUPPORTED
+        )
+        # Precedence and validation should remain unavailable (Phase 3).
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
+            == CapabilitySupport.UNAVAILABLE
+        )
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_VALIDATION]
+            == CapabilitySupport.UNAVAILABLE
+        )
+
+    def test_admonition_relations_have_rst_digest(self):
+        """Behavior/safety relations should use sha256:<path>:<line>:<line> digest."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+
+        admonition_rels = [
+            r
+            for r in result._relations
+            if r.relation_kind
+            in (RelationKind.DOCUMENTS_BEHAVIOR, RelationKind.DOCUMENTS_SAFETY)
+        ]
+        assert len(admonition_rels) >= 1
+        for r in admonition_rels:
+            for ev in r.evidence_refs:
+                assert ev.content_digest.startswith("sha256:")
+                assert ev.locator.path_or_document_id
+                assert ev.locator.start_line is not None
+                assert ev.locator.end_line is not None
+
+    def test_no_rst_root_skips_admonition_extraction(self):
+        """When rst_root=None, no behavior/safety relations should be emitted."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT)  # no rst_root
+        result = adapter.build(built_at=1700000000)
+        admonition_rels = [
+            r
+            for r in result._relations
+            if r.relation_kind
+            in (RelationKind.DOCUMENTS_BEHAVIOR, RelationKind.DOCUMENTS_SAFETY)
+        ]
+        assert len(admonition_rels) == 0

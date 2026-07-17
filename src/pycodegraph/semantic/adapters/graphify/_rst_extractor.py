@@ -126,6 +126,136 @@ def _extract_option_sections(
     return results
 
 
+# ---------------------------------------------------------------------------
+# Admonition extraction (Phase 2 — issue #102)
+# ---------------------------------------------------------------------------
+
+#: Admonition directives that map to ``documents_behavior`` (informational).
+_BEHAVIOR_DIRECTIVES: frozenset[str] = frozenset({"note", "tip", "important"})
+
+#: Admonition directives that map to ``documents_safety`` (warnings/dangers).
+_SAFETY_DIRECTIVES: frozenset[str] = frozenset(
+    {"warning", "danger", "caution", "error"}
+)
+
+
+def _extract_admonition_sections(
+    rst_text: str,
+    source_path: str = "",
+) -> list[dict[str, Any]]:
+    """Parse ``.. note::`` / ``.. warning::`` / ``.. danger::`` etc. directives.
+
+    Returns a list of dicts::
+
+        {
+            "directive_line": int,        # 1-based line of the directive
+            "admonition_kind": str,       # "note" | "warning" | "danger" | ...
+            "category": str,              # "behavior" | "safety"
+            "body_lines": list[str],      # body text lines after the directive
+        }
+    """
+    results: list[dict[str, Any]] = []
+    lines = rst_text.splitlines()
+
+    directive_re = re.compile(r"^\.\.\s+([a-zA-Z]+)::\s*(.*)$")
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        m = directive_re.match(stripped)
+        if not m:
+            continue
+
+        admonition_kind = m.group(1).lower()
+        if admonition_kind in _BEHAVIOR_DIRECTIVES:
+            category = "behavior"
+        elif admonition_kind in _SAFETY_DIRECTIVES:
+            category = "safety"
+        else:
+            continue  # not an admonition we care about
+
+        directive_line = i + 1  # 1-based
+
+        # Collect body text (indented lines after the directive).
+        body_lines: list[str] = []
+        for j in range(i + 1, len(lines)):
+            next_line = lines[j]
+            # Body is indented; a non-indented line or a new directive ends it.
+            if (
+                next_line.strip()
+                and not next_line.startswith(" ")
+                and not next_line.startswith("\t")
+            ):
+                break
+            if next_line.startswith(".. ") and "::" in next_line:
+                break
+            body_text = next_line.strip()
+            if body_text:
+                body_lines.append(body_text)
+
+        results.append(
+            {
+                "directive_line": directive_line,
+                "admonition_kind": admonition_kind,
+                "category": category,
+                "body_lines": body_lines,
+            }
+        )
+
+    return results
+
+
+def extract_behavior_and_safety_relations(
+    rst_rel_path: str,
+    rst_root: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Extract ``documents_behavior`` and ``documents_safety`` from an RST file.
+
+    Reads the RST file at ``rst_root / rst_rel_path`` (with the same path
+    normalization as :func:`extract_option_and_default_relations`) and
+    returns ``(behavior_results, safety_results)``.
+
+    Each result dict has::
+
+        {
+            "admonition_kind": str,   # "note" | "warning" | "danger" | ...
+            "source_file": str,
+            "start_line": int,
+            "end_line": int,
+            "description": str,
+            "content_digest": str,
+        }
+    """
+    rst_text, used_path = _read_rst_file(rst_rel_path, rst_root)
+    if rst_text is None:
+        return [], []
+
+    behavior_results: list[dict[str, Any]] = []
+    safety_results: list[dict[str, Any]] = []
+
+    sections = _extract_admonition_sections(rst_text, used_path)
+    for section in sections:
+        start_line = section["directive_line"]
+        body = " ".join(section["body_lines"])
+        end_line = start_line + max(len(section["body_lines"]), 1) + 1
+        content_digest = _content_digest_for_span(used_path, start_line, end_line)
+
+        record = {
+            "admonition_kind": section["admonition_kind"],
+            "source_file": used_path,
+            "start_line": start_line,
+            "end_line": end_line,
+            "description": body,
+            "content_digest": content_digest,
+        }
+
+        if section["category"] == "behavior":
+            behavior_results.append(record)
+        else:
+            safety_results.append(record)
+
+    return behavior_results, safety_results
+
+
 _DOCUMENTATION_BLOCK_RE = re.compile(
     r"DOCUMENTATION\s*=\s*r?['\"]{3}(.*?)['\"]{3}",
     re.DOTALL,
