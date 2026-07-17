@@ -30,6 +30,9 @@ postgres = [
 inferdb = [
     "pymysql>=1.1",
 ]
+docgraph = [
+    "docutils>=0.21",
+]
 
 [tool.ruff]
 target-version = "py311"

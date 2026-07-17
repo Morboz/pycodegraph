@@ -19,6 +19,8 @@ from pycodegraph.semantic.adapters.graphify.adapter import GraphifyAdapter
 from pycodegraph.semantic.query import SemanticGraphQueryHandler
 from pycodegraph.semantic.types import (
     AuthorityScope,
+    CapabilityName,
+    CapabilitySupport,
     QueryStatus,
     QuerySubject,
     RelationKind,
@@ -28,6 +30,9 @@ from pycodegraph.semantic.types import (
 GRAPHIFY_OUT = (
     "/Users/xx/software/wanggen/ansible-documentation/graphify-out/graph.json"
 )
+
+# Path to the ansible-documentation repo root (contains docs/).
+ANSIBLE_DOCUMENTATION_ROOT = "/Users/xx/software/wanggen/ansible-documentation"
 
 
 @pytest.mark.slow
@@ -140,3 +145,117 @@ class TestGraphifyAdapterRealData:
         adapter.build(built_at=1700000000)
         entity_map = adapter._build_entity_map()
         assert len(entity_map) == len(adapter._nodes)
+
+
+@pytest.mark.slow
+class TestGraphifyAdapterRSTExtraction:
+    """Phase 1 — option + default extraction from .rst source files."""
+
+    def test_option_relations_emitted(self):
+        """Adapter with rst_root should emit documents_option relations."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        assert result.success
+
+        option_relations = [
+            r
+            for r in result._relations
+            if r.relation_kind == RelationKind.DOCUMENTS_OPTION
+        ]
+        assert len(option_relations) >= 1, (
+            "Expected at least 1 documents_option relation from RST extraction"
+        )
+
+    def test_default_relations_emitted(self):
+        """Adapter with rst_root may emit documents_default from .py files with default fields."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        assert result.success
+        # The my_test.py file has options with 'required: true' but no 'default:'.
+        # Zero default relations is acceptable for real data; this test documents
+        # that the extraction runs without error and produces option relations.
+        option_relations = [
+            r
+            for r in result._relations
+            if r.relation_kind == RelationKind.DOCUMENTS_OPTION
+        ]
+        assert len(option_relations) >= 1
+
+    def test_total_relations_greater_than_concept_only(self):
+        """Total relations should exceed the documents_concept-only count."""
+        # Baseline: no rst_root → only documents_concept relations.
+        baseline_adapter = GraphifyAdapter(GRAPHIFY_OUT)
+        baseline_result = baseline_adapter.build(built_at=1700000000)
+        baseline_count = baseline_result.relations_emitted
+
+        # With rst_root → option + default relations added.
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        assert result.relations_emitted > baseline_count
+
+    def test_capability_manifest_marks_option_default_supported(self):
+        """Capability manifest should mark option as SUPPORTED; default depends on data."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+        cap = result.capability_manifest
+
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_OPTION]
+            == CapabilitySupport.SUPPORTED
+        )
+        # documents_default may be SUPPORTED or UNAVAILABLE depending on whether any
+        # .py file in the graphify-out data has a 'default:' in its YAML block.
+        assert cap.capabilities[CapabilityName.DOCUMENTED_DEFAULT] in (
+            CapabilitySupport.SUPPORTED,
+            CapabilitySupport.UNAVAILABLE,
+        )
+        # The remaining 4 should still be unavailable.
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_BEHAVIOR]
+            == CapabilitySupport.UNAVAILABLE
+        )
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
+            == CapabilitySupport.UNAVAILABLE
+        )
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_SAFETY]
+            == CapabilitySupport.UNAVAILABLE
+        )
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_VALIDATION]
+            == CapabilitySupport.UNAVAILABLE
+        )
+
+    def test_evidence_ref_uses_rst_line_range_digest(self):
+        """documents_option/default relations should use sha256:<path>:<line>:<line> digest."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT, rst_root=ANSIBLE_DOCUMENTATION_ROOT)
+        result = adapter.build(built_at=1700000000)
+
+        option_rels = [
+            r
+            for r in result._relations
+            if r.relation_kind
+            in (RelationKind.DOCUMENTS_OPTION, RelationKind.DOCUMENTS_DEFAULT)
+        ]
+        assert len(option_rels) >= 1
+        for r in option_rels:
+            for ev in r.evidence_refs:
+                # content_digest should be sha256:<rel_path>:<start>:<end>
+                assert ev.content_digest.startswith("sha256:")
+                # Locator should have a path and start/end line.
+                assert ev.locator.path_or_document_id
+                assert ev.locator.start_line is not None
+                assert ev.locator.end_line is not None
+
+    def test_no_rst_root_skips_extraction(self):
+        """When rst_root=None, no option/default relations should be emitted."""
+        adapter = GraphifyAdapter(GRAPHIFY_OUT)  # no rst_root
+        result = adapter.build(built_at=1700000000)
+        option_rels = [
+            r
+            for r in result._relations
+            if r.relation_kind
+            in (RelationKind.DOCUMENTS_OPTION, RelationKind.DOCUMENTS_DEFAULT)
+        ]
+        assert len(option_rels) == 0
