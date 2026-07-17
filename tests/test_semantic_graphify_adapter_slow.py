@@ -219,11 +219,11 @@ class TestGraphifyAdapterRSTExtraction:
             CapabilitySupport.SUPPORTED,
             CapabilitySupport.UNAVAILABLE,
         )
-        # Precedence and validation should remain unavailable (Phase 2 comment).
-        # Now: validation is SUPPORTED (Phase 3); precedence stays unavailable.
+        # Precedence and validation — both should be SUPPORTED now
+        # (Phase 3 for validation, issue #106 for precedence).
         assert (
             cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
-            == CapabilitySupport.UNAVAILABLE
+            == CapabilitySupport.SUPPORTED
         )
         assert cap.capabilities[CapabilityName.DOCUMENTED_VALIDATION] in (
             CapabilitySupport.SUPPORTED,
@@ -319,11 +319,10 @@ class TestGraphifyAdapterAdmonitionExtraction:
             cap.capabilities[CapabilityName.DOCUMENTED_SAFETY]
             == CapabilitySupport.SUPPORTED
         )
-        # Precedence and validation should remain unavailable (Phase 2 baseline).
-        # Now: validation is SUPPORTED (Phase 3); precedence stays unavailable.
+        # Precedence should now be SUPPORTED (issue #106).
         assert (
             cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
-            == CapabilitySupport.UNAVAILABLE
+            == CapabilitySupport.SUPPORTED
         )
         assert cap.capabilities[CapabilityName.DOCUMENTED_VALIDATION] in (
             CapabilitySupport.SUPPORTED,
@@ -398,10 +397,10 @@ class TestGraphifyAdapterSeealsoExtraction:
             cap.capabilities[CapabilityName.DOCUMENTED_VALIDATION]
             == CapabilitySupport.SUPPORTED
         )
-        # Precedence stays unavailable (separate follow-up ticket).
+        # Precedence should now be SUPPORTED (issue #106).
         assert (
             cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
-            == CapabilitySupport.UNAVAILABLE
+            == CapabilitySupport.SUPPORTED
         )
 
     def test_validation_evidence_ref_structure(self, tmp_path, empty_codegraph):

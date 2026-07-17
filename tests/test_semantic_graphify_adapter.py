@@ -488,3 +488,83 @@ class TestEntityMap:
             entities["topic:developing_modules_general"].entity_kind
             == EntityKind.PROJECT_CONCEPT
         )
+
+
+# =============================================================================
+# Precedence extraction with rst_root (issue #106)
+# =============================================================================
+
+
+class TestPrecedenceExtractionWithRstRoot:
+    """Precedence extraction is scan-based (方案 A, issue #106).
+    When rst_root is provided and a precedence-*.rst exists under docs/,
+    adapter should emit documents_precedence relations.
+    """
+
+    def test_precedence_relations_from_rst(
+        self, fixture_graph_path: str, tmp_path: Path
+    ):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "general_precedence.rst"
+        rst_file.write_text(
+            """\
+Precedence rules
+================
+
+Ansible offers four sources for controlling behavior.
+
+Configuration settings
+----------------------
+
+Config files and environment variables.
+"""
+        )
+
+        adapter = GraphifyAdapter(fixture_graph_path, rst_root=str(tmp_path))
+        result = adapter.build(built_at=1700000000)
+        prec_relations = [
+            r
+            for r in result._relations
+            if r.relation_kind == RelationKind.DOCUMENTS_PRECEDENCE
+        ]
+        assert len(prec_relations) >= 1
+        for rel in prec_relations:
+            assert rel.modality == Modality.DOCUMENTED
+            assert rel.evidence_refs
+            assert rel.evidence_refs[0].content_digest.startswith("sha256:")
+
+    def test_precedence_capability_supported(
+        self, fixture_graph_path: str, tmp_path: Path
+    ):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "general_precedence.rst"
+        rst_file.write_text(
+            """\
+Variable precedence
+===================
+
+Role defaults override inventory.
+"""
+        )
+
+        adapter = GraphifyAdapter(fixture_graph_path, rst_root=str(tmp_path))
+        result = adapter.build(built_at=1700000000)
+        cap = result.capability_manifest
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
+            == CapabilitySupport.SUPPORTED
+        )
+
+    def test_precedence_still_unavailable_without_rst_root(
+        self, fixture_graph_path: str
+    ):
+        """Without rst_root, precedence files can't be scanned."""
+        adapter = GraphifyAdapter(fixture_graph_path)
+        result = adapter.build(built_at=1700000000)
+        cap = result.capability_manifest
+        assert (
+            cap.capabilities[CapabilityName.DOCUMENTED_PRECEDENCE]
+            == CapabilitySupport.UNAVAILABLE
+        )
