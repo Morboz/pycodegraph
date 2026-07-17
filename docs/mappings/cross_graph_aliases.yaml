@@ -1,0 +1,29 @@
+# Cross-graph alias mappings (XG-004, issue #110)
+#
+# Each entry asserts that a DocGraph entity (identified by its graphify-out
+# node id) refers to the same thing as a CodeGraph symbol (identified by
+# its qualified_name). The alias is written as a CROSS_GRAPH_ALIAS relation
+# in semantic_relations, with the evidence block providing the
+# documentation location that justifies the mapping.
+#
+# Evidence is MANDATORY for every entry — an alias without evidence is a
+# string-equality join, which is exactly what XG-004 forbids.
+#
+# Validation is warn-and-skip: entries whose doc_entity_id or
+# code_qualified_name cannot be resolved against semantic_entities at
+# build time are dropped with a warning, not fatal.
+#
+# Direction at write time: DocGraph entity (subject) → CodeGraph entity
+# (object). Expansion at query time is bidirectional (max_hops=1).
+
+aliases:
+  # Example: a sanity-test concept page documents an Ansible module's
+  # public surface. The :ref: cross-link in the .rst is the evidence.
+  - doc_entity_id: "concept:ansible-test-sanity"
+    code_qualified_name: "call_it"
+    evidence:
+      path_or_document_id: "docs/docsite/rst/dev_guide/testing/sanity/index.rst"
+      start_line: 5
+      end_line: 5
+      symbol_or_section: "Sanity Tests Index"
+      excerpt: ":ref:`ansible-test <call_it>`"

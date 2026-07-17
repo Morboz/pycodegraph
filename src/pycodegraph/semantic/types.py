@@ -73,6 +73,7 @@ class RelationKind(StrEnum):
     """
 
     # 6.1 Subject & Interface
+    CROSS_GRAPH_ALIAS = "cross_graph_alias"
     RESOLVES_SYMBOL = "resolves_symbol"
     OWNS_CONTROL = "owns_control"
     STORES_DEFAULT = "stores_default"

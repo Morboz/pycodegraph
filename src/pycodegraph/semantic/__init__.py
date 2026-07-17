@@ -4,6 +4,7 @@ Provider-neutral types for the CodeGraph/DocGraph query interface defined in
 ``TOCS_CodeGraph_DocGraph_Offline_Evidence_Enhancement_Requirements_v0.1.md``.
 """
 
+from .alias import CrossGraphAliasBuilder, read_cross_graph_aliases
 from .extractor import SemanticBuildResult, SemanticLayerBuilder
 from .query import SemanticGraphQueryHandler
 from .types import (
@@ -45,6 +46,7 @@ __all__ = [
     "CapabilityName",
     "CapabilitySupport",
     "CoverageGapReason",
+    "CrossGraphAliasBuilder",
     "DatasetRevision",
     "EntityKind",
     "EvidenceCoverageGap",
@@ -73,4 +75,5 @@ __all__ = [
     "SemanticLayerBuilder",
     "SemanticRelation",
     "SourceLocator",
+    "read_cross_graph_aliases",
 ]

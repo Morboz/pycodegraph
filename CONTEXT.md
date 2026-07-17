@@ -71,3 +71,7 @@ _Avoid_: snippet, surrounding code (too informal)
 **Index** (CodeGraph):
 The runtime handle to a code knowledge graph — the entry point for indexing, querying, and searching. CodeGraph is the implementation; Index is the domain concept.
 _Avoid_: instance, connection, session
+
+**Cross-Graph Alias**:
+An evidence-backed relation that connects a DocGraph entity (e.g. `concept:ansible-test-sanity`) to a CodeGraph symbol (e.g. `call_it`), stored as a `CROSS_GRAPH_ALIAS` row in `semantic_relations`. Subject resolution expands a query's candidates by one alias hop in either direction — a query that names a doc concept also matches its aliased code symbol, and vice versa. Aliases are not transitive (`max_hops=1`). Evidence is mandatory; an alias without an evidence reference is a string-equality join, which is exactly the failure mode XG-004 prohibits.
+_Avoid_: cross-reference (that's a doc-internal concept), mapping link (too vague), alias join (implies string equality)

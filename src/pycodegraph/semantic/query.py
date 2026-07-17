@@ -57,6 +57,7 @@ def _build_capability_map() -> dict:
     from .types import RelationKind
 
     return {
+        RelationKind.CROSS_GRAPH_ALIAS: CapabilityName.SYMBOL_LOOKUP,
         RelationKind.RESOLVES_SYMBOL: CapabilityName.SYMBOL_LOOKUP,
         RelationKind.OWNS_CONTROL: CapabilityName.SIGNATURE_PARAMETER,
         RelationKind.STORES_DEFAULT: CapabilityName.SIGNATURE_PARAMETER,
@@ -275,7 +276,14 @@ class SemanticGraphQueryHandler:
         (and any aliases), so both CodeGraph and DocGraph entities are
         resolvable. kind_hint and scope_hint narrow the candidate set when
         provided.
+
+        XG-004 (issue #110): after the name-match pass, do a one-hop
+        bidirectional expansion via ``CROSS_GRAPH_ALIAS`` relations so a
+        query that names a DocGraph entity also picks up its aliased
+        CodeGraph entity (and vice versa). ``max_hops=1`` — no transitive
+        aliasing.
         """
+        from .alias import read_cross_graph_aliases
         from .store import read_entities_by_name
 
         names = {q.subject.name, *q.subject.aliases}
@@ -285,6 +293,13 @@ class SemanticGraphQueryHandler:
             for entity in read_entities_by_name(conn, name):
                 if self._matches_hints_entity(entity, q):
                     candidate_ids.append(entity.entity_id)
+
+        # XG-004: one-hop bidirectional alias expansion.
+        if candidate_ids:
+            alias_map = read_cross_graph_aliases(conn, candidate_ids)
+            for _src, expanded in alias_map.items():
+                candidate_ids.extend(expanded)
+
         # Dedupe preserving order (deterministic — QUERY-004).
         seen: set[str] = set()
         unique: list[str] = []

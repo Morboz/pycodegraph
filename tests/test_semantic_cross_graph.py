@@ -12,6 +12,7 @@ without the previous DocGraph subject-filter hack.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ import pytest
 from pycodegraph import CodeGraph
 from pycodegraph.semantic import (
     AuthorityScope,
+    CrossGraphAliasBuilder,
     GraphKind,
     QueryStatus,
     QuerySubject,
@@ -26,11 +28,13 @@ from pycodegraph.semantic import (
     SemanticGraphQuery,
 )
 from pycodegraph.semantic.adapters.graphify import GraphifyAdapter
+from pycodegraph.semantic.alias import read_cross_graph_aliases
 from pycodegraph.semantic.query import SemanticGraphQueryHandler
 from pycodegraph.semantic.store import (
     read_entities,
     read_entities_by_name,
     read_latest_dataset_manifests,
+    read_relations,
 )
 from pycodegraph.semantic.types import (
     EntityKind,
@@ -323,3 +327,385 @@ class TestNoFixedWinner:
             o.relation_kind == RelationKind.DOCUMENTS_CONCEPT
             for o in result.observations
         )
+
+
+# =============================================================================
+# Cross-graph aliases (XG-004, issue #110)
+#
+# Evidence-backed explicit relations between DocGraph concepts and CodeGraph
+# symbols. Alias expansion is bidirectional and one-hop (max_hops=1).
+# =============================================================================
+
+
+def _write_alias_config(tmp_path: Path, aliases: list[dict]) -> str:
+    """Write a YAML alias config and return its path."""
+    import yaml as _yaml
+
+    path = tmp_path / "cross_graph_aliases.yaml"
+    with path.open("w") as f:
+        _yaml.safe_dump({"aliases": aliases}, f, sort_keys=False)
+    return str(path)
+
+
+@pytest.fixture()
+def cross_graph_with_aliases(cross_graph_codegraph, tmp_path, request):
+    """A shared CodeGraph+DocGraph DB and a path to an alias config.
+
+    The alias config (parametrized via ``request.param``) is written to a
+    temp file, but :class:`CrossGraphAliasBuilder` is **not** run here —
+    tests run it themselves so they can capture warning logs.
+
+    Returns a tuple ``(codegraph, config_path)``.
+    """
+    aliases = getattr(request, "param", [])
+    config_path = _write_alias_config(tmp_path, aliases)
+    return cross_graph_codegraph, config_path
+
+
+def _run_alias_builder(cg, config_path):
+    """Helper: run CrossGraphAliasBuilder against a shared DB connection."""
+    conn = cg._queries.connection
+    builder = CrossGraphAliasBuilder(
+        conn=conn,
+        config_path=config_path,
+        repository_id="test/repo",
+        revision="abc123",
+    )
+    builder.build()
+
+
+class TestCrossGraphAliasBuild:
+    """Builder behavior: relation writing + validation (warn-and-skip)."""
+
+    @pytest.mark.parametrize(
+        "cross_graph_with_aliases",
+        [
+            [
+                {
+                    "doc_entity_id": "concept:ansible-test-sanity",
+                    "code_qualified_name": "run",
+                    "evidence": {
+                        "path_or_document_id": "docs/docsite/rst/dev_guide/testing/sanity/index.rst",
+                        "start_line": 5,
+                        "end_line": 5,
+                        "excerpt": ":ref:`ansible-test <run>`",
+                    },
+                }
+            ]
+        ],
+        indirect=True,
+    )
+    def test_alias_relation_written_with_evidence(self, cross_graph_with_aliases):
+        """A valid alias entry produces one CROSS_GRAPH_ALIAS relation."""
+        cg, config_path = cross_graph_with_aliases
+        _run_alias_builder(cg, config_path)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.CROSS_GRAPH_ALIAS)
+        assert len(rels) == 1
+        rel = rels[0]
+        assert rel.subject_entity_id == "concept:ansible-test-sanity"
+        assert rel.object_entity_id is not None
+        assert rel.relation_kind == RelationKind.CROSS_GRAPH_ALIAS
+        # Evidence is mandatory (XG-004 core requirement).
+        assert len(rel.evidence_refs) == 1
+        ev = rel.evidence_refs[0]
+        assert ev.locator.path_or_document_id == (
+            "docs/docsite/rst/dev_guide/testing/sanity/index.rst"
+        )
+        assert ev.locator.start_line == 5
+
+    @pytest.mark.parametrize(
+        "cross_graph_with_aliases",
+        [
+            [
+                {
+                    "doc_entity_id": "concept:does-not-exist",
+                    "code_qualified_name": "run",
+                    "evidence": {
+                        "path_or_document_id": "docs/x.rst",
+                    },
+                }
+            ]
+        ],
+        indirect=True,
+    )
+    def test_warns_on_unknown_doc_entity(self, cross_graph_with_aliases, caplog):
+        """Unknown doc_entity_id → warn-and-skip, no relation written."""
+        cg, config_path = cross_graph_with_aliases
+        with caplog.at_level(logging.WARNING, logger="pycodegraph.semantic.alias"):
+            _run_alias_builder(cg, config_path)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.CROSS_GRAPH_ALIAS)
+        assert rels == []
+        assert any(
+            "doc entity" in r.getMessage() and "not found" in r.getMessage()
+            for r in caplog.records
+        )
+
+    @pytest.mark.parametrize(
+        "cross_graph_with_aliases",
+        [
+            [
+                {
+                    "doc_entity_id": "concept:ansible-test-sanity",
+                    "code_qualified_name": "nonexistent_symbol",
+                    "evidence": {
+                        "path_or_document_id": "docs/x.rst",
+                    },
+                }
+            ]
+        ],
+        indirect=True,
+    )
+    def test_warns_on_unknown_code_entity(self, cross_graph_with_aliases, caplog):
+        """Unknown code_qualified_name → warn-and-skip, no relation written."""
+        cg, config_path = cross_graph_with_aliases
+        with caplog.at_level(logging.WARNING, logger="pycodegraph.semantic.alias"):
+            _run_alias_builder(cg, config_path)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.CROSS_GRAPH_ALIAS)
+        assert rels == []
+        assert any(
+            "code entity" in r.getMessage() and "not found" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_missing_config_file_is_noop(self, cross_graph_codegraph, tmp_path):
+        """A non-existent config path is a no-op (zero aliases written)."""
+        conn = cross_graph_codegraph._queries.connection
+        builder = CrossGraphAliasBuilder(
+            conn=conn,
+            config_path=str(tmp_path / "does-not-exist.yaml"),
+            repository_id="test/repo",
+            revision="abc123",
+        )
+        count = builder.build()
+        assert count == 0
+        assert read_relations(conn, relation_kind=RelationKind.CROSS_GRAPH_ALIAS) == []
+
+
+class TestCrossGraphAliasQueryExpansion:
+    """Query-time subject expansion via CROSS_GRAPH_ALIAS."""
+
+    @pytest.mark.parametrize(
+        "cross_graph_with_aliases",
+        [
+            [
+                {
+                    "doc_entity_id": "concept:ansible-test-sanity",
+                    # ``call_it`` is the *subject* of the CALLS relation
+                    # (call_it calls run). Aliasing the doc concept to
+                    # ``call_it`` lets a CALLS query by the doc name find
+                    # that observation via alias expansion.
+                    "code_qualified_name": "call_it",
+                    "evidence": {
+                        "path_or_document_id": "docs/docsite/rst/dev_guide/testing/sanity/index.rst",
+                        "start_line": 5,
+                        "excerpt": ":ref:`ansible-test <call_it>`",
+                    },
+                }
+            ]
+        ],
+        indirect=True,
+    )
+    def test_doc_to_code_expansion(self, cross_graph_with_aliases):
+        """Querying by DocGraph concept name resolves the aliased CodeGraph
+        symbol's CALLS relations.
+
+        Without alias expansion, querying "ansible-test-sanity" for CALLS
+        would return NO_MATCHING_EVIDENCE (the concept is a DocGraph
+        entity with no code calls). With XG-004 expansion, the subject is
+        expanded to include the CodeGraph ``call_it`` entity, so its
+        CALLS relations are returned.
+        """
+        cg, config_path = cross_graph_with_aliases
+        _run_alias_builder(cg, config_path)
+        handler = SemanticGraphQueryHandler(cg)
+        result = handler.query(
+            SemanticGraphQuery(
+                repository_id="test/repo",
+                requested_revision="abc123",
+                subject=QuerySubject(name="ansible-test-sanity"),
+                expected_relation=RelationKind.CALLS,
+                authority_scope=AuthorityScope.IMPLEMENTATION_TOPOLOGY,
+            )
+        )
+        assert result.status == QueryStatus.SUCCEEDED
+        # call_it calls run → at least one CALLS observation.
+        assert len(result.observations) >= 1
+        assert all(o.relation_kind == RelationKind.CALLS for o in result.observations)
+
+    @pytest.mark.parametrize(
+        "cross_graph_with_aliases",
+        [
+            [
+                {
+                    # ``sanity-test:index`` is the *subject* of the
+                    # DOCUMENTS_CONCEPT relation in the fixture (it
+                    # documents concept:ansible-test-sanity). Aliasing
+                    # the CodeGraph ``call_it`` to ``sanity-test:index``
+                    # lets a DOCUMENTS_CONCEPT query by the code name
+                    # find that observation.
+                    "doc_entity_id": "sanity-test:index",
+                    "code_qualified_name": "call_it",
+                    "evidence": {
+                        "path_or_document_id": "docs/docsite/rst/dev_guide/testing/sanity/index.rst",
+                        "start_line": 5,
+                        "excerpt": ":ref:`sanity-index <call_it>`",
+                    },
+                }
+            ]
+        ],
+        indirect=True,
+    )
+    def test_code_to_doc_expansion(self, cross_graph_with_aliases):
+        """Querying by CodeGraph symbol name resolves the aliased DocGraph
+        entity's DOCUMENTS_CONCEPT relations.
+
+        Without alias expansion, querying "call_it" for DOCUMENTS_CONCEPT
+        returns NO_MATCHING_EVIDENCE (the symbol is CodeGraph-only). With
+        XG-004 expansion, the subject is expanded to include the
+        DocGraph ``sanity-test:index`` entity, which is the subject of a
+        DOCUMENTS_CONCEPT relation — so the query succeeds.
+        """
+        cg, config_path = cross_graph_with_aliases
+        _run_alias_builder(cg, config_path)
+        handler = SemanticGraphQueryHandler(cg)
+        result = handler.query(
+            SemanticGraphQuery(
+                repository_id="test/repo",
+                requested_revision="abc123",
+                subject=QuerySubject(name="call_it"),
+                expected_relation=RelationKind.DOCUMENTS_CONCEPT,
+                authority_scope=AuthorityScope.PUBLIC_CONTRACT,
+            )
+        )
+        assert result.status == QueryStatus.SUCCEEDED
+        assert len(result.observations) >= 1
+        assert all(
+            o.relation_kind == RelationKind.DOCUMENTS_CONCEPT
+            for o in result.observations
+        )
+
+    @pytest.mark.parametrize(
+        "cross_graph_with_aliases",
+        [[]],
+        indirect=True,
+    )
+    def test_no_alias_no_false_positive(self, cross_graph_with_aliases):
+        """With no aliases configured, querying a doc concept for CALLS
+        returns NO_MATCHING_EVIDENCE (no spurious cross-graph match)."""
+        cg, config_path = cross_graph_with_aliases
+        _run_alias_builder(cg, config_path)
+        handler = SemanticGraphQueryHandler(cg)
+        result = handler.query(
+            SemanticGraphQuery(
+                repository_id="test/repo",
+                requested_revision="abc123",
+                subject=QuerySubject(name="ansible-test-sanity"),
+                expected_relation=RelationKind.CALLS,
+                authority_scope=AuthorityScope.IMPLEMENTATION_TOPOLOGY,
+            )
+        )
+        assert result.status == QueryStatus.NO_MATCHING_EVIDENCE
+        assert result.observations == []
+
+    @pytest.mark.parametrize(
+        "cross_graph_with_aliases",
+        [
+            [
+                {
+                    "doc_entity_id": "concept:ansible-test-sanity",
+                    "code_qualified_name": "run",
+                    "evidence": {
+                        "path_or_document_id": "docs/a.rst",
+                        "start_line": 1,
+                    },
+                },
+                # A second alias from the same code symbol to a different
+                # doc concept — verifies multi-alias expansion works.
+                {
+                    "doc_entity_id": "concept:module",
+                    "code_qualified_name": "run",
+                    "evidence": {
+                        "path_or_document_id": "docs/b.rst",
+                        "start_line": 1,
+                    },
+                },
+            ]
+        ],
+        indirect=True,
+    )
+    def test_multiple_aliases_expand(self, cross_graph_with_aliases):
+        """A CodeGraph symbol with two doc aliases expands to both."""
+        cg, config_path = cross_graph_with_aliases
+        _run_alias_builder(cg, config_path)
+        conn = cg._queries.connection
+        code_ents = read_entities_by_name(conn, "run")
+        code_ids = [
+            e.entity_id for e in code_ents if e.entity_kind == EntityKind.FUNCTION
+        ]
+        assert code_ids, "fixture should have a 'run' function entity"
+        alias_map = read_cross_graph_aliases(conn, code_ids)
+        expanded: set[str] = set()
+        for ids in alias_map.values():
+            expanded.update(ids)
+        assert "concept:ansible-test-sanity" in expanded
+        assert "concept:module" in expanded
+
+
+class TestCrossGraphAliasMaxHops:
+    """``max_hops=1`` enforcement — no transitive aliasing."""
+
+    @pytest.mark.parametrize(
+        "cross_graph_with_aliases",
+        [
+            [
+                # alias: concept:ansible-test-sanity → run (code)
+                {
+                    "doc_entity_id": "concept:ansible-test-sanity",
+                    "code_qualified_name": "run",
+                    "evidence": {
+                        "path_or_document_id": "docs/a.rst",
+                        "start_line": 1,
+                    },
+                },
+                # alias: call_it (code) → concept:module (doc)
+                {
+                    "doc_entity_id": "concept:module",
+                    "code_qualified_name": "call_it",
+                    "evidence": {
+                        "path_or_document_id": "docs/b.rst",
+                        "start_line": 1,
+                    },
+                },
+            ]
+        ],
+        indirect=True,
+    )
+    def test_no_transitive_expansion(self, cross_graph_with_aliases):
+        """Aliases are NOT transitive — A→B and C→D do not produce A→D.
+
+        Querying ``run`` (which is aliased to concept:ansible-test-sanity)
+        should NOT transitively reach ``call_it`` via concept:module —
+        even though concept:module is aliased to call_it. The alias graph
+        is flat, not navigated.
+        """
+        cg, config_path = cross_graph_with_aliases
+        _run_alias_builder(cg, config_path)
+        conn = cg._queries.connection
+        code_ents = read_entities_by_name(conn, "run")
+        code_ids = [
+            e.entity_id for e in code_ents if e.entity_kind == EntityKind.FUNCTION
+        ]
+        assert code_ids
+        alias_map = read_cross_graph_aliases(conn, code_ids)
+        expanded: set[str] = set()
+        for ids in alias_map.values():
+            expanded.update(ids)
+        # Direct alias: concept:ansible-test-sanity should be in expanded.
+        assert "concept:ansible-test-sanity" in expanded
+        # Transitive reach: concept:module and call_it should NOT be in
+        # expanded — they're only reachable via a second alias hop.
+        assert "concept:module" not in expanded
+        assert "call_it" not in expanded

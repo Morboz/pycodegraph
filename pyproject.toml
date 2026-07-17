@@ -32,6 +32,7 @@ inferdb = [
 ]
 docgraph = [
     "docutils>=0.21",
+    "pyyaml>=6.0",
 ]
 
 [tool.ruff]
