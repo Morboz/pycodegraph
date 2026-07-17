@@ -64,6 +64,9 @@ from ._mapping import (
     DOCUMENTS_CONCEPT_RELATIONS,
     entity_kind_for_node_type,
 )
+from ._rst_extractor import (
+    extract_option_and_default_relations as _extract_rst_relations_fn,
+)
 
 # =============================================================================
 # Adapter constants (decisions 3, 4, 6, 7 — issue #100)
@@ -115,9 +118,16 @@ class GraphifyAdapter:
     The adapter creates its own in-memory SQLite DB for persistence (so it
     doesn't require a CodeGraph instance). Tests can access the connection
     via :attr:`_db_conn` to read back the persisted rows.
+
+    If ``rst_root`` is provided (path to the ansible-documentation repo root),
+    the adapter additionally extracts ``documents_option`` and
+    ``documents_default`` relations from RST source files (decision H,
+    issue #102).
     """
 
-    def __init__(self, graph_json_path: str | Path) -> None:
+    def __init__(
+        self, graph_json_path: str | Path, rst_root: str | None = None
+    ) -> None:
         path = Path(graph_json_path)
         if not path.exists():
             raise FileNotFoundError(f"graph.json not found: {path}")
@@ -127,6 +137,9 @@ class GraphifyAdapter:
         self._nodes: list[dict[str, Any]] = self._raw.get("nodes", [])
         self._links: list[dict[str, Any]] = self._raw.get("links", [])
         self._built_at_commit: str | None = self._raw.get("built_at_commit")
+
+        # RST root (decision H, issue #102)
+        self._rst_root: str | None = rst_root
 
         # Index nodes by id for O(1) link resolution.
         self._nodes_by_id: dict[str, dict[str, Any]] = {
@@ -160,11 +173,16 @@ class GraphifyAdapter:
         errors: list[str] = []
 
         # Compute build_id deterministically (decision 6 — reuse CodeGraph
-        # _compute_build_id). Extractor versions is a single entry for the
-        # graphify adapter.
+        # _compute_build_id).
         extractor_versions: dict[str, str] = {
-            f"{RelationKind.DOCUMENTS_CONCEPT.value}:{_EXTRACTION_METHOD.value}": _EXTRACTOR_VERSION
+            f"{RelationKind.DOCUMENTS_CONCEPT.value}:{_EXTRACTION_METHOD.value}": _EXTRACTOR_VERSION,
         }
+        if self._rst_root:
+            for kind in (RelationKind.DOCUMENTS_OPTION, RelationKind.DOCUMENTS_DEFAULT):
+                extractor_versions[f"{kind.value}:{_EXTRACTION_METHOD.value}"] = (
+                    _EXTRACTOR_VERSION
+                )
+
         build_id = _compute_build_id(
             repository_id=_repository_id_from_commit(self._built_at_commit),
             revision_value=self._built_at_commit or "unknown",
@@ -179,6 +197,11 @@ class GraphifyAdapter:
 
         # Extract DOCUMENTS_CONCEPT relations.
         relations = self._extract_documents_concept_relations()
+
+        # Extract documents_option + documents_default from RST (if rst_root is set).
+        if self._rst_root:
+            rst_relations = self._extract_rst_relations()
+            relations.extend(rst_relations)
 
         # Build manifests.
         dataset_manifest = self._build_dataset_manifest(
@@ -208,13 +231,158 @@ class GraphifyAdapter:
             dataset_manifest=dataset_manifest,
             capability_manifest=capability_manifest,
             relations_emitted=len(relations),
-            extractors_run=1,
+            extractors_run=len(extractor_versions),
             errors=errors,
             duration_ms=duration_ms,
         )
         # Attach relations for test inspection (not part of the dataclass).
         result._relations = relations  # type: ignore[attr-defined]
         return result
+
+    # ------------------------------------------------------------------
+    # RST extraction (issue #102)
+    # ------------------------------------------------------------------
+
+    def _extract_rst_relations(self) -> list[SemanticRelation]:
+        """Extract ``documents_option`` and ``documents_default`` from RST files.
+
+        Iterates over all nodes that have a ``source_file`` pointing to a
+        ``.rst`` file, reads the file, and extracts option/default relations
+        from YAML ``DOCUMENTATION`` blocks and RST ``.. option::`` directives.
+
+        Path handling: graphify-out emits source_file in three formats:
+        absolute path (``/Users/.../foo.rst``), relative-with-docs-prefix
+        (``docs/docsite/rst/.../foo.rst``), or relative-without-docs-prefix
+        (``docsite/rst/.../foo.rst``). We try the path as-is, then with
+        ``docs/`` prepended if missing.
+        """
+        assert self._build_id is not None
+        assert self._dataset_id is not None
+        relations: list[SemanticRelation] = []
+        seen_relation_ids: set[str] = set()
+
+        rst_root = self._rst_root
+        assert rst_root is not None
+
+        # Collect unique RST source files from nodes, with normalized relpaths.
+        rst_files: dict[str, set[str]] = {}
+        for node in self._nodes:
+            source_file = _node_source_file(node)
+            if not source_file.endswith(".rst") and not source_file.endswith(".py"):
+                continue
+            node_id = node.get("id", "")
+            if not node_id:
+                continue
+            # Normalize the path key so the same file isn't processed twice.
+            rel_path = _normalize_rst_path(source_file, rst_root)
+            rst_files.setdefault(rel_path, set()).add(node_id)
+
+        for rst_rel_path, node_ids in rst_files.items():
+            option_results, default_results = _extract_rst_relations_fn(
+                rst_rel_path, rst_root
+            )
+
+            for opt in option_results:
+                opt_name = opt["option_name"]
+                source_file = opt["source_file"]
+                authority_scope = _authority_scope_for_path(source_file)
+
+                relation_id = _relation_id(
+                    dataset_id=self._dataset_id,
+                    relation_kind=RelationKind.DOCUMENTS_OPTION.value,
+                    subject_id=source_file,
+                    object_id=opt_name,
+                )
+                if relation_id in seen_relation_ids:
+                    continue
+                seen_relation_ids.add(relation_id)
+
+                evidence_ref = EvidenceRef(
+                    evidence_ref_id=_evidence_ref_id(
+                        self._dataset_id, source_file, relation_id
+                    ),
+                    evidence_kind=EvidenceKind.DOCUMENTATION,
+                    repository_id=_repository_id_from_commit(self._built_at_commit),
+                    revision=self._built_at_commit or "unknown",
+                    locator=SourceLocator(
+                        path_or_document_id=source_file,
+                        start_line=opt["start_line"],
+                        end_line=opt["end_line"],
+                        symbol_or_section=opt_name,
+                        graph_node_ids=list(node_ids),
+                    ),
+                    content_digest=opt["content_digest"],
+                    dataset_id=self._dataset_id,
+                    excerpt=opt.get("description") or opt_name,
+                )
+
+                relations.append(
+                    SemanticRelation(
+                        relation_id=relation_id,
+                        subject_entity_id=source_file,
+                        relation_kind=RelationKind.DOCUMENTS_OPTION,
+                        authority_scope=authority_scope,
+                        modality=_MODALITY,
+                        extraction_method=_EXTRACTION_METHOD,
+                        extractor_version=_EXTRACTOR_VERSION,
+                        dataset_id=self._dataset_id,
+                        evidence_refs=[evidence_ref],
+                        object_entity_id=opt_name,
+                        literal_object=None,
+                    )
+                )
+
+            for dft in default_results:
+                opt_name = dft["option_name"]
+                source_file = dft["source_file"]
+                authority_scope = _authority_scope_for_path(source_file)
+
+                relation_id = _relation_id(
+                    dataset_id=self._dataset_id,
+                    relation_kind=RelationKind.DOCUMENTS_DEFAULT.value,
+                    subject_id=source_file,
+                    object_id=f"{opt_name}={dft['default_value']}",
+                )
+                if relation_id in seen_relation_ids:
+                    continue
+                seen_relation_ids.add(relation_id)
+
+                evidence_ref = EvidenceRef(
+                    evidence_ref_id=_evidence_ref_id(
+                        self._dataset_id, f"{source_file}:{opt_name}", relation_id
+                    ),
+                    evidence_kind=EvidenceKind.DOCUMENTATION,
+                    repository_id=_repository_id_from_commit(self._built_at_commit),
+                    revision=self._built_at_commit or "unknown",
+                    locator=SourceLocator(
+                        path_or_document_id=source_file,
+                        start_line=dft["start_line"],
+                        end_line=dft["end_line"],
+                        symbol_or_section=f"{opt_name} default={dft['default_value']}",
+                        graph_node_ids=list(node_ids),
+                    ),
+                    content_digest=dft["content_digest"],
+                    dataset_id=self._dataset_id,
+                    excerpt=f"{opt_name}: default is {dft['default_value']}",
+                )
+
+                relations.append(
+                    SemanticRelation(
+                        relation_id=relation_id,
+                        subject_entity_id=source_file,
+                        relation_kind=RelationKind.DOCUMENTS_DEFAULT,
+                        authority_scope=authority_scope,
+                        modality=_MODALITY,
+                        extraction_method=_EXTRACTION_METHOD,
+                        extractor_version=_EXTRACTOR_VERSION,
+                        dataset_id=self._dataset_id,
+                        evidence_refs=[evidence_ref],
+                        object_entity_id=opt_name,
+                        literal_object=dft["default_value"],
+                    )
+                )
+
+        return relations
 
     # ------------------------------------------------------------------
     # Entity construction
@@ -396,23 +564,32 @@ class GraphifyAdapter:
     def _build_capability_manifest(
         self, relations: list[SemanticRelation]
     ) -> GraphCapabilityManifest:
-        """Build the GraphCapabilityManifest (decision 7 — issue #100).
+        """Build the GraphCapabilityManifest (decision 7 — issue #100, updated by #102).
 
         ``term_lookup`` (← ``documents_concept``) is ``supported`` if at
-        least one relation was emitted. All other ``documented_*``
-        capabilities are ``unavailable`` with a limitation explaining the
-        missing granularity.
+        least one relation was emitted. ``documented_option`` and
+        ``documented_default`` are ``supported`` if RST extraction produced
+        relations. The remaining 4 ``documented_*`` capabilities remain
+        ``unavailable``.
         """
         has_documents_concept = any(
             r.relation_kind == RelationKind.DOCUMENTS_CONCEPT
             and r.evidence_refs  # COMMON-013
             for r in relations
         )
+        has_documents_option = any(
+            r.relation_kind == RelationKind.DOCUMENTS_OPTION and r.evidence_refs
+            for r in relations
+        )
+        has_documents_default = any(
+            r.relation_kind == RelationKind.DOCUMENTS_DEFAULT and r.evidence_refs
+            for r in relations
+        )
 
         capabilities: dict[CapabilityName, CapabilitySupport] = {}
         limitations: list[str] = []
 
-        # documents_concept → term_lookup (supported if we have relations)
+        # documents_concept → term_lookup
         if has_documents_concept:
             capabilities[CapabilityName.TERM_LOOKUP] = CapabilitySupport.SUPPORTED
         else:
@@ -422,10 +599,26 @@ class GraphifyAdapter:
                 "(graphify-out produced no documents/describes/defines/explains links)."
             )
 
-        # Other documents_* — always unavailable (decision B, issue #100).
+        # documents_option → documented_option
+        if has_documents_option:
+            capabilities[CapabilityName.DOCUMENTED_OPTION] = CapabilitySupport.SUPPORTED
+        else:
+            capabilities[CapabilityName.DOCUMENTED_OPTION] = (
+                CapabilitySupport.UNAVAILABLE
+            )
+
+        # documents_default → documented_default
+        if has_documents_default:
+            capabilities[CapabilityName.DOCUMENTED_DEFAULT] = (
+                CapabilitySupport.SUPPORTED
+            )
+        else:
+            capabilities[CapabilityName.DOCUMENTED_DEFAULT] = (
+                CapabilitySupport.UNAVAILABLE
+            )
+
+        # Remaining 4 documents_* — still unavailable (Phase 2/3, issue #102).
         unavailable_caps = [
-            CapabilityName.DOCUMENTED_OPTION,
-            CapabilityName.DOCUMENTED_DEFAULT,
             CapabilityName.DOCUMENTED_BEHAVIOR,
             CapabilityName.DOCUMENTED_PRECEDENCE,
             CapabilityName.DOCUMENTED_SAFETY,
@@ -433,12 +626,19 @@ class GraphifyAdapter:
         ]
         for cap in unavailable_caps:
             capabilities[cap] = CapabilitySupport.UNAVAILABLE
-        limitations.append(
-            "documents_* (option/default/behavior/precedence/safety/validation) "
-            "are unavailable: graphify-out only emits coarse documents/describes/"
-            "defines/explains links. Fine-grained extraction from .rst requires "
-            "a follow-up ticket (see issue #100, decision B)."
-        )
+
+        if not has_documents_option and not has_documents_default:
+            limitations.append(
+                "documents_* (option/default/behavior/precedence/safety/validation) "
+                "are unavailable: graphify-out only emits coarse documents/describes/"
+                "defines/explains links. Fine-grained extraction from .rst requires "
+                "a follow-up ticket (see issue #100, decision B)."
+            )
+        else:
+            limitations.append(
+                "documents_behavior/precedence/safety/validation remain unavailable "
+                "(Phase 2/3 of issue #102 — not yet implemented)."
+            )
 
         # CodeGraph-only capabilities — DocGraph doesn't produce them.
         code_only_caps = [
@@ -594,3 +794,32 @@ def _derive_scope(node_id: str) -> str | None:
 
 def _monotonic_ms() -> int:
     return int(time.monotonic() * 1000)
+
+
+def _normalize_rst_path(source_file: str, rst_root: str) -> str:
+    """Normalize a graphify-out source_file to a relpath from rst_root.
+
+    graphify-out emits ``source_file`` in three formats:
+    - Absolute path (``/Users/.../docs/docsite/rst/foo.rst``)
+    - Relative with ``docs/`` prefix (``docs/docsite/.../foo.rst``)
+    - Relative without ``docs/`` prefix (``docsite/.../foo.rst``)
+
+    Returns a normalized path suitable as a dict key and for
+    ``_read_rst_file``.
+    """
+    import os as _os
+
+    # If it's an absolute path, convert to relative.
+    if _os.path.isabs(source_file):
+        try:
+            rel = _os.path.relpath(source_file, rst_root)
+            return rel
+        except ValueError:
+            return source_file
+
+    # If it already starts with docs/, it's fine.
+    if source_file.startswith("docs/"):
+        return source_file
+
+    # Otherwise, prepend docs/.
+    return f"docs/{source_file}"

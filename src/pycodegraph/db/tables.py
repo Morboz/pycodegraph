@@ -139,3 +139,79 @@ project_metadata = Table(
     Column("value", Text, nullable=False),
     Column("updated_at", BigInteger, nullable=False),
 )
+
+# --- Semantic evidence layer (TOCS contract) -------------------------------
+# Typed SemanticRelation + embedded EvidenceRef, stored independently of the
+# raw edges table. The raw graph (nodes/edges/dataflow_edges) is the backend
+# representation; this layer is the provider-neutral contract surface. A
+# SemanticRelation may map 1:1 to a raw edge (e.g. CALLS ← EdgeKind.CALLS) or
+# be derived (e.g. OWNS_CONTROL ← PARAMETER node + CONTAINS edge), but the
+# stored relation carries its own typed identity, provenance, and authority.
+
+semantic_relations = Table(
+    "semantic_relations",
+    metadata,
+    Column("relation_id", Text, primary_key=True),
+    Column("dataset_id", Text, nullable=False),
+    Column("subject_entity_id", Text, nullable=False),
+    Column("relation_kind", Text, nullable=False),
+    Column("object_entity_id", Text),
+    Column("literal_object", Text),  # JSON-encoded; null when object is an entity
+    Column("scenario_id", Text),
+    Column("condition_expression", Text),  # JSON-encoded
+    Column("modality", Text, nullable=False),
+    Column("authority_scope", Text, nullable=False),
+    Column("extraction_method", Text, nullable=False),
+    Column("extractor_version", Text, nullable=False),
+    Column("confidence", Float),
+)
+
+semantic_evidence_refs = Table(
+    "semantic_evidence_refs",
+    metadata,
+    Column("evidence_ref_id", Text, primary_key=True),
+    Column(
+        "relation_id",
+        Text,
+        ForeignKey("semantic_relations.relation_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("evidence_kind", Text, nullable=False),
+    Column("repository_id", Text, nullable=False),
+    Column("revision", Text, nullable=False),
+    Column("path_or_document_id", Text, nullable=False),
+    Column("start_line", Integer),
+    Column("end_line", Integer),
+    Column("symbol_or_section", Text),
+    Column("graph_node_ids", Text),  # JSON-encoded list
+    Column("content_digest", Text, nullable=False),
+    Column("excerpt", Text),
+    Column("dataset_id", Text, nullable=False),
+)
+
+semantic_dataset_manifests = Table(
+    "semantic_dataset_manifests",
+    metadata,
+    Column("build_id", Text, primary_key=True),
+    Column("instance_id", Text, nullable=False),
+    Column("graph_kind", Text, nullable=False),
+    Column("repository_id", Text, nullable=False),
+    Column("revision_scheme", Text, nullable=False),
+    Column("revision_value", Text, nullable=False),
+    Column("source_revision", Text),
+    Column("revision_mapping_status", Text, nullable=False),
+    Column("built_at", BigInteger, nullable=False),
+    Column("schema_version", Text, nullable=False),
+    Column("extractor_versions", Text, nullable=False),  # JSON-encoded
+    Column("capabilities_ref", Text, nullable=False),
+)
+
+semantic_capability_manifests = Table(
+    "semantic_capability_manifests",
+    metadata,
+    Column("capabilities_ref", Text, primary_key=True),
+    Column("instance_id", Text, nullable=False),
+    Column("schema_version", Text, nullable=False),
+    Column("capabilities", Text, nullable=False),  # JSON-encoded dict
+    Column("limitations", Text),  # JSON-encoded list
+)

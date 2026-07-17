@@ -183,6 +183,11 @@ class QueryBuilder:
         )
         self._node_cache = LRUCache[Node]()
 
+    @property
+    def connection(self) -> Connection:
+        """The underlying SQLAlchemy Connection (for cross-cutting writes)."""
+        return self._conn
+
     # =========================================================================
     # Node write operations
     # =========================================================================
