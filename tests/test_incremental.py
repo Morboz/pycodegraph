@@ -159,6 +159,48 @@ class TestApplyDeltaIncremental:
         assert result.refs_resolved > 0
         cg.close()
 
+    def test_node_id_stable_across_line_shift(self, create_python_project):
+        """A symbol's Node.id must not change when an unrelated edit shifts
+        its line number. ID follows (file, kind, qualified_name), not line.
+
+        Regression guard for the line→qualified_name change in
+        ``generate_node_id``: a comment inserted above a function moves
+        every later symbol's start_line, but their IDs must stay stable so
+        cross-build entity identity holds (BUILD-005) and incremental
+        re-indexing doesn't orphan edges to unchanged symbols.
+        """
+        root = create_python_project()
+        cg = CodeGraph.init(root)
+        write_file(
+            root,
+            "models.py",
+            "class User:\n    pass\n\ndef standalone():\n    return 1\n",
+        )
+        cg.index_all()
+
+        before = {n.name: n.id for n in cg._queries.get_nodes_by_file("models.py")}
+        assert "standalone" in before
+
+        # Insert a comment block above the class — shifts every line down.
+        write_file(
+            root,
+            "models.py",
+            "# top-of-file comment\n# another line\n"
+            "class User:\n    pass\n\ndef standalone():\n    return 1\n",
+        )
+        cg.apply_delta(changed_files=["models.py"], removed_files=[])
+
+        after = {n.name: n.id for n in cg._queries.get_nodes_by_file("models.py")}
+
+        # Every symbol that survived the edit must keep its ID.
+        for name, id_before in before.items():
+            assert name in after, f"symbol {name!r} disappeared after edit"
+            assert after[name] == id_before, (
+                f"symbol {name!r} changed ID after an unrelated line shift: "
+                f"{id_before!r} -> {after[name]!r}"
+            )
+        cg.close()
+
 
 class TestIndexFileIncremental:
     """index_file() works incrementally after initial indexing."""

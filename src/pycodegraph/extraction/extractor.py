@@ -335,9 +335,9 @@ class TreeSitterExtractor:
         if not name:
             return None
 
-        node_id = generate_node_id(self.file_path, kind, name, node.start_point[0] + 1)
-
         qname = extra.pop("qualified_name", None) or self._build_qualified_name(name)
+
+        node_id = generate_node_id(self.file_path, kind, qname)
 
         new_node = Node(
             id=node_id,
