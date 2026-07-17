@@ -119,6 +119,7 @@ class SemanticLayerBuilder:
         self._revision_mapping_status = revision_mapping_status
 
         self._registry: list[_RegisteredExtractor] = []
+        self._build_id: str | None = None
         self._register_default_extractors()
 
     # ------------------------------------------------------------------
@@ -152,26 +153,51 @@ class SemanticLayerBuilder:
         )
 
     def _register_default_extractors(self) -> None:
-        """Register the empty stub extractors for every P1 relation.
+        """Register extractors for every P1 relation.
 
-        Each returns ``[]`` — present so the pipeline shape is exercisable
-        end-to-end and so capability measurement reflects "the extractor ran
-        but produced nothing" rather than "no extractor exists". Real
-        extraction logic replaces these one relation at a time.
+        Three relations have real extractors backed by the raw graph:
+        CALLS (← EdgeKind.CALLS), OWNS_CONTROL (← PARAMETER + CONTAINS),
+        EXPOSES_PUBLIC_SURFACE (← public owner + PARAMETER). The rest remain
+        stubs returning ``[]`` — present so capability measurement reflects
+        "the extractor ran but produced nothing" rather than "no extractor
+        exists". Real extraction logic replaces these one relation at a time.
         """
         empty: _ExtractorFn = lambda _self: []  # noqa: E731
-        # P1 relations (section 16 Priority 1)
+        # --- Real extractors (raw-graph-backed) ---
+        from .extractors import (
+            extract_calls,
+            extract_exposes_public_surface,
+            extract_owns_control,
+        )
+
         self.register_extractor(
-            RelationKind.RESOLVES_SYMBOL,
-            CapabilityName.SYMBOL_LOOKUP,
+            RelationKind.CALLS,
+            CapabilityName.CALL_TOPOLOGY,
             AuthorityScope.IMPLEMENTATION_TOPOLOGY,
             ExtractionMethod.STATIC_ANALYSIS,
-            "0.0.1",
-            empty,
+            "0.1.0",
+            extract_calls,
         )
         self.register_extractor(
             RelationKind.OWNS_CONTROL,
             CapabilityName.SIGNATURE_PARAMETER,
+            AuthorityScope.IMPLEMENTATION_TOPOLOGY,
+            ExtractionMethod.STATIC_ANALYSIS,
+            "0.1.0",
+            extract_owns_control,
+        )
+        self.register_extractor(
+            RelationKind.EXPOSES_PUBLIC_SURFACE,
+            CapabilityName.SIGNATURE_PARAMETER,
+            AuthorityScope.PUBLIC_CONTRACT,
+            ExtractionMethod.STATIC_ANALYSIS,
+            "0.1.0",
+            extract_exposes_public_surface,
+        )
+        # --- Stub extractors (P1 relations not yet implemented) ---
+        self.register_extractor(
+            RelationKind.RESOLVES_SYMBOL,
+            CapabilityName.SYMBOL_LOOKUP,
             AuthorityScope.IMPLEMENTATION_TOPOLOGY,
             ExtractionMethod.STATIC_ANALYSIS,
             "0.0.1",
@@ -221,21 +247,42 @@ class SemanticLayerBuilder:
         :class:`GraphDatasetManifest.built_at` stays deterministic from the
         builder's perspective — the caller controls the timestamp source
         (e.g. a build system clock), not this library.
+
+        Persists relations + manifests to the semantic tables via
+        :mod:`pycodegraph.semantic.store` so the query handler can read them
+        back in a later call (or a different process).
         """
+        from .store import (
+            write_capability_manifest,
+            write_dataset_manifest,
+            write_relations,
+        )
+
         start = _monotonic_ms()
         errors: list[str] = []
         all_relations: list[SemanticRelation] = []
         extractors_run = 0
 
-        # Extractor versions accumulate as extractors run — the manifest
-        # reflects exactly what contributed to this build.
-        extractor_versions: dict[str, str] = {}
+        # Extractor versions are known up-front from the registry; build_id
+        # depends on them + repository + revision + timestamp, so we can
+        # compute it before running extractors. That lets extractors reference
+        # the dataset_id (derived from build_id) in their output.
+        extractor_versions: dict[str, str] = {
+            f"{e.relation_kind.value}:{e.extraction_method.value}": e.extractor_version
+            for e in self._registry
+        }
+        build_id = _compute_build_id(
+            repository_id=self._repository_id,
+            revision_value=self._revision_value,
+            extractor_versions=extractor_versions,
+            built_at=built_at,
+        )
+        self._build_id = build_id
 
         for entry in self._registry:
             extractor_key = (
                 f"{entry.relation_kind.value}:{entry.extraction_method.value}"
             )
-            extractor_versions[extractor_key] = entry.extractor_version
             try:
                 relations = entry.fn(self)
             except Exception as exc:
@@ -243,13 +290,6 @@ class SemanticLayerBuilder:
                 continue
             extractors_run += 1
             all_relations.extend(relations)
-
-        build_id = _compute_build_id(
-            repository_id=self._repository_id,
-            revision_value=self._revision_value,
-            extractor_versions=extractor_versions,
-            built_at=built_at,
-        )
 
         dataset_manifest = GraphDatasetManifest(
             instance_id=self._instance_id,
@@ -269,6 +309,13 @@ class SemanticLayerBuilder:
         )
 
         capability_manifest = self._measure_capabilities(all_relations)
+
+        # Persist (decision A: dedicated semantic_* tables).
+        conn = self._queries.connection
+        # Connection is already in autobegin mode — no explicit begin() needed.
+        write_dataset_manifest(conn, dataset_manifest)
+        write_capability_manifest(conn, capability_manifest)
+        write_relations(conn, all_relations)
 
         duration_ms = _monotonic_ms() - start
         return SemanticBuildResult(
@@ -329,6 +376,10 @@ class SemanticLayerBuilder:
     # Helpers exposed to extractor callables
     # ------------------------------------------------------------------
 
+    def queries(self) -> QueryBuilder:
+        """The raw-graph QueryBuilder — extractors read nodes/edges from it."""
+        return self._queries
+
     def iter_nodes(self, limit: int = 50000) -> list[Node]:
         """All indexed nodes — the raw graph the extractors run over."""
         return self._queries.get_all_nodes(limit=limit)
@@ -336,10 +387,18 @@ class SemanticLayerBuilder:
     def repository_id(self) -> str:
         return self._repository_id
 
-    def dataset_id(self, build_id: str) -> str:
-        """Stable dataset_id derived from build_id — used in SemanticRelation
-        and EvidenceRef to tie them to this build."""
-        return f"ds:{build_id}"
+    def revision_value(self) -> str:
+        return self._revision_value
+
+    def dataset_id(self) -> str:
+        """Stable dataset_id for the current build.
+
+        Derived from build_id (set during :meth:`build`), so extractors can
+        stamp it onto every SemanticRelation and EvidenceRef they emit.
+        """
+        if self._build_id is None:
+            raise RuntimeError("dataset_id() called before build()")
+        return f"ds:{self._build_id}"
 
 
 # =============================================================================

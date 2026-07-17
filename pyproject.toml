@@ -57,6 +57,7 @@ quote-style = "double"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+markers = ["slow: integration tests that read real graphify-out data"]
 
 [tool.mypy]
 python_version = "3.11"

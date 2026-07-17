@@ -5,6 +5,7 @@ Provider-neutral types for the CodeGraph/DocGraph query interface defined in
 """
 
 from .extractor import SemanticBuildResult, SemanticLayerBuilder
+from .query import SemanticGraphQueryHandler
 from .types import (
     AliasKind,
     AuthorityScope,
@@ -67,6 +68,7 @@ __all__ = [
     "SemanticEntity",
     "SemanticEntityAlias",
     "SemanticGraphQuery",
+    "SemanticGraphQueryHandler",
     "SemanticGraphQueryResult",
     "SemanticLayerBuilder",
     "SemanticRelation",
