@@ -52,6 +52,10 @@ select = [
 ]
 ignore = ["E501"]  # line length handled by formatter
 
+[tool.ruff.lint.per-file-ignores]
+"examples/*" = ["RUF001", "RUF002", "RUF003"]  # CJK punctuation in demo scripts
+"demo_docgraph.py" = ["RUF001", "RUF002", "RUF003"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["pycodegraph"]
 
