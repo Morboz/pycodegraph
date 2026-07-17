@@ -215,3 +215,18 @@ semantic_capability_manifests = Table(
     Column("capabilities", Text, nullable=False),  # JSON-encoded dict
     Column("limitations", Text),  # JSON-encoded list
 )
+
+semantic_entities = Table(
+    "semantic_entities",
+    metadata,
+    Column("entity_id", Text, primary_key=True),
+    Column("repository_id", Text, nullable=False),
+    Column("entity_kind", Text, nullable=False),
+    Column("canonical_name", Text, nullable=False),
+    Column("dataset_id", Text, nullable=False),
+    Column("qualified_name", Text),
+    Column("language", Text),
+    Column("scope", Text),
+    Column("aliases", Text),  # JSON-encoded list of SemanticEntityAlias
+    Column("source_locator", Text),  # JSON-encoded SourceLocator
+)

@@ -22,10 +22,12 @@ from sqlalchemy import Connection, delete, insert, select
 from ..db.tables import (
     semantic_capability_manifests,
     semantic_dataset_manifests,
+    semantic_entities,
     semantic_evidence_refs,
     semantic_relations,
 )
 from .types import (
+    AliasKind,
     AuthorityScope,
     CapabilityName,
     CapabilitySupport,
@@ -40,6 +42,8 @@ from .types import (
     RelationKind,
     RevisionMappingStatus,
     RevisionScheme,
+    SemanticEntity,
+    SemanticEntityAlias,
     SemanticRelation,
     SourceLocator,
 )
@@ -101,9 +105,7 @@ def write_capability_manifest(
 # =============================================================================
 
 
-def write_relations(
-    conn: Connection, relations: list[SemanticRelation]
-) -> None:
+def write_relations(conn: Connection, relations: list[SemanticRelation]) -> None:
     """Insert relations and their evidence refs.
 
     Idempotent on ``relation_id``: existing rows are deleted first so
@@ -140,9 +142,13 @@ def _relation_row(r: SemanticRelation) -> dict[str, Any]:
         "subject_entity_id": r.subject_entity_id,
         "relation_kind": r.relation_kind.value,
         "object_entity_id": r.object_entity_id,
-        "literal_object": json.dumps(r.literal_object) if r.literal_object is not None else None,
+        "literal_object": json.dumps(r.literal_object)
+        if r.literal_object is not None
+        else None,
         "scenario_id": r.scenario_id,
-        "condition_expression": json.dumps(r.condition_expression) if r.condition_expression else None,
+        "condition_expression": json.dumps(r.condition_expression)
+        if r.condition_expression
+        else None,
         "modality": r.modality.value,
         "authority_scope": r.authority_scope.value,
         "extraction_method": r.extraction_method.value,
@@ -203,9 +209,7 @@ def read_relations(
     if dataset_ids is not None:
         if not dataset_ids:
             return []
-        stmt = stmt.where(
-            semantic_relations.c.dataset_id.in_(dataset_ids)
-        )
+        stmt = stmt.where(semantic_relations.c.dataset_id.in_(dataset_ids))
     rel_rows = list(conn.execute(stmt).fetchall())
     if not rel_rows:
         return []
@@ -220,7 +224,9 @@ def read_relations(
     ev_by_rel: dict[str, list[EvidenceRef]] = {}
     for er in ev_rows:
         ev_by_rel.setdefault(er.relation_id, []).append(_evidence_from_row(er))
-    return [_relation_from_row(row, ev_by_rel.get(row.relation_id, [])) for row in rel_rows]
+    return [
+        _relation_from_row(row, ev_by_rel.get(row.relation_id, [])) for row in rel_rows
+    ]
 
 
 def read_dataset_manifest(
@@ -291,6 +297,106 @@ def read_latest_dataset_manifests(
 
 
 # =============================================================================
+# Entity writes
+# =============================================================================
+
+
+def write_entities(conn: Connection, entities: list[SemanticEntity]) -> None:
+    """Upsert semantic entities.
+
+    Idempotent on ``entity_id``: existing rows are deleted first so
+    re-running a build doesn't duplicate. Call once per build after
+    relations are written.
+    """
+    if not entities:
+        return
+    entity_ids = [e.entity_id for e in entities]
+    conn.execute(
+        delete(semantic_entities).where(semantic_entities.c.entity_id.in_(entity_ids))
+    )
+    rows: list[dict[str, Any]] = [_entity_row(e) for e in entities]
+    conn.execute(insert(semantic_entities), rows)
+
+
+def _entity_row(e: SemanticEntity) -> dict[str, Any]:
+    return {
+        "entity_id": e.entity_id,
+        "repository_id": e.repository_id,
+        "entity_kind": e.entity_kind.value,
+        "canonical_name": e.canonical_name,
+        "dataset_id": e.dataset_id,
+        "qualified_name": e.qualified_name,
+        "language": e.language,
+        "scope": e.scope,
+        "aliases": json.dumps(
+            [
+                {"value": a.value, "alias_kind": a.alias_kind.value, "scope": a.scope}
+                for a in e.aliases
+            ]
+        ),
+        "source_locator": json.dumps(
+            {
+                "path_or_document_id": e.source_locator.path_or_document_id,
+                "start_line": e.source_locator.start_line,
+                "end_line": e.source_locator.end_line,
+                "symbol_or_section": e.source_locator.symbol_or_section,
+                "graph_node_ids": e.source_locator.graph_node_ids,
+            }
+        )
+        if e.source_locator
+        else None,
+    }
+
+
+# =============================================================================
+# Entity reads
+# =============================================================================
+
+
+def read_entity(conn: Connection, entity_id: str) -> SemanticEntity | None:
+    """Read one entity by ID."""
+    row = conn.execute(
+        select(semantic_entities).where(semantic_entities.c.entity_id == entity_id)
+    ).fetchone()
+    if row is None:
+        return None
+    return _entity_from_row(row)
+
+
+def read_entities_by_name(
+    conn: Connection,
+    name: str,
+    dataset_ids: list[str] | None = None,
+) -> list[SemanticEntity]:
+    """Find entities whose canonical_name matches **exactly**.
+
+    When ``dataset_ids`` is provided, only entities whose ``dataset_id`` is
+    in the list are returned. Used by the query handler's subject resolution
+    to find DocGraph entities by name (XG-003).
+    """
+    stmt = select(semantic_entities).where(semantic_entities.c.canonical_name == name)
+    if dataset_ids is not None:
+        if not dataset_ids:
+            return []
+        stmt = stmt.where(semantic_entities.c.dataset_id.in_(dataset_ids))
+    rows = list(conn.execute(stmt).fetchall())
+    return [_entity_from_row(row) for row in rows]
+
+
+def read_entities(
+    conn: Connection, dataset_ids: list[str] | None = None
+) -> list[SemanticEntity]:
+    """All entities, optionally filtered by dataset."""
+    stmt = select(semantic_entities)
+    if dataset_ids is not None:
+        if not dataset_ids:
+            return []
+        stmt = stmt.where(semantic_entities.c.dataset_id.in_(dataset_ids))
+    rows = list(conn.execute(stmt).fetchall())
+    return [_entity_from_row(row) for row in rows]
+
+
+# =============================================================================
 # Row → dataclass rehydration
 # =============================================================================
 
@@ -351,4 +457,36 @@ def _dataset_manifest_from_row(row: Any) -> GraphDatasetManifest:
         schema_version=row.schema_version,
         extractor_versions=json.loads(row.extractor_versions),
         capabilities_ref=row.capabilities_ref,
+    )
+
+
+def _entity_from_row(row: Any) -> SemanticEntity:
+    aliases_raw = json.loads(row.aliases) if row.aliases else []
+    sl_raw = json.loads(row.source_locator) if row.source_locator else None
+    return SemanticEntity(
+        entity_id=row.entity_id,
+        repository_id=row.repository_id,
+        entity_kind=row.entity_kind,  # StrEnum accepts raw string
+        canonical_name=row.canonical_name,
+        dataset_id=row.dataset_id,
+        qualified_name=row.qualified_name,
+        language=row.language,
+        scope=row.scope,
+        aliases=[
+            SemanticEntityAlias(
+                value=a["value"],
+                alias_kind=AliasKind(a["alias_kind"]),
+                scope=a.get("scope"),
+            )
+            for a in aliases_raw
+        ],
+        source_locator=SourceLocator(
+            path_or_document_id=sl_raw["path_or_document_id"],
+            start_line=sl_raw.get("start_line"),
+            end_line=sl_raw.get("end_line"),
+            symbol_or_section=sl_raw.get("symbol_or_section"),
+            graph_node_ids=sl_raw.get("graph_node_ids", []),
+        )
+        if sl_raw
+        else None,
     )

@@ -152,28 +152,19 @@ class SemanticGraphQueryHandler:
                 # attempt the query anyway (best-effort).
                 any_supported = True
 
-            # DocGraph dataset: subject_entity_id is the source_file path or
-            # graphify-out node id, not resolvable via the CodeGraph `nodes`
-            # table. Drop the subject filter for DocGraph datasets so the
-            # query returns all matching-kind relations from that dataset;
-            # the caller can filter by excerpt/object_entity_id downstream.
-            # XG-005: a concept and a code symbol remain separate.
-            if ds.graph_kind == GraphKind.DOC_GRAPH:
-                ds_relations = read_relations(
-                    conn,
-                    relation_kind=q.expected_relation,
-                    subject_entity_ids=None,
-                    dataset_ids=[f"ds:{ds.build_id}"],
-                )
-            else:
-                if not candidate_ids:
-                    continue
-                ds_relations = read_relations(
-                    conn,
-                    relation_kind=q.expected_relation,
-                    subject_entity_ids=candidate_ids,
-                    dataset_ids=[f"ds:{ds.build_id}"],
-                )
+            # XG-003: every dataset (CodeGraph or DocGraph) is treated the
+            # same — its entities live in ``semantic_entities`` and are
+            # resolvable by canonical_name. The previous DocGraph branch
+            # (drop subject filter, return all matching-kind relations) is
+            # gone; subject resolution now spans both graphs.
+            if not candidate_ids:
+                continue
+            ds_relations = read_relations(
+                conn,
+                relation_kind=q.expected_relation,
+                subject_entity_ids=candidate_ids,
+                dataset_ids=[f"ds:{ds.build_id}"],
+            )
 
             if ds_relations:
                 contributing_datasets.append(ds)
@@ -253,7 +244,6 @@ class SemanticGraphQueryHandler:
         from .types import (
             DatasetRevision,
             GraphDatasetManifest,
-            GraphKind,
             RevisionMappingStatus,
             RevisionScheme,
         )
@@ -279,20 +269,22 @@ class SemanticGraphQueryHandler:
     # ------------------------------------------------------------------
 
     def _resolve_subject(self, q: SemanticGraphQuery) -> list[str]:
-        """Resolve subject.name (+ aliases) to entity (node) IDs.
+        """Resolve subject.name (+ aliases) to entity IDs.
 
-        Uses the raw nodes table — the semantic layer's entity_id mirrors
-        node.id (see extractors/_common.entity_for_node). kind_hint and
-        scope_hint narrow the candidate set when provided.
+        XG-003: queries the ``semantic_entities`` table by ``canonical_name``
+        (and any aliases), so both CodeGraph and DocGraph entities are
+        resolvable. kind_hint and scope_hint narrow the candidate set when
+        provided.
         """
-        from ..types import NodeKind
+        from .store import read_entities_by_name
 
         names = {q.subject.name, *q.subject.aliases}
+        conn = self._queries.connection
         candidate_ids: list[str] = []
         for name in names:
-            for node in self._queries.get_nodes_by_name(name):
-                if self._matches_hints(node, q, NodeKind):
-                    candidate_ids.append(node.id)
+            for entity in read_entities_by_name(conn, name):
+                if self._matches_hints_entity(entity, q):
+                    candidate_ids.append(entity.entity_id)
         # Dedupe preserving order (deterministic — QUERY-004).
         seen: set[str] = set()
         unique: list[str] = []
@@ -302,22 +294,22 @@ class SemanticGraphQueryHandler:
                 unique.append(cid)
         return unique
 
-    def _matches_hints(self, node, q: SemanticGraphQuery, NodeKind) -> bool:
-        """Apply kind_hint and scope_hint filters if present."""
+    def _matches_hints_entity(self, entity, q: SemanticGraphQuery) -> bool:
+        """Apply kind_hint and scope_hint filters to a SemanticEntity."""
         if (
             q.subject.kind_hint is not None
-            and node.kind
-            not in _ENTITY_KIND_TO_NODE_KINDS.get(q.subject.kind_hint, set())
+            and entity.entity_kind != q.subject.kind_hint
         ):
-            # Map EntityKind back to the NodeKind values that map to it.
             return False
         if q.subject.scope_hint is not None:
-            # scope_hint matches if the node's qualified_name starts with it
-            # (scope is the parent chain) or equals it.
-            return bool(
-                node.qualified_name == q.subject.scope_hint
-                or node.qualified_name.startswith(q.subject.scope_hint + "::")
-                or _node_scope(node) == q.subject.scope_hint
+            # scope_hint matches the entity's scope directly, or its
+            # qualified_name starts with the scope.
+            return entity.scope == q.subject.scope_hint or (
+                entity.qualified_name is not None
+                and (
+                    entity.qualified_name == q.subject.scope_hint
+                    or entity.qualified_name.startswith(q.subject.scope_hint + "::")
+                )
             )
         return True
 
@@ -373,27 +365,8 @@ class SemanticGraphQueryHandler:
         )
 
 
-def _node_scope(node) -> str | None:
-    if "::" in node.qualified_name:
-        return node.qualified_name.rsplit("::", 1)[0]
-    return None
-
-
 def read_latest_dataset_manifest_safely(conn):
     """Wrapper that imports lazily to avoid a circular import at module load."""
     from .store import read_latest_dataset_manifest
 
     return read_latest_dataset_manifest(conn)
-
-
-# EntityKind → set of NodeKind values that map to it (for subject filtering).
-# Built once at module load from the extractors' canonical mapping.
-from ..types import NodeKind as _NK  # noqa: E402
-from .extractors._common import _NODE_KIND_TO_ENTITY_KIND  # noqa: E402
-from .types import EntityKind as _EntityKind  # noqa: E402
-
-_ENTITY_KIND_TO_NODE_KINDS: dict[_EntityKind, set[_NK]] = {}
-for _nk_str, _ek in _NODE_KIND_TO_ENTITY_KIND.items():
-    _nk_enum = next((nk for nk in _NK if nk.value == _nk_str), None)
-    if _nk_enum is not None:
-        _ENTITY_KIND_TO_NODE_KINDS.setdefault(_ek, set()).add(_nk_enum)

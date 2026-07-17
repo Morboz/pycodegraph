@@ -37,6 +37,7 @@ from ...extractor import _SCHEMA_VERSION, SemanticBuildResult, _compute_build_id
 from ...store import (
     write_capability_manifest,
     write_dataset_manifest,
+    write_entities,
     write_relations,
 )
 from ...types import (
@@ -45,6 +46,7 @@ from ...types import (
     CapabilityName,
     CapabilitySupport,
     DatasetRevision,
+    EntityKind,
     EvidenceKind,
     EvidenceRef,
     ExtractionMethod,
@@ -138,7 +140,9 @@ class GraphifyAdapter:
     """
 
     def __init__(
-        self, graph_json_path: str | Path, rst_root: str | None = None,
+        self,
+        graph_json_path: str | Path,
+        rst_root: str | None = None,
         db_conn: _Connection | None = None,
     ) -> None:
         path = Path(graph_json_path)
@@ -243,6 +247,10 @@ class GraphifyAdapter:
         # query handler can find it via read_latest_dataset_manifest().
         write_capability_manifest(self._db_conn, capability_manifest)
         write_relations(self._db_conn, relations)
+        # Persist entities (XG-003): all entities from _entity_map + any
+        # source_file-based subjects not yet covered.
+        entities = self._collect_entities(relations)
+        write_entities(self._db_conn, entities)
         self._db_conn.commit()
 
         duration_ms = _monotonic_ms() - start
@@ -684,6 +692,59 @@ class GraphifyAdapter:
             result[node_id] = entity
         return result
 
+    def _collect_entities(
+        self, relations: list[SemanticRelation]
+    ) -> list[SemanticEntity]:
+        """Collect entities for persistence (XG-003).
+
+        Sources:
+        1. All entities in ``self._entity_map`` (graphify-out node entities).
+        2. For each ``subject_entity_id`` in relations that points to a
+           ``source_file`` path (not a graphify-out node id), create a
+           DOCUMENT_SECTION entity so the subject is resolvable by name.
+
+        Deduplicated by ``entity_id``.
+        """
+        assert self._dataset_id is not None
+        repository_id = _repository_id_from_commit(self._built_at_commit)
+
+        seen: set[str] = set()
+        result: list[SemanticEntity] = []
+
+        # 1. Graphify-out node entities.
+        for entity in self._entity_map.values():
+            if entity.entity_id not in seen:
+                seen.add(entity.entity_id)
+                result.append(entity)
+
+        # 2. source_file-based subjects (documents_option/default/behavior/
+        # safety/validation/precedence). canonical_name is the file's basename
+        # so subject resolution by name can find them.
+        for rel in relations:
+            sid = rel.subject_entity_id
+            if sid is None or sid in seen:
+                continue
+            # graphify-out node ids use prefixes like "doc:"/"concept:"/
+            # "module:"; source_file paths contain a "/" and (usually) a dot.
+            if not _looks_like_source_file(sid):
+                continue
+            seen.add(sid)
+            result.append(
+                SemanticEntity(
+                    entity_id=sid,
+                    repository_id=repository_id,
+                    entity_kind=EntityKind.DOCUMENT_SECTION,
+                    canonical_name=Path(sid).name,  # e.g. "general_precedence.rst"
+                    dataset_id=self._dataset_id,
+                    language="rst",
+                    source_locator=SourceLocator(
+                        path_or_document_id=sid,
+                    ),
+                )
+            )
+
+        return result
+
     # ------------------------------------------------------------------
     # Relation extraction
     # ------------------------------------------------------------------
@@ -1034,6 +1095,23 @@ def _authority_scope_for_path(source_file: str) -> AuthorityScope:
         if frag in source_file:
             return AuthorityScope.PROJECT_CONVENTION
     return AuthorityScope.PUBLIC_CONTRACT
+
+
+def _looks_like_source_file(s: str) -> bool:
+    """Heuristic: does this entity_id look like a source file path?
+
+    Used by ``_collect_entities`` to distinguish source_file-based subjects
+    (e.g. ``docs/.../general_precedence.rst``) from graphify-out node ids
+    (e.g. ``doc:platform-index``, ``concept:ansible-test-sanity``).
+
+    A source file path has a path separator and a dot extension; a
+    graphify-out node id is colon-prefixed and has no path separator.
+    """
+    if not s:
+        return False
+    if "/" not in s and "\\" not in s:
+        return False
+    return "." in s.rsplit("/", 1)[-1]
 
 
 def _content_digest(source_node: dict[str, Any]) -> str:

@@ -30,6 +30,7 @@ from .types import (
     CapabilityName,
     CapabilitySupport,
     DatasetRevision,
+    EntityKind,
     EvidenceRef,  # noqa: F401  — re-exported for extractor authors
     ExtractionMethod,
     GraphCapabilityManifest,
@@ -39,6 +40,7 @@ from .types import (
     RelationKind,
     RevisionMappingStatus,
     RevisionScheme,
+    SemanticEntity,
     SemanticRelation,
 )
 
@@ -317,6 +319,12 @@ class SemanticLayerBuilder:
         write_capability_manifest(conn, capability_manifest)
         write_relations(conn, all_relations)
 
+        # Persist entities (XG-003: independent semantic_entities table).
+        entities = self._collect_entities(all_relations)
+        from .store import write_entities as _write_entities
+
+        _write_entities(conn, entities)
+
         duration_ms = _monotonic_ms() - start
         return SemanticBuildResult(
             success=not errors,
@@ -371,6 +379,53 @@ class SemanticLayerBuilder:
             if entry.relation_kind == relation_kind:
                 return entry
         raise KeyError(f"no extractor registered for relation {relation_kind!r}")
+
+    # ------------------------------------------------------------------
+    # Entity collection (XG-003)
+    # ------------------------------------------------------------------
+
+    def _collect_entities(
+        self, relations: list[SemanticRelation]
+    ) -> list[SemanticEntity]:
+        """Collect all entities referenced by this build.
+
+        Sources:
+        1. All raw graph nodes mapped via ``entity_for_node``.
+        2. Any ``subject_entity_id`` or ``object_entity_id`` from relations
+           that don't correspond to a raw node (future-proofing).
+
+        Entities are deduplicated by ``entity_id``.
+        """
+        from .extractors._common import entity_for_node
+
+        seen: set[str] = set()
+        result: list[SemanticEntity] = []
+
+        # 1. Map all raw graph nodes.
+        for node in self.iter_nodes():
+            entity = entity_for_node(node, self.dataset_id(), self._repository_id)
+            if entity is not None and entity.entity_id not in seen:
+                seen.add(entity.entity_id)
+                result.append(entity)
+
+        # 2. Any relation subject/object IDs not yet covered.
+        for rel in relations:
+            for eid in (rel.subject_entity_id, rel.object_entity_id):
+                if eid is not None and eid not in seen:
+                    # Create a minimal placeholder entity so the ID is
+                    # resolvable by the query handler.
+                    seen.add(eid)
+                    result.append(
+                        SemanticEntity(
+                            entity_id=eid,
+                            repository_id=self._repository_id,
+                            entity_kind=EntityKind.DOCUMENT_SECTION,
+                            canonical_name=eid,
+                            dataset_id=self.dataset_id(),
+                        )
+                    )
+
+        return result
 
     # ------------------------------------------------------------------
     # Helpers exposed to extractor callables
