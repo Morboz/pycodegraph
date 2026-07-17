@@ -65,6 +65,9 @@ from ._mapping import (
     entity_kind_for_node_type,
 )
 from ._rst_extractor import (
+    extract_behavior_and_safety_relations as _extract_admonition_relations_fn,
+)
+from ._rst_extractor import (
     extract_option_and_default_relations as _extract_rst_relations_fn,
 )
 
@@ -178,7 +181,12 @@ class GraphifyAdapter:
             f"{RelationKind.DOCUMENTS_CONCEPT.value}:{_EXTRACTION_METHOD.value}": _EXTRACTOR_VERSION,
         }
         if self._rst_root:
-            for kind in (RelationKind.DOCUMENTS_OPTION, RelationKind.DOCUMENTS_DEFAULT):
+            for kind in (
+                RelationKind.DOCUMENTS_OPTION,
+                RelationKind.DOCUMENTS_DEFAULT,
+                RelationKind.DOCUMENTS_BEHAVIOR,
+                RelationKind.DOCUMENTS_SAFETY,
+            ):
                 extractor_versions[f"{kind.value}:{_EXTRACTION_METHOD.value}"] = (
                     _EXTRACTOR_VERSION
                 )
@@ -244,17 +252,19 @@ class GraphifyAdapter:
     # ------------------------------------------------------------------
 
     def _extract_rst_relations(self) -> list[SemanticRelation]:
-        """Extract ``documents_option`` and ``documents_default`` from RST files.
+        """Extract RST-based relations: option, default, behavior, safety.
 
         Iterates over all nodes that have a ``source_file`` pointing to a
-        ``.rst`` file, reads the file, and extracts option/default relations
-        from YAML ``DOCUMENTATION`` blocks and RST ``.. option::`` directives.
+        ``.rst`` or ``.py`` file, reads the file, and extracts:
+
+        - ``documents_option`` from YAML DOCUMENTATION blocks + ``.. option::``
+        - ``documents_default`` from YAML DOCUMENTATION blocks
+        - ``documents_behavior`` from ``.. note::`` / ``.. tip::`` / ``.. important::``
+        - ``documents_safety`` from ``.. warning::`` / ``.. danger::`` / ``.. caution::``
 
         Path handling: graphify-out emits source_file in three formats:
-        absolute path (``/Users/.../foo.rst``), relative-with-docs-prefix
-        (``docs/docsite/rst/.../foo.rst``), or relative-without-docs-prefix
-        (``docsite/rst/.../foo.rst``). We try the path as-is, then with
-        ``docs/`` prepended if missing.
+        absolute path, relative-with-docs-prefix, or relative-without-docs-prefix.
+        We normalize via ``_normalize_rst_path``.
         """
         assert self._build_id is not None
         assert self._dataset_id is not None
@@ -279,6 +289,9 @@ class GraphifyAdapter:
 
         for rst_rel_path, node_ids in rst_files.items():
             option_results, default_results = _extract_rst_relations_fn(
+                rst_rel_path, rst_root
+            )
+            behavior_results, safety_results = _extract_admonition_relations_fn(
                 rst_rel_path, rst_root
             )
 
@@ -379,6 +392,106 @@ class GraphifyAdapter:
                         evidence_refs=[evidence_ref],
                         object_entity_id=opt_name,
                         literal_object=dft["default_value"],
+                    )
+                )
+
+            for beh in behavior_results:
+                kind_label = beh["admonition_kind"]
+                source_file = beh["source_file"]
+                authority_scope = _authority_scope_for_path(source_file)
+
+                relation_id = _relation_id(
+                    dataset_id=self._dataset_id,
+                    relation_kind=RelationKind.DOCUMENTS_BEHAVIOR.value,
+                    subject_id=source_file,
+                    object_id=f"{kind_label}:{beh['start_line']}",
+                )
+                if relation_id in seen_relation_ids:
+                    continue
+                seen_relation_ids.add(relation_id)
+
+                evidence_ref = EvidenceRef(
+                    evidence_ref_id=_evidence_ref_id(
+                        self._dataset_id, f"{source_file}:{kind_label}", relation_id
+                    ),
+                    evidence_kind=EvidenceKind.DOCUMENTATION,
+                    repository_id=_repository_id_from_commit(self._built_at_commit),
+                    revision=self._built_at_commit or "unknown",
+                    locator=SourceLocator(
+                        path_or_document_id=source_file,
+                        start_line=beh["start_line"],
+                        end_line=beh["end_line"],
+                        symbol_or_section=f"{kind_label} admonition",
+                        graph_node_ids=list(node_ids),
+                    ),
+                    content_digest=beh["content_digest"],
+                    dataset_id=self._dataset_id,
+                    excerpt=beh.get("description") or f"{kind_label} admonition",
+                )
+
+                relations.append(
+                    SemanticRelation(
+                        relation_id=relation_id,
+                        subject_entity_id=source_file,
+                        relation_kind=RelationKind.DOCUMENTS_BEHAVIOR,
+                        authority_scope=authority_scope,
+                        modality=_MODALITY,
+                        extraction_method=_EXTRACTION_METHOD,
+                        extractor_version=_EXTRACTOR_VERSION,
+                        dataset_id=self._dataset_id,
+                        evidence_refs=[evidence_ref],
+                        object_entity_id=kind_label,
+                        literal_object=None,
+                    )
+                )
+
+            for saf in safety_results:
+                kind_label = saf["admonition_kind"]
+                source_file = saf["source_file"]
+                authority_scope = _authority_scope_for_path(source_file)
+
+                relation_id = _relation_id(
+                    dataset_id=self._dataset_id,
+                    relation_kind=RelationKind.DOCUMENTS_SAFETY.value,
+                    subject_id=source_file,
+                    object_id=f"{kind_label}:{saf['start_line']}",
+                )
+                if relation_id in seen_relation_ids:
+                    continue
+                seen_relation_ids.add(relation_id)
+
+                evidence_ref = EvidenceRef(
+                    evidence_ref_id=_evidence_ref_id(
+                        self._dataset_id, f"{source_file}:{kind_label}", relation_id
+                    ),
+                    evidence_kind=EvidenceKind.DOCUMENTATION,
+                    repository_id=_repository_id_from_commit(self._built_at_commit),
+                    revision=self._built_at_commit or "unknown",
+                    locator=SourceLocator(
+                        path_or_document_id=source_file,
+                        start_line=saf["start_line"],
+                        end_line=saf["end_line"],
+                        symbol_or_section=f"{kind_label} admonition",
+                        graph_node_ids=list(node_ids),
+                    ),
+                    content_digest=saf["content_digest"],
+                    dataset_id=self._dataset_id,
+                    excerpt=saf.get("description") or f"{kind_label} admonition",
+                )
+
+                relations.append(
+                    SemanticRelation(
+                        relation_id=relation_id,
+                        subject_entity_id=source_file,
+                        relation_kind=RelationKind.DOCUMENTS_SAFETY,
+                        authority_scope=authority_scope,
+                        modality=_MODALITY,
+                        extraction_method=_EXTRACTION_METHOD,
+                        extractor_version=_EXTRACTOR_VERSION,
+                        dataset_id=self._dataset_id,
+                        evidence_refs=[evidence_ref],
+                        object_entity_id=kind_label,
+                        literal_object=None,
                     )
                 )
 
@@ -564,13 +677,15 @@ class GraphifyAdapter:
     def _build_capability_manifest(
         self, relations: list[SemanticRelation]
     ) -> GraphCapabilityManifest:
-        """Build the GraphCapabilityManifest (decision 7 — issue #100, updated by #102).
+        """Build the GraphCapabilityManifest.
 
         ``term_lookup`` (← ``documents_concept``) is ``supported`` if at
-        least one relation was emitted. ``documented_option`` and
-        ``documented_default`` are ``supported`` if RST extraction produced
-        relations. The remaining 4 ``documented_*`` capabilities remain
-        ``unavailable``.
+        least one relation was emitted. ``documented_option`` /
+        ``documented_default`` / ``documented_behavior`` /
+        ``documented_safety`` are ``supported`` if RST extraction produced
+        matching relations (Phase 1 + Phase 2 of issue #102). The remaining
+        2 (``precedence``, ``validation``) are ``unavailable`` until
+        Phase 3.
         """
         has_documents_concept = any(
             r.relation_kind == RelationKind.DOCUMENTS_CONCEPT
@@ -583,6 +698,14 @@ class GraphifyAdapter:
         )
         has_documents_default = any(
             r.relation_kind == RelationKind.DOCUMENTS_DEFAULT and r.evidence_refs
+            for r in relations
+        )
+        has_documents_behavior = any(
+            r.relation_kind == RelationKind.DOCUMENTS_BEHAVIOR and r.evidence_refs
+            for r in relations
+        )
+        has_documents_safety = any(
+            r.relation_kind == RelationKind.DOCUMENTS_SAFETY and r.evidence_refs
             for r in relations
         )
 
@@ -617,17 +740,38 @@ class GraphifyAdapter:
                 CapabilitySupport.UNAVAILABLE
             )
 
-        # Remaining 4 documents_* — still unavailable (Phase 2/3, issue #102).
+        # documents_behavior → documented_behavior (Phase 2)
+        if has_documents_behavior:
+            capabilities[CapabilityName.DOCUMENTED_BEHAVIOR] = (
+                CapabilitySupport.SUPPORTED
+            )
+        else:
+            capabilities[CapabilityName.DOCUMENTED_BEHAVIOR] = (
+                CapabilitySupport.UNAVAILABLE
+            )
+
+        # documents_safety → documented_safety (Phase 2)
+        if has_documents_safety:
+            capabilities[CapabilityName.DOCUMENTED_SAFETY] = CapabilitySupport.SUPPORTED
+        else:
+            capabilities[CapabilityName.DOCUMENTED_SAFETY] = (
+                CapabilitySupport.UNAVAILABLE
+            )
+
+        # Remaining 2 documents_* — still unavailable (Phase 3, issue #102).
         unavailable_caps = [
-            CapabilityName.DOCUMENTED_BEHAVIOR,
             CapabilityName.DOCUMENTED_PRECEDENCE,
-            CapabilityName.DOCUMENTED_SAFETY,
             CapabilityName.DOCUMENTED_VALIDATION,
         ]
         for cap in unavailable_caps:
             capabilities[cap] = CapabilitySupport.UNAVAILABLE
 
-        if not has_documents_option and not has_documents_default:
+        if not (
+            has_documents_option
+            or has_documents_default
+            or has_documents_behavior
+            or has_documents_safety
+        ):
             limitations.append(
                 "documents_* (option/default/behavior/precedence/safety/validation) "
                 "are unavailable: graphify-out only emits coarse documents/describes/"
@@ -636,8 +780,8 @@ class GraphifyAdapter:
             )
         else:
             limitations.append(
-                "documents_behavior/precedence/safety/validation remain unavailable "
-                "(Phase 2/3 of issue #102 — not yet implemented)."
+                "documents_precedence/validation remain unavailable "
+                "(Phase 3 of issue #102 — not yet implemented)."
             )
 
         # CodeGraph-only capabilities — DocGraph doesn't produce them.
@@ -657,8 +801,6 @@ class GraphifyAdapter:
         for cap in code_only_caps:
             capabilities[cap] = CapabilitySupport.UNAVAILABLE
 
-        # Override instance_id to match the dataset manifest (the capability
-        # manifest is keyed by capabilities_ref=instance_id in the store).
         return GraphCapabilityManifest(
             instance_id=_INSTANCE_ID,
             schema_version=_SCHEMA_VERSION,
