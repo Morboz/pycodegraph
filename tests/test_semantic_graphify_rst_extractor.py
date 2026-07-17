@@ -686,3 +686,223 @@ Header
         results = extract_validation_relations(str(rel_path), str(tmp_path))
         assert len(results) == 1
         assert results[0]["start_line"] == 3  # 1-based
+
+
+# =============================================================================
+# Precedence extraction (issue #106)
+# =============================================================================
+
+
+class TestExtractPrecedenceSections:
+    def test_precedence_section_detected(self):
+        rst = """\
+Controlling how Ansible behaves: precedence rules
+=================================================
+
+Ansible offers four sources for controlling its behavior.
+
+Precedence categories
+---------------------
+
+Configuration settings.
+"""
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            _extract_precedence_sections,
+        )
+
+        results = _extract_precedence_sections(rst, "test.rst")
+        assert len(results) == 2  # main title + "Precedence categories"
+        assert any("precedence" in r["section_title"].lower() for r in results)
+
+    def test_no_precedence_section(self):
+        rst = """\
+Some other topic
+================
+
+Just regular content.
+"""
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            _extract_precedence_sections,
+        )
+
+        results = _extract_precedence_sections(rst, "test.rst")
+        assert len(results) == 0
+
+    def test_precedence_section_line_numbers(self):
+        rst = """\
+Header
+======
+
+.. note:: Not precedence.
+
+Precedence rules
+----------------
+
+Here are the precedence rules.
+"""
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            _extract_precedence_sections,
+        )
+
+        results = _extract_precedence_sections(rst, "test.rst")
+        assert len(results) == 1
+        assert results[0]["section_title"] == "Precedence rules"
+        assert results[0]["start_line"] == 6
+
+    def test_nested_precedence_sections(self):
+        rst = """\
+Precedence Overview
+===================
+
+Top-level overview.
+
+Category one
+------------
+
+Details about category one.
+
+Sub category
+~~~~~~~~~~~~
+
+Sub details.
+
+Category two
+------------
+
+Details about category two.
+"""
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            _extract_precedence_sections,
+        )
+
+        results = _extract_precedence_sections(rst, "test.rst")
+        assert len(results) >= 1  # at least the main title
+        assert results[0]["section_title"] == "Precedence Overview"
+
+
+class TestExtractPrecedenceRelations:
+    def test_extract_from_full_doc(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "general_precedence.rst"
+        rst_file.write_text(
+            """\
+Precedence rules
+================
+
+Ansible offers four sources for controlling behavior.
+
+Configuration settings
+----------------------
+
+Config files and environment variables.
+
+Command-line options
+--------------------
+
+Override config settings.
+"""
+        )
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            extract_precedence_relations,
+        )
+
+        rel_path = "docs/general_precedence.rst"
+        results = extract_precedence_relations(str(rel_path), str(tmp_path))
+        assert len(results) >= 1
+        assert any("Precedence" in r["section_title"] for r in results)
+        assert results[0]["content_digest"].startswith("sha256:")
+        assert results[0]["start_line"] >= 1
+        assert results[0]["end_line"] > results[0]["start_line"]
+
+    def test_nonexistent_file_returns_empty(self, tmp_path: Path):
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            extract_precedence_relations,
+        )
+
+        results = extract_precedence_relations("docs/nonexistent.rst", str(tmp_path))
+        assert len(results) == 0
+
+    def test_file_without_precedence_returns_empty(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "plain.rst"
+        rst_file.write_text("No precedence here.\n")
+        rel_path = "docs/plain.rst"
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            extract_precedence_relations,
+        )
+
+        results = extract_precedence_relations(str(rel_path), str(tmp_path))
+        assert len(results) == 0
+
+    def test_content_digest_in_results(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        rst_file = rst_dir / "precedence.rst"
+        rst_file.write_text(
+            """\
+Variable precedence
+===================
+
+Role defaults override inventory variables.
+"""
+        )
+        rel_path = "docs/precedence.rst"
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            extract_precedence_relations,
+        )
+
+        results = extract_precedence_relations(str(rel_path), str(tmp_path))
+        assert len(results) == 1
+        assert results[0]["content_digest"].startswith("sha256:")
+
+
+class TestScanRstForPrecedence:
+    def test_scan_finds_precedence_files(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        pref_file = rst_dir / "general_precedence.rst"
+        pref_file.write_text(
+            """\
+Precedence rules
+================
+"""
+        )
+        other_file = rst_dir / "other.rst"
+        other_file.write_text("Some completely unrelated content here.\n")
+
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            scan_rst_for_precedence,
+        )
+
+        results = scan_rst_for_precedence(str(tmp_path))
+        assert len(results) == 1
+        assert "general_precedence" in results[0]
+
+    def test_scan_finds_content_based(self, tmp_path: Path):
+        rst_dir = tmp_path / "docs"
+        rst_dir.mkdir()
+        pref_file = rst_dir / "something.rst"
+        pref_file.write_text(
+            """\
+Header
+
+precedence rules apply here
+"""
+        )
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            scan_rst_for_precedence,
+        )
+
+        results = scan_rst_for_precedence(str(tmp_path))
+        assert len(results) >= 1
+        assert "something.rst" in results[0]
+
+    def test_no_docs_dir_returns_empty(self, tmp_path: Path):
+        from pycodegraph.semantic.adapters.graphify._rst_extractor import (
+            scan_rst_for_precedence,
+        )
+
+        results = scan_rst_for_precedence(str(tmp_path))
+        assert len(results) == 0

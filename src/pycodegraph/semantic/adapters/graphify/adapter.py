@@ -71,7 +71,13 @@ from ._rst_extractor import (
     extract_option_and_default_relations as _extract_rst_relations_fn,
 )
 from ._rst_extractor import (
+    extract_precedence_relations as _extract_precedence_relations_fn,
+)
+from ._rst_extractor import (
     extract_validation_relations as _extract_validation_relations_fn,
+)
+from ._rst_extractor import (
+    scan_rst_for_precedence as _scan_rst_for_precedence,
 )
 
 # =============================================================================
@@ -190,6 +196,7 @@ class GraphifyAdapter:
                 RelationKind.DOCUMENTS_BEHAVIOR,
                 RelationKind.DOCUMENTS_SAFETY,
                 RelationKind.DOCUMENTS_VALIDATION,
+                RelationKind.DOCUMENTS_PRECEDENCE,
             ):
                 extractor_versions[f"{kind.value}:{_EXTRACTION_METHOD.value}"] = (
                     _EXTRACTOR_VERSION
@@ -560,9 +567,65 @@ class GraphifyAdapter:
                     )
                 )
 
-        return relations
+        # Phase 4: documents_precedence — scan-based extraction (issue #106).
+        # Unlike the other relations which derive source files from graphify-out
+        # nodes, precedence files (general_precedence.rst, playbooks_variables.rst)
+        # are not indexed by graphify-out. We scan docs/ directly (方案 A).
+        precedence_files = _scan_rst_for_precedence(rst_root)
+        for prec_rel_path in precedence_files:
+            prec_results = _extract_precedence_relations_fn(prec_rel_path, rst_root)
 
-    # ------------------------------------------------------------------
+            for prec in prec_results:
+                source_file = prec["source_file"]
+                authority_scope = _authority_scope_for_path(source_file)
+
+                relation_id = _relation_id(
+                    dataset_id=self._dataset_id,
+                    relation_kind=RelationKind.DOCUMENTS_PRECEDENCE.value,
+                    subject_id=source_file,
+                    object_id=prec["section_title"],
+                )
+                if relation_id in seen_relation_ids:
+                    continue
+                seen_relation_ids.add(relation_id)
+
+                evidence_ref = EvidenceRef(
+                    evidence_ref_id=_evidence_ref_id(
+                        self._dataset_id,
+                        f"{source_file}:precedence",
+                        relation_id,
+                    ),
+                    evidence_kind=EvidenceKind.DOCUMENTATION,
+                    repository_id=_repository_id_from_commit(self._built_at_commit),
+                    revision=self._built_at_commit or "unknown",
+                    locator=SourceLocator(
+                        path_or_document_id=source_file,
+                        start_line=prec["start_line"],
+                        end_line=prec["end_line"],
+                        symbol_or_section=prec["section_title"],
+                    ),
+                    content_digest=prec["content_digest"],
+                    dataset_id=self._dataset_id,
+                    excerpt=prec.get("description") or prec["section_title"],
+                )
+
+                relations.append(
+                    SemanticRelation(
+                        relation_id=relation_id,
+                        subject_entity_id=source_file,
+                        relation_kind=RelationKind.DOCUMENTS_PRECEDENCE,
+                        authority_scope=authority_scope,
+                        modality=_MODALITY,
+                        extraction_method=_EXTRACTION_METHOD,
+                        extractor_version=_EXTRACTOR_VERSION,
+                        dataset_id=self._dataset_id,
+                        evidence_refs=[evidence_ref],
+                        object_entity_id=prec["section_title"],
+                        literal_object=None,
+                    )
+                )
+
+        return relations
 
     def _build_entity_map(self) -> dict[str, SemanticEntity]:
         """Build a SemanticEntity for every graphify-out node.
@@ -775,6 +838,10 @@ class GraphifyAdapter:
             r.relation_kind == RelationKind.DOCUMENTS_VALIDATION and r.evidence_refs
             for r in relations
         )
+        has_documents_precedence = any(
+            r.relation_kind == RelationKind.DOCUMENTS_PRECEDENCE and r.evidence_refs
+            for r in relations
+        )
 
         capabilities: dict[CapabilityName, CapabilitySupport] = {}
         limitations: list[str] = []
@@ -835,11 +902,15 @@ class GraphifyAdapter:
                 CapabilitySupport.UNAVAILABLE
             )
 
-        # Only precedence remains unavailable (split to a follow-up ticket
-        # because graphify-out doesn't index the precedence doc).
-        capabilities[CapabilityName.DOCUMENTED_PRECEDENCE] = (
-            CapabilitySupport.UNAVAILABLE
-        )
+        # documents_precedence → documented_precedence (issue #106)
+        if has_documents_precedence:
+            capabilities[CapabilityName.DOCUMENTED_PRECEDENCE] = (
+                CapabilitySupport.SUPPORTED
+            )
+        else:
+            capabilities[CapabilityName.DOCUMENTED_PRECEDENCE] = (
+                CapabilitySupport.UNAVAILABLE
+            )
 
         if not (
             has_documents_option
@@ -847,6 +918,7 @@ class GraphifyAdapter:
             or has_documents_behavior
             or has_documents_safety
             or has_documents_validation
+            or has_documents_precedence
         ):
             limitations.append(
                 "documents_* (option/default/behavior/precedence/safety/validation) "
@@ -855,11 +927,12 @@ class GraphifyAdapter:
                 "a follow-up ticket (see issue #100, decision B)."
             )
         else:
-            limitations.append(
-                "documents_precedence remains unavailable — the variable precedence "
-                "doc (general_precedence.rst) is not indexed by graphify-out. "
-                "Tracked in a follow-up ticket."
-            )
+            if not has_documents_precedence:
+                limitations.append(
+                    "documents_precedence is unavailable — the variable precedence "
+                    "doc (general_precedence.rst) is not indexed by graphify-out. "
+                    "Tracked in a follow-up ticket."
+                )
 
         # CodeGraph-only capabilities — DocGraph doesn't produce them.
         code_only_caps = [

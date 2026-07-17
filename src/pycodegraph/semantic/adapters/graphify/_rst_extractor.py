@@ -632,3 +632,215 @@ def _content_digest_for_span(rel_path: str, start: int, end: int) -> str:
     """Decision F: sha256 of ``<rel_path>:<start>:<end>``."""
     raw = f"{rel_path}:{start}:{end}"
     return "sha256:" + hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Precedence extraction (issue #106)
+# ---------------------------------------------------------------------------
+
+#: Precedence-related path fragments to scan for.
+_PRECEDENCE_PATH_FRAGMENTS: frozenset[str] = frozenset(
+    {
+        "general_precedence",
+        "playbooks_variables",
+    }
+)
+
+#: RST heading underline characters in order of precedence.
+_HEADING_CHARS = "=-^~"
+
+
+def _detect_heading_level(line: str) -> int | None:
+    """Return the heading level (0=lowest) based on the underline character, or None."""
+    stripped = line.rstrip()
+    if not stripped:
+        return None
+    chars = set(stripped)
+    if len(chars) != 1:
+        return None
+    char = stripped[0]
+    if char not in _HEADING_CHARS:
+        return None
+    return _HEADING_CHARS.index(char)
+
+
+def _extract_precedence_sections(
+    rst_text: str,
+    source_path: str = "",
+) -> list[dict[str, Any]]:
+    """Extract precedence-related sections from RST text.
+
+    Identifies sections whose titles contain "precedence" (case-insensitive)
+    and returns their content as structured records.
+
+    Returns a list of dicts::
+
+        {
+            "start_line": int,            # 1-based line of the section title
+            "end_line": int,              # 1-based end line of the section body
+            "section_title": str,         # the section heading text
+            "body_lines": list[str],      # body text lines
+            "is_precedence_doc": bool,    # True if whole doc is about precedence
+        }
+    """
+    results: list[dict[str, Any]] = []
+    lines = rst_text.splitlines()
+
+    # First pass: detect all headings with levels.
+    headings: list[dict[str, Any]] = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Check if the next line is a heading underline.
+        if i + 1 < len(lines):
+            next_line = lines[i + 1]
+            level = _detect_heading_level(next_line)
+            if level is not None:
+                headings.append(
+                    {
+                        "title": stripped,
+                        "line": i + 1,  # 1-based
+                        "level": level,
+                    }
+                )
+                continue  # skip the underline line
+
+    if not headings:
+        return results
+
+    # Check if the document as a whole is about precedence (first heading).
+    doc_is_about_precedence = False
+    if headings:
+        first_title = headings[0]["title"].lower()
+        doc_is_about_precedence = "precedence" in first_title
+
+    for i, heading in enumerate(headings):
+        title_lower = heading["title"].lower()
+        if "precedence" not in title_lower:
+            continue
+
+        start_line = heading["line"]
+        heading_level = heading["level"]
+
+        # Determine end_line: next heading at same or higher level, or EOF.
+        end_line = len(lines) + 1
+        for j in range(i + 1, len(headings)):
+            if headings[j]["level"] <= heading_level:
+                end_line = headings[j]["line"]
+                break
+
+        # Collect body lines (between title and end).
+        body_lines: list[str] = []
+        for j in range(start_line, end_line - 1):
+            raw_line = lines[j]
+            stripped_line = raw_line.strip()
+            if stripped_line:
+                body_lines.append(stripped_line)
+
+        results.append(
+            {
+                "start_line": start_line,
+                "end_line": end_line,
+                "section_title": heading["title"],
+                "body_lines": body_lines,
+                "is_precedence_doc": doc_is_about_precedence,
+            }
+        )
+
+    # If the document is generally about precedence but no specific section
+    # heading contains "precedence", still capture the whole doc as one
+    # precedence relation.
+    if not results and doc_is_about_precedence:
+        results.append(
+            {
+                "start_line": headings[0]["line"],
+                "end_line": len(lines) + 1,
+                "section_title": headings[0]["title"],
+                "body_lines": [line.strip() for line in lines if line.strip()],
+                "is_precedence_doc": True,
+            }
+        )
+
+    return results
+
+
+def extract_precedence_relations(
+    rst_rel_path: str,
+    rst_root: str,
+) -> list[dict[str, Any]]:
+    """Extract ``documents_precedence`` relations from an RST file.
+
+    Uses content scanning (方案 A from issue #106): reads the RST file at
+    ``rst_root / rst_rel_path`` and extracts precedence-related sections.
+
+    Each result dict has::
+
+        {
+            "source_file": str,
+            "start_line": int,
+            "end_line": int,
+            "section_title": str,
+            "description": str,
+            "content_digest": str,
+        }
+    """
+    rst_text, used_path = _read_rst_file(rst_rel_path, rst_root)
+    if rst_text is None:
+        return []
+
+    results: list[dict[str, Any]] = []
+    sections = _extract_precedence_sections(rst_text, used_path)
+    for section in sections:
+        start_line = section["start_line"]
+        end_line = section["end_line"]
+        description = " ".join(section["body_lines"][:10])
+        content_digest = _content_digest_for_span(used_path, start_line, end_line)
+
+        results.append(
+            {
+                "source_file": used_path,
+                "start_line": start_line,
+                "end_line": end_line,
+                "section_title": section["section_title"],
+                "description": description[:500],
+                "content_digest": content_digest,
+            }
+        )
+
+    return results
+
+
+def scan_rst_for_precedence(rst_root: str) -> list[str]:
+    """Scan ``rst_root`` for RST files containing precedence-related content.
+
+    方案 A (issue #106): directly traverse the docs directory tree looking
+    for files whose path contains precedence-related fragments.
+    """
+    precedence_files: list[str] = []
+    docs_dir = os.path.join(rst_root, "docs")
+    if not os.path.isdir(docs_dir):
+        return precedence_files
+
+    for dirpath, _dirnames, filenames in os.walk(docs_dir):
+        for fname in filenames:
+            if not fname.endswith(".rst"):
+                continue
+            rel_path = os.path.relpath(os.path.join(dirpath, fname), rst_root)
+            # Quick path-based check first.
+            for fragment in _PRECEDENCE_PATH_FRAGMENTS:
+                if fragment in fname:
+                    precedence_files.append(rel_path)
+                    break
+            else:
+                # Content-based check: scan first ~50 lines for "precedence".
+                full_path = os.path.join(dirpath, fname)
+                try:
+                    with open(full_path) as f:
+                        head = "".join(f.readline() for _ in range(50))
+                        if "precedence" in head.lower():
+                            precedence_files.append(rel_path)
+                except OSError:
+                    continue
+
+    return precedence_files
