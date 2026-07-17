@@ -70,6 +70,9 @@ from ._rst_extractor import (
 from ._rst_extractor import (
     extract_option_and_default_relations as _extract_rst_relations_fn,
 )
+from ._rst_extractor import (
+    extract_validation_relations as _extract_validation_relations_fn,
+)
 
 # =============================================================================
 # Adapter constants (decisions 3, 4, 6, 7 — issue #100)
@@ -186,6 +189,7 @@ class GraphifyAdapter:
                 RelationKind.DOCUMENTS_DEFAULT,
                 RelationKind.DOCUMENTS_BEHAVIOR,
                 RelationKind.DOCUMENTS_SAFETY,
+                RelationKind.DOCUMENTS_VALIDATION,
             ):
                 extractor_versions[f"{kind.value}:{_EXTRACTION_METHOD.value}"] = (
                     _EXTRACTOR_VERSION
@@ -292,6 +296,9 @@ class GraphifyAdapter:
                 rst_rel_path, rst_root
             )
             behavior_results, safety_results = _extract_admonition_relations_fn(
+                rst_rel_path, rst_root
+            )
+            validation_results = _extract_validation_relations_fn(
                 rst_rel_path, rst_root
             )
 
@@ -495,10 +502,66 @@ class GraphifyAdapter:
                     )
                 )
 
+            for val in validation_results:
+                source_file = val["source_file"]
+                authority_scope = _authority_scope_for_path(source_file)
+                # Object id encodes the seealso block location + the first ref
+                # (if any) so multiple seealso blocks in the same file don't
+                # collide.
+                first_ref = val["refs"][0] if val["refs"] else ""
+                object_id = f"seealso:{val['start_line']}:{first_ref}"
+
+                relation_id = _relation_id(
+                    dataset_id=self._dataset_id,
+                    relation_kind=RelationKind.DOCUMENTS_VALIDATION.value,
+                    subject_id=source_file,
+                    object_id=object_id,
+                )
+                if relation_id in seen_relation_ids:
+                    continue
+                seen_relation_ids.add(relation_id)
+
+                excerpt = val.get("description") or "seealso block"
+                if val["refs"]:
+                    excerpt = f"{excerpt} refs={','.join(val['refs'][:3])}"
+
+                evidence_ref = EvidenceRef(
+                    evidence_ref_id=_evidence_ref_id(
+                        self._dataset_id, f"{source_file}:seealso", relation_id
+                    ),
+                    evidence_kind=EvidenceKind.DOCUMENTATION,
+                    repository_id=_repository_id_from_commit(self._built_at_commit),
+                    revision=self._built_at_commit or "unknown",
+                    locator=SourceLocator(
+                        path_or_document_id=source_file,
+                        start_line=val["start_line"],
+                        end_line=val["end_line"],
+                        symbol_or_section="seealso",
+                        graph_node_ids=list(node_ids),
+                    ),
+                    content_digest=val["content_digest"],
+                    dataset_id=self._dataset_id,
+                    excerpt=excerpt,
+                )
+
+                relations.append(
+                    SemanticRelation(
+                        relation_id=relation_id,
+                        subject_entity_id=source_file,
+                        relation_kind=RelationKind.DOCUMENTS_VALIDATION,
+                        authority_scope=authority_scope,
+                        modality=_MODALITY,
+                        extraction_method=_EXTRACTION_METHOD,
+                        extractor_version=_EXTRACTOR_VERSION,
+                        dataset_id=self._dataset_id,
+                        evidence_refs=[evidence_ref],
+                        object_entity_id=first_ref or "seealso",
+                        literal_object=None,
+                    )
+                )
+
         return relations
 
-    # ------------------------------------------------------------------
-    # Entity construction
     # ------------------------------------------------------------------
 
     def _build_entity_map(self) -> dict[str, SemanticEntity]:
@@ -708,6 +771,10 @@ class GraphifyAdapter:
             r.relation_kind == RelationKind.DOCUMENTS_SAFETY and r.evidence_refs
             for r in relations
         )
+        has_documents_validation = any(
+            r.relation_kind == RelationKind.DOCUMENTS_VALIDATION and r.evidence_refs
+            for r in relations
+        )
 
         capabilities: dict[CapabilityName, CapabilitySupport] = {}
         limitations: list[str] = []
@@ -758,19 +825,28 @@ class GraphifyAdapter:
                 CapabilitySupport.UNAVAILABLE
             )
 
-        # Remaining 2 documents_* — still unavailable (Phase 3, issue #102).
-        unavailable_caps = [
-            CapabilityName.DOCUMENTED_PRECEDENCE,
-            CapabilityName.DOCUMENTED_VALIDATION,
-        ]
-        for cap in unavailable_caps:
-            capabilities[cap] = CapabilitySupport.UNAVAILABLE
+        # documents_validation → documented_validation (Phase 3)
+        if has_documents_validation:
+            capabilities[CapabilityName.DOCUMENTED_VALIDATION] = (
+                CapabilitySupport.SUPPORTED
+            )
+        else:
+            capabilities[CapabilityName.DOCUMENTED_VALIDATION] = (
+                CapabilitySupport.UNAVAILABLE
+            )
+
+        # Only precedence remains unavailable (split to a follow-up ticket
+        # because graphify-out doesn't index the precedence doc).
+        capabilities[CapabilityName.DOCUMENTED_PRECEDENCE] = (
+            CapabilitySupport.UNAVAILABLE
+        )
 
         if not (
             has_documents_option
             or has_documents_default
             or has_documents_behavior
             or has_documents_safety
+            or has_documents_validation
         ):
             limitations.append(
                 "documents_* (option/default/behavior/precedence/safety/validation) "
@@ -780,8 +856,9 @@ class GraphifyAdapter:
             )
         else:
             limitations.append(
-                "documents_precedence/validation remain unavailable "
-                "(Phase 3 of issue #102 — not yet implemented)."
+                "documents_precedence remains unavailable — the variable precedence "
+                "doc (general_precedence.rst) is not indexed by graphify-out. "
+                "Tracked in a follow-up ticket."
             )
 
         # CodeGraph-only capabilities — DocGraph doesn't produce them.
