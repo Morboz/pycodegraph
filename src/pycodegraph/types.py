@@ -6,6 +6,44 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 # =============================================================================
+# Internal: InlineFact — typed fact extracted during Tree-sitter traversal
+#
+# Carried in-memory to SemanticLayerBuilder.build() via ExtractionResult /
+# IndexResult / CodeGraph._last_inline_facts. Not persisted to DB at extraction
+# time. Each InlineFact is flushed to a SemanticRelation row by the semantic
+# layer during build_semantic_layer(). See issue #114.
+# =============================================================================
+
+
+@dataclass
+class InlineFact:
+    """A typed semantic fact extracted during Tree-sitter traversal.
+
+    Carries enough context for SemanticLayerBuilder to assemble into a
+    :class:`SemanticRelation` during :meth:`build_semantic_layer`. No DB reads
+    are needed at flush time.
+
+    ``subject_node_id`` is optional — when the subject is not a CodeGraph Node
+    (e.g. a call site, which has no Node representation), the caller provides
+    ``subject_qualified_name`` and ``source_locator`` instead. The flush
+    helper uses ``::L{line}`` suffix on the qualified name for call-site
+    subjects.
+    """
+
+    relation_kind: str
+    subject_node_id: str | None
+    subject_qualified_name: str
+    subject_file_path: str
+    object_literal: str | None = None
+    object_node_id: str | None = None
+    start_line: int = 0
+    end_line: int = 0
+    evidence_kind: str = ""
+    extraction_method: str = ""
+    metadata: dict = field(default_factory=dict)
+
+
+# =============================================================================
 # Enum-like constants
 # =============================================================================
 
@@ -178,6 +216,11 @@ class ExtractionResult:
     unresolved_references: list[UnresolvedReference] = field(default_factory=list)
     errors: list[ExtractionError] = field(default_factory=list)
     duration_ms: int = 0
+    # InlineFacts collected during Tree-sitter traversal (issue #114).
+    # Carried in-memory to SemanticLayerBuilder.build() — not persisted
+    # to DB at extraction time. Empty for languages without an
+    # ``extract_inline_facts`` hook.
+    inline_facts: list[InlineFact] = field(default_factory=list)
 
 
 @dataclass
@@ -204,6 +247,16 @@ class IndexResult:
     refs_unresolved: int = 0
     errors: list[ExtractionError] = field(default_factory=list)
     duration_ms: int = 0
+    # InlineFacts aggregated across all files indexed in this run (issue
+    # #114). Caller passes them to CodeGraph.build_semantic_layer() so
+    # the semantic layer can flush them as SemanticRelation rows without
+    # re-reading source files.
+    inline_facts: list[InlineFact] = field(default_factory=list)
+
+
+# =============================================================================
+# Summary Claim Types (ADR-0004 semantic overlay)
+# =============================================================================
 
 
 # =============================================================================

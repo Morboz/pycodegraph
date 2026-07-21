@@ -24,24 +24,26 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias
 
-from ..types import Node
+from ..types import InlineFact, Node
 from .types import (
     AuthorityScope,
     CapabilityName,
     CapabilitySupport,
     DatasetRevision,
     EntityKind,
-    EvidenceRef,  # noqa: F401  — re-exported for extractor authors
+    EvidenceKind,
+    EvidenceRef,
     ExtractionMethod,
     GraphCapabilityManifest,
     GraphDatasetManifest,
     GraphKind,
-    Modality,  # noqa: F401  — re-exported for extractor authors
+    Modality,
     RelationKind,
     RevisionMappingStatus,
     RevisionScheme,
     SemanticEntity,
     SemanticRelation,
+    SourceLocator,
 )
 
 if TYPE_CHECKING:
@@ -242,7 +244,11 @@ class SemanticLayerBuilder:
     # Build
     # ------------------------------------------------------------------
 
-    def build(self, built_at: int) -> SemanticBuildResult:
+    def build(
+        self,
+        built_at: int,
+        inline_facts: list[InlineFact] | None = None,
+    ) -> SemanticBuildResult:
         """Run all registered extractors and publish the semantic layer.
 
         ``built_at`` is supplied by the caller (epoch seconds) so that
@@ -250,10 +256,17 @@ class SemanticLayerBuilder:
         builder's perspective — the caller controls the timestamp source
         (e.g. a build system clock), not this library.
 
+        ``inline_facts`` (issue #114, optional) are typed facts collected
+        during Tree-sitter traversal by a ``LanguageExtractor.extract_inline_facts``
+        hook. They are flushed to :class:`SemanticRelation` rows **before**
+        registered extractors run, so that :meth:`_measure_capabilities` sees
+        all relation kinds.
+
         Persists relations + manifests to the semantic tables via
         :mod:`pycodegraph.semantic.store` so the query handler can read them
         back in a later call (or a different process).
         """
+        from .extractors._common import relation_id as _mk_relation_id
         from .store import (
             write_capability_manifest,
             write_dataset_manifest,
@@ -280,6 +293,57 @@ class SemanticLayerBuilder:
             built_at=built_at,
         )
         self._build_id = build_id
+
+        # Issue #114: flush inline_facts before registered extractors, so
+        # _measure_capabilities sees all relation kinds (QUERY DESIGN).
+        if inline_facts:
+            ds_id = self.dataset_id()
+            repo_id = self._repository_id
+            rev = self._revision_value
+            for fact in inline_facts:
+                subject_id = _inline_subject_id(fact)
+                lit_obj = fact.object_literal
+                obj_id = fact.object_node_id
+                # InlineFact stores kind/method strings loosely at the
+                # extraction layer (avoiding semantic-types import there);
+                # resolve to the SemanticRelation enums for storage.
+                rk = RelationKind(fact.relation_kind)
+                em = ExtractionMethod(
+                    fact.extraction_method or ExtractionMethod.PARSER.value
+                )
+                ek = EvidenceKind(fact.evidence_kind or EvidenceKind.SOURCE.value)
+                rid = _mk_relation_id(rk.value, subject_id, obj_id, lit_obj, ds_id)
+                all_relations.append(
+                    SemanticRelation(
+                        relation_id=rid,
+                        subject_entity_id=subject_id,
+                        relation_kind=rk,
+                        authority_scope=AuthorityScope.IMPLEMENTATION_TOPOLOGY,
+                        modality=Modality.OBSERVED,
+                        extraction_method=em,
+                        extractor_version="inline-xg-114-1",
+                        dataset_id=ds_id,
+                        evidence_refs=[
+                            EvidenceRef(
+                                evidence_ref_id=f"ev:{rid[4:]}_inline",
+                                evidence_kind=ek,
+                                repository_id=repo_id,
+                                revision=rev,
+                                locator=SourceLocator(
+                                    path_or_document_id=fact.subject_file_path,
+                                    start_line=fact.start_line,
+                                    end_line=fact.end_line,
+                                    symbol_or_section=fact.subject_qualified_name,
+                                ),
+                                content_digest=_inline_digest(fact, ds_id),
+                                dataset_id=ds_id,
+                            )
+                        ],
+                        object_entity_id=obj_id,
+                        literal_object=lit_obj,
+                        confidence=1.0,
+                    )
+                )
 
         for entry in self._registry:
             extractor_key = (
@@ -495,3 +559,29 @@ def _stable_version_map(versions: dict[str, str]) -> str:
 
 def _monotonic_ms() -> int:
     return int(time.monotonic() * 1000)
+
+
+# =============================================================================
+# InlineFact helpers (issue #114)
+# =============================================================================
+
+
+def _inline_subject_id(fact: InlineFact) -> str:
+    """Compute a stable subject_entity_id from an InlineFact.
+
+    When the subject is a CodeGraph Node (subject_node_id is set), use it
+    directly. For call-site / other non-node subjects, synthesize an ID
+    from qualified_name and line.
+    """
+    if fact.subject_node_id:
+        return fact.subject_node_id
+    if fact.start_line > 0:
+        return f"{fact.subject_qualified_name}::L{fact.start_line}"
+    return fact.subject_qualified_name
+
+
+def _inline_digest(fact: InlineFact, dataset_id: str) -> str:
+    import hashlib as _hl
+
+    raw = f"{dataset_id}|{fact.subject_file_path}|{fact.start_line}|{fact.end_line}|{fact.object_literal}"
+    return "sha256:" + _hl.sha256(raw.encode()).hexdigest()[:16]

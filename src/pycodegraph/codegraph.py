@@ -32,6 +32,7 @@ from .types import (
     Edge,
     ExploreOptions,
     IndexResult,
+    InlineFact,
     Node,
     Subgraph,
     SummaryClaim,
@@ -110,6 +111,11 @@ class CodeGraph:
         self._resolver = resolver
         self._test_analyzer = test_analyzer
         self._claim_overlay = ClaimOverlay(queries)
+        # Cache for InlineFacts from the most recent index_all() call
+        # (issue #114). Passed to build_semantic_layer() when not explicitly
+        # provided, so the caller can index_all() then build_semantic_layer()
+        # without re-reading source files.
+        self._last_inline_facts: list[InlineFact] = []
 
     # =========================================================================
     # Lifecycle
@@ -307,6 +313,10 @@ class CodeGraph:
             test_analysis_result = self._test_analyzer.analyze_and_persist(on_progress)
             result.edges_created += test_analysis_result.edges_created
 
+        # Cache inline_facts so build_semantic_layer() can flush them
+        # without the caller explicitly passing them (issue #114).
+        self._last_inline_facts = result.inline_facts
+
         return result
 
     def index_file(self, file_path: str) -> None:
@@ -394,6 +404,7 @@ class CodeGraph:
         revision_value: str,
         built_at: int,
         instance_id: str = "default",
+        inline_facts: list[InlineFact] | None = None,
     ) -> SemanticBuildResult:
         """Build the TOCS semantic evidence layer over the indexed graph.
 
@@ -407,19 +418,25 @@ class CodeGraph:
         deterministic from the caller's perspective; this library does not
         read the system clock or the git CLI.
 
+        ``inline_facts`` (issue #114): typed facts collected during the
+        preceding Tree-sitter traversal. When ``None`` (the default), falls
+        back to the cached ``_last_inline_facts`` from the most recent
+        :meth:`index_all` call. Pass an explicit list to override.
+
         Skeleton state: registered extractors return empty relation lists,
         so the returned manifests will show every capability as
         ``unavailable``. The pipeline shape and manifest computation are
         what's exercised — real extraction logic lands one relation at a
         time.
         """
+        facts = inline_facts if inline_facts is not None else self._last_inline_facts
         builder = SemanticLayerBuilder(
             self._queries,
             repository_id=repository_id,
             revision_value=revision_value,
             instance_id=instance_id,
         )
-        return builder.build(built_at=built_at)
+        return builder.build(built_at=built_at, inline_facts=facts)
 
     # =========================================================================
     # Queries

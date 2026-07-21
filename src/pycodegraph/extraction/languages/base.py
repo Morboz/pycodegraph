@@ -5,6 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+# InlineFact is used as a type hint for the extract_inline_facts hook.
+# Imported at runtime via TYPE_CHECKING to avoid circular dependency.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    pass
+
 
 @dataclass
 class LanguageExtractor:
@@ -50,3 +57,10 @@ class LanguageExtractor:
     get_receiver_type: Callable | None = None
     resolve_type_alias_kind: Callable | None = None
     classify_class_node: Callable | None = None
+
+    # Inline fact extraction hook (issue #114). Called after a function/method
+    # node's body has been visited during Tree-sitter traversal. Receives the
+    # function/method AST node, source bytes, and file path. Returns any typed
+    # facts discovered (parameter defaults, call-site arguments, branch
+    # conditions, etc.) for later flush into SemanticRelation rows.
+    extract_inline_facts: Callable | None = None

@@ -15,6 +15,7 @@ from ..types import (
     EdgeKind,
     ExtractionError,
     ExtractionResult,
+    InlineFact,
     Language,
     Node,
     NodeKind,
@@ -126,6 +127,10 @@ class TreeSitterExtractor:
         # Decorator context: (name, line, column) tuples for decorators on the
         # current decorated_definition
         self._pending_decorators: list[tuple[str, int, int]] = []
+        # InlineFacts collected by LanguageExtractor.extract_inline_facts hook
+        # during traversal (issue #114). Flushed to ExtractionResult at the end
+        # of extract(); flows to SemanticLayerBuilder.build() via IndexResult.
+        self.inline_facts: list[InlineFact] = []
 
     def extract(self) -> ExtractionResult:
         start = time.time()
@@ -199,6 +204,7 @@ class TreeSitterExtractor:
             unresolved_references=self.unresolved_refs,
             errors=self.errors,
             duration_ms=int((time.time() - start) * 1000),
+            inline_facts=self.inline_facts,
         )
 
     # =========================================================================
@@ -627,6 +633,7 @@ class TreeSitterExtractor:
         body = get_child_by_field(node, self.extractor.body_field)
         if body:
             self._visit_function_body(body, func_node.id)
+        self._collect_inline_facts(node)
         self.node_stack.pop()
 
     def _extract_method(self, node: TSNode) -> None:
@@ -705,6 +712,7 @@ class TreeSitterExtractor:
         body = get_child_by_field(node, self.extractor.body_field)
         if body:
             self._visit_function_body(body, method_node.id)
+        self._collect_inline_facts(node)
         self.node_stack.pop()
 
     def _extract_class(self, node: TSNode, kind: NodeKind = NodeKind.CLASS) -> None:
@@ -1558,6 +1566,27 @@ class TreeSitterExtractor:
         if not self.extractor:
             return
         self._walk_for_calls(body)
+
+    def _collect_inline_facts(self, func_or_method_node: TSNode) -> None:
+        """Invoke LanguageExtractor.extract_inline_facts hook if present.
+
+        Called after a function/method node's body has been visited. The hook
+        receives the full function/method AST subtree, source bytes, and file
+        path. Hook results are appended to ``self.inline_facts``.
+
+        ``func_or_method_node`` is a ``function_definition`` /
+        ``method_definition`` etc. AST node (the parent of the body), not the
+        body itself — the hook needs access to declarations (parameters,
+        decorators) AND the body.
+        """
+        if not self.extractor or self.extractor.extract_inline_facts is None:
+            return
+        source = self.source_bytes.decode("utf-8")
+        facts = self.extractor.extract_inline_facts(
+            func_or_method_node, source, self.file_path
+        )
+        if facts:
+            self.inline_facts.extend(facts)
 
     def _walk_for_calls(self, node: TSNode) -> None:
         if not self.extractor:

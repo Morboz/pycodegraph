@@ -353,6 +353,10 @@ class ExtractionOrchestrator:
             edges_created=total_edges,
             errors=errors,
             duration_ms=int((time.time() - start) * 1000),
+            # Collect inline_facts from all files (issue #114).
+            inline_facts=[
+                fact for _fi, result in parsed_results for fact in result.inline_facts
+            ],
         )
 
     def _bulk_store(
