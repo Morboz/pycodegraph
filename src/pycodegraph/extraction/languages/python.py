@@ -4,8 +4,113 @@ from __future__ import annotations
 
 from tree_sitter import Node as TSNode
 
-from ...extraction.helpers import get_child_by_field, get_node_text
+from ...extraction.helpers import generate_node_id, get_child_by_field, get_node_text
+from ...types import InlineFact
 from .base import LanguageExtractor
+
+# =============================================================================
+# Inline fact extraction (issue #115: STORES_DEFAULT)
+# =============================================================================
+
+_PARAMETER_NODE_KINDS = frozenset(
+    {
+        "default_parameter",
+        "typed_default_parameter",
+    }
+)
+
+
+def _python_extract_inline_facts(
+    node: TSNode, source_bytes: bytes, file_path: str
+) -> list[InlineFact]:
+    """Extract STORES_DEFAULT InlineFacts from Python function/method.
+
+    Walks the function_definition AST node:
+    1. Determine if this is a method (inside a class_definition) or top-level
+       function via ancestor walk.
+    2. For each parameter with a default value (typed_default_parameter or
+       default_parameter), produce one InlineFact.
+    3. Compute the correct qualified_name with parent scope prefix.
+
+    ``source_bytes`` is the raw file content (bytes), used for extracting
+    text from AST node byte ranges — consistent with other Python lang hooks
+    like ``_python_get_signature``.
+    """
+    # ── 1. Detect enclosing class for qualified_name + kind ───────────
+    is_method = False
+    enclosing_class: str | None = None
+    # Python grammar: decorated_definition wraps function_definition
+    # when decorators are present. Walk past it to find class.
+    check: TSNode | None = node
+    while check is not None:
+        check = check.parent
+        if check is None:
+            break
+        if check.type == "class_definition":
+            class_name_node = get_child_by_field(check, "name")
+            if class_name_node is not None:
+                enclosing_class = get_node_text(class_name_node, source_bytes)
+                is_method = True
+                break
+
+    # ── 2. Compute qualified_name ─────────────────────────────────────
+    name_node = get_child_by_field(node, "name")
+    if name_node is None:
+        return []
+    func_name = get_node_text(name_node, source_bytes)
+    qualified_name = f"{enclosing_class}::{func_name}" if is_method else func_name
+
+    # ── 3. Infer NodeKind ─────────────────────────────────────────────
+    kind = "method" if is_method else "function"
+
+    # ── 4. Compute Node.id via generate_node_id ───────────────────────
+    node_id = generate_node_id(file_path, kind, qualified_name)
+
+    # ── 5. Walk parameters → defaults → InlineFacts ───────────────────
+    params_node = get_child_by_field(node, "parameters")
+    if params_node is None:
+        return []
+    facts: list[InlineFact] = []
+    for i in range(params_node.named_child_count):
+        param = params_node.named_child(i)
+        if param is None:
+            continue
+        if param.type not in _PARAMETER_NODE_KINDS:
+            continue
+        # parameter name
+        pname_node = get_child_by_field(param, "name")
+        if pname_node is None:
+            continue
+        param_name = get_node_text(pname_node, source_bytes)
+        # default value (None if no default — guarded by node type above)
+        value_node = get_child_by_field(param, "value")
+        if value_node is None:
+            # typed_default_parameter may have type annotation but no
+            # value if the type is annotated without a default.
+            # Only default_parameter and typed_default_parameter with
+            # a 'value' child produce a fact.
+            continue
+        default_text = get_node_text(value_node, source_bytes)
+        facts.append(
+            InlineFact(
+                relation_kind="stores_default",
+                subject_node_id=node_id,
+                subject_qualified_name=qualified_name,
+                subject_file_path=file_path,
+                object_literal=default_text,
+                start_line=value_node.start_point[0] + 1,
+                end_line=value_node.end_point[0] + 1,
+                evidence_kind="source",
+                extraction_method="parser",
+                metadata={"parameter_name": param_name},
+            )
+        )
+    return facts
+
+
+# =============================================================================
+# Signature extraction
+# =============================================================================
 
 
 def _python_get_signature(node: TSNode, source: bytes) -> str | None:
@@ -124,4 +229,5 @@ PYTHON_EXTRACTOR = LanguageExtractor(
     is_classmethod=_python_is_classmethod,
     is_property=_python_is_property,
     extract_import=_python_extract_import,
+    extract_inline_facts=_python_extract_inline_facts,
 )

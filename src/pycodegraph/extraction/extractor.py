@@ -1581,9 +1581,8 @@ class TreeSitterExtractor:
         """
         if not self.extractor or self.extractor.extract_inline_facts is None:
             return
-        source = self.source_bytes.decode("utf-8")
         facts = self.extractor.extract_inline_facts(
-            func_or_method_node, source, self.file_path
+            func_or_method_node, self.source_bytes, self.file_path
         )
         if facts:
             self.inline_facts.extend(facts)

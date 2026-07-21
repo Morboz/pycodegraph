@@ -63,4 +63,8 @@ class LanguageExtractor:
     # function/method AST node, source bytes, and file path. Returns any typed
     # facts discovered (parameter defaults, call-site arguments, branch
     # conditions, etc.) for later flush into SemanticRelation rows.
+    #
+    # Signature: (node: TSNode, source_bytes: bytes, file_path: str) -> list[InlineFact]
+    # source_bytes is raw file content (bytes), consistent with other Python
+    # lang hooks that use get_node_text(node, source_bytes).
     extract_inline_facts: Callable | None = None
