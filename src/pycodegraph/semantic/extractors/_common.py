@@ -36,6 +36,13 @@ class _BuilderLike(Protocol):
 
     def revision_value(self) -> str: ...
 
+    # Optional FileProvider (issue #116). Extractors that need to read
+    # source files (e.g. READS_DEFAULT counts positional args at the call
+    # site) call ``builder.file_provider`` — may be None when caller didn't
+    # supply one, in which case the extractor should skip gracefully.
+    @property
+    def file_provider(self) -> object: ...
+
 
 # =============================================================================
 # Entity construction

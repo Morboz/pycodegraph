@@ -1,8 +1,10 @@
-"""Tests for the Python extract_inline_facts hook (issue #115 STORES_DEFAULT).
+"""Tests for the Python extract_inline_facts hook (issue #115 STORES_DEFAULT)
+and the READS_DEFAULT extractor (issue #116).
 
 Verifies that inline_facts are produced during Tree-sitter traversal for
 Python function parameters with default values, and that they flush to
-SemanticRelation rows via the InlineFact pipeline.
+SemanticRelation rows via the InlineFact pipeline. Also verifies that
+READS_DEFAULT extractor matches call sites to callee defaults.
 """
 
 from __future__ import annotations
@@ -217,5 +219,132 @@ class TestStoresDefaultEndToEnd:
             stores = [
                 f for f in result.inline_facts if f.relation_kind == "stores_default"
             ]
-            assert len(stores) == 0, "function without defaults → 0 facts"
+            assert len(stores) == 0, "function without defaults -> 0 facts"
             cg.close()
+
+
+def _reads_build(callee_src: str, caller_src: str) -> CodeGraph:
+    """Build a CodeGraph with the given callee (helpers.py) and caller (main.py)
+    source and run build_semantic_layer.
+
+    Two-file pattern with ``import helpers; helpers.f()`` is used because
+    ``from helpers import f; f()`` doesn't resolve a CALLS edge in the
+    resolver (it produces only an IMPORTS edge). The dotted call form
+    resolves cleanly.
+
+    Returns an open CodeGraph with READS_DEFAULT relations in the DB.
+    Caller must close() when done.
+    """
+    td = tempfile.mkdtemp()
+    write(td, "helpers.py", callee_src)
+    write(td, "main.py", caller_src)
+    cg = CodeGraph.init(td)
+    cg.index_all()
+    cg.build_semantic_layer(
+        repository_id="test/repo",
+        revision_value="abc123",
+        built_at=1700000000,
+    )
+    return cg
+
+
+class TestReadsDefault:
+    """READS_DEFAULT extractor -- call site uses callee's parameter default."""
+
+    # Standard callee source used by most tests
+    _CALLEE = "def f(x=5): pass\n"
+
+    def test_basic_default_used(self):
+        """def f(x=5); f() -> 1 READS_DEFAULT (x=5 used at call)"""
+        cg = _reads_build(self._CALLEE, "import helpers\ndef g():\n    helpers.f()\n")
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.READS_DEFAULT)
+        assert len(rels) >= 1, f"expected >=1 READS_DEFAULT, got {len(rels)}"
+        r = rels[0]
+        assert r.literal_object == "5", (
+            f"expected literal_object=5, got {r.literal_object!r}"
+        )
+        cg.close()
+
+    def test_arg_explicitly_passed(self):
+        """def f(x=5); f(10) -> 0 READS_DEFAULT (arg explicitly passed)"""
+        cg = _reads_build(self._CALLEE, "import helpers\ndef g():\n    helpers.f(10)\n")
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.READS_DEFAULT)
+        assert len(rels) == 0, f"expected 0 READS_DEFAULT, got {len(rels)}"
+        cg.close()
+
+    def test_keyword_arg(self):
+        """def f(x=5); f(x=10) -> 0 READS_DEFAULT (keyword explicit)"""
+        cg = _reads_build(
+            self._CALLEE, "import helpers\ndef g():\n    helpers.f(x=10)\n"
+        )
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.READS_DEFAULT)
+        assert len(rels) == 0
+        cg.close()
+
+    def test_two_defaults_both_used(self):
+        """def f(x=5, y=10); f() -> 2 READS_DEFAULT"""
+        callee = "def f(x=5, y=10): pass\n"
+        cg = _reads_build(callee, "import helpers\ndef g():\n    helpers.f()\n")
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.READS_DEFAULT)
+        assert len(rels) >= 2, f"expected >=2 READS_DEFAULT, got {len(rels)}"
+        values = {r.literal_object for r in rels}
+        assert "5" in values, f"expected 5 in values, got {values}"
+        assert "10" in values, f"expected 10 in values, got {values}"
+        cg.close()
+
+    def test_two_defaults_one_partial(self):
+        """def f(x=5, y=10); f(1) -> 1 READS_DEFAULT (only y uses default)"""
+        callee = "def f(x=5, y=10): pass\n"
+        cg = _reads_build(callee, "import helpers\ndef g():\n    helpers.f(1)\n")
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.READS_DEFAULT)
+        assert len(rels) == 1, f"expected 1 READS_DEFAULT, got {len(rels)}"
+        assert rels[0].literal_object == "10", (
+            f"expected 10, got {rels[0].literal_object!r}"
+        )
+        cg.close()
+
+    def test_required_param_first_default_second(self):
+        """def f(x, y=10); f(1) -> 1 READS_DEFAULT (y uses default)"""
+        callee = "def f(x, y=10): pass\n"
+        cg = _reads_build(callee, "import helpers\ndef g():\n    helpers.f(1)\n")
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.READS_DEFAULT)
+        assert len(rels) == 1
+        assert rels[0].literal_object == "10"
+        cg.close()
+
+    def test_callee_no_defaults(self):
+        """def f(x, y); f(1, 2) -> 0 READS_DEFAULT (no defaults at all)"""
+        callee = "def f(x, y): pass\n"
+        cg = _reads_build(callee, "import helpers\ndef g():\n    helpers.f(1, 2)\n")
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.READS_DEFAULT)
+        assert len(rels) == 0
+        cg.close()
+
+    def test_subject_uses_line_suffix(self):
+        """READS_DEFAULT subject_entity_id ends with ::L{line}"""
+        cg = _reads_build(self._CALLEE, "import helpers\ndef g():\n    helpers.f()\n")
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.READS_DEFAULT)
+        assert len(rels) >= 1
+        sid = rels[0].subject_entity_id
+        assert "::L" in sid, f"expected '::L' in subject, got {sid!r}"
+        assert sid.startswith("g::L"), f"expected g::L prefix, got {sid!r}"
+        cg.close()
+
+    def test_condition_expression_has_param_name(self):
+        """READS_DEFAULT condition_expression contains parameter_name"""
+        cg = _reads_build(self._CALLEE, "import helpers\ndef g():\n    helpers.f()\n")
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.READS_DEFAULT)
+        assert len(rels) >= 1
+        ce = rels[0].condition_expression
+        assert ce is not None, "expected condition_expression"
+        assert ce.get("parameter_name") == "x", f"expected parameter_name=x, got {ce}"
+        cg.close()

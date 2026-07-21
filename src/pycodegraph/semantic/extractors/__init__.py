@@ -15,9 +15,11 @@ from __future__ import annotations
 from .calls import extract_calls
 from .exposes_public_surface import extract_exposes_public_surface
 from .owns_control import extract_owns_control
+from .reads_default import extract_reads_default
 
 __all__ = [
     "extract_calls",
     "extract_exposes_public_surface",
     "extract_owns_control",
+    "extract_reads_default",
 ]

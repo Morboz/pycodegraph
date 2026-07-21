@@ -52,6 +52,7 @@ def _create_components(
     ExploreEngine,
     ReferenceResolver,
     TestAnalyzer,
+    FileProvider,
 ]:
     """Build all collaborator objects for CodeGraph."""
     if file_provider is None:
@@ -77,6 +78,7 @@ def _create_components(
         explore_engine,
         resolver,
         test_analyzer,
+        file_provider,
     )
 
 
@@ -97,6 +99,7 @@ class CodeGraph:
         explore_engine: ExploreEngine,
         resolver: ReferenceResolver,
         test_analyzer: TestAnalyzer,
+        file_provider: FileProvider | None = None,
     ):
         self._db = db
         self._conn = db.get_connection()
@@ -111,6 +114,11 @@ class CodeGraph:
         self._resolver = resolver
         self._test_analyzer = test_analyzer
         self._claim_overlay = ClaimOverlay(queries)
+        # FileProvider for reading source files on demand (issue #116).
+        # Default to LocalFileProvider(project_root) when caller didn't pass one.
+        if file_provider is None:
+            file_provider = LocalFileProvider(project_root)
+        self._file_provider: FileProvider = file_provider
         # Cache for InlineFacts from the most recent index_all() call
         # (issue #114). Passed to build_semantic_layer() when not explicitly
         # provided, so the caller can index_all() then build_semantic_layer()
@@ -173,6 +181,7 @@ class CodeGraph:
             explore_engine,
             resolver,
             test_analyzer,
+            file_provider,
         ) = _create_components(root, config, queries)
         return cls(
             db,
@@ -186,6 +195,7 @@ class CodeGraph:
             explore_engine=explore_engine,
             resolver=resolver,
             test_analyzer=test_analyzer,
+            file_provider=file_provider,
         )
 
     @classmethod
@@ -214,6 +224,7 @@ class CodeGraph:
             explore_engine,
             resolver,
             test_analyzer,
+            file_provider,
         ) = _create_components(root, config, queries)
         return cls(
             db,
@@ -227,6 +238,7 @@ class CodeGraph:
             explore_engine=explore_engine,
             resolver=resolver,
             test_analyzer=test_analyzer,
+            file_provider=file_provider,
         )
 
     @classmethod
@@ -270,6 +282,7 @@ class CodeGraph:
             explore_engine,
             resolver,
             test_analyzer,
+            fp,
         ) = _create_components(project_root, config, queries, file_provider)
         return cls(
             db,
@@ -283,6 +296,7 @@ class CodeGraph:
             explore_engine=explore_engine,
             resolver=resolver,
             test_analyzer=test_analyzer,
+            file_provider=fp,
         )
 
     def close(self) -> None:
@@ -435,6 +449,7 @@ class CodeGraph:
             repository_id=repository_id,
             revision_value=revision_value,
             instance_id=instance_id,
+            file_provider=self._file_provider,
         )
         return builder.build(built_at=built_at, inline_facts=facts)
 

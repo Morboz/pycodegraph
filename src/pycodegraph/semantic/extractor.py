@@ -22,7 +22,7 @@ import hashlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from ..types import InlineFact, Node
 from .types import (
@@ -113,6 +113,7 @@ class SemanticLayerBuilder:
         revision_scheme: RevisionScheme = RevisionScheme.GIT_COMMIT,
         source_revision: str | None = None,
         revision_mapping_status: RevisionMappingStatus = RevisionMappingStatus.EXACT,
+        file_provider: Any = None,
     ) -> None:
         self._queries = queries
         self._repository_id = repository_id
@@ -121,10 +122,18 @@ class SemanticLayerBuilder:
         self._revision_scheme = revision_scheme
         self._source_revision = source_revision
         self._revision_mapping_status = revision_mapping_status
+        # Optional FileProvider (issue #116 READS_DEFAULT extractor reads
+        # caller source to count positional args at the call site).
+        self._file_provider = file_provider
 
         self._registry: list[_RegisteredExtractor] = []
         self._build_id: str | None = None
         self._register_default_extractors()
+
+    @property
+    def file_provider(self) -> Any:
+        """Optional FileProvider for source reads (None when not configured)."""
+        return self._file_provider
 
     # ------------------------------------------------------------------
     # Registry
@@ -172,6 +181,7 @@ class SemanticLayerBuilder:
             extract_calls,
             extract_exposes_public_surface,
             extract_owns_control,
+            extract_reads_default,
         )
 
         self.register_extractor(
@@ -211,9 +221,21 @@ class SemanticLayerBuilder:
             RelationKind.STORES_DEFAULT,
             CapabilityName.SIGNATURE_PARAMETER,
             AuthorityScope.IMPLEMENTATION_TOPOLOGY,
-            ExtractionMethod.STATIC_ANALYSIS,
-            "0.0.1",
+            ExtractionMethod.PARSER,
+            "inline-xg-114-1",
+            # STORES_DEFAULT is produced by the InlineFact pipeline via the
+            # Python extract_inline_facts hook (issue #115). The registered
+            # extractor is a no-op here — the real data arrives via
+            # build_semantic_layer(inline_facts=...).
             empty,
+        )
+        self.register_extractor(
+            RelationKind.READS_DEFAULT,
+            CapabilityName.SOURCE_SLICE,
+            AuthorityScope.IMPLEMENTATION_TOPOLOGY,
+            ExtractionMethod.STATIC_ANALYSIS,
+            "xg-116-1",
+            extract_reads_default,
         )
         self.register_extractor(
             RelationKind.FORWARDS_VALUE,
@@ -341,6 +363,13 @@ class SemanticLayerBuilder:
                         ],
                         object_entity_id=obj_id,
                         literal_object=lit_obj,
+                        # InlineFact.metadata is preserved in condition_expression
+                        # (JSON) so downstream extractors can read it back. Used by
+                        # READS_DEFAULT to find the parameter_name of STORES_DEFAULT
+                        # relations (issue #116).
+                        condition_expression=dict(fact.metadata)
+                        if fact.metadata
+                        else None,
                         confidence=1.0,
                     )
                 )
