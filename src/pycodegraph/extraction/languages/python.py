@@ -116,15 +116,30 @@ def _extract_if_branch_facts(
     parent_kind: str,
     parent_node_id: str,
     indent_level: int = 0,
+    guard_only: bool = False,
+    relation_kind: str = "implements_behavior",
 ) -> list[InlineFact]:
-    """Extract IMPLEMENTS_BEHAVIOR InlineFacts from an if_statement subtree.
+    """Extract IMPLEMENTS_BEHAVIOR (or GUARDS_EFFECT) InlineFacts from an
+    if_statement subtree.
 
-    Recurses into elif and else clauses. Guard conditions (check_mode /
-    failed / changed / …) are skipped.
+    When ``guard_only=False`` (default): extracts non-guard conditions →
+    IMPLEMENTS_BEHAVIOR.
 
-    ``indent_level`` is reserved for future nested-if filtering.
+    When ``guard_only=True``: extracts guard conditions (check_mode / failed /
+    changed / …) → GUARDS_EFFECT.
+
+    Recurses into elif and else clauses. An else clause is never a guard.
     """
     facts: list[InlineFact] = []
+
+    def _should_extract(text: str | None) -> bool:
+        """Determine whether this condition should be extracted based on
+        guard_only mode.
+        """
+        if text is None:
+            return False
+        is_guard = _is_guard_condition(text)
+        return is_guard if guard_only else (not is_guard)
 
     # ── Main condition (if <cond>) ──────────────────────────────────
     cond = if_node.child_by_field_name("condition")
@@ -139,18 +154,13 @@ def _extract_if_branch_facts(
     else:
         condition_text = None
 
-    if (
-        cond is not None
-        and condition_text
-        and not _is_guard_condition(condition_text)
-        and cons is not None
-    ):
+    if cond is not None and _should_extract(condition_text) and cons is not None:
         call_info = _get_first_call_in_block(cons, source_bytes)
         if call_info is not None:
             call_text, call_line, _ = call_info
             facts.append(
                 InlineFact(
-                    relation_kind="implements_behavior",
+                    relation_kind=relation_kind,
                     subject_node_id=parent_node_id,
                     subject_qualified_name=parent_qualified_name,
                     subject_file_path=file_path,
@@ -193,13 +203,13 @@ def _extract_if_branch_facts(
             elif_cons = child.child_by_field_name("consequence")
             if elif_cond is not None and elif_cons is not None:
                 elif_cond_text = get_node_text(elif_cond, source_bytes)
-                if not _is_guard_condition(elif_cond_text):
+                if _should_extract(elif_cond_text):
                     call_info = _get_first_call_in_block(elif_cons, source_bytes)
                     if call_info is not None:
                         call_text, call_line, _ = call_info
                         facts.append(
                             InlineFact(
-                                relation_kind="implements_behavior",
+                                relation_kind=relation_kind,
                                 subject_node_id=parent_node_id,
                                 subject_qualified_name=parent_qualified_name,
                                 subject_file_path=file_path,
@@ -217,31 +227,32 @@ def _extract_if_branch_facts(
                             )
                         )
         elif child.type == "else_clause":
-            # else has a body but no condition
-            else_body = child.child_by_field_name("body")
-            if else_body is not None:
-                call_info = _get_first_call_in_block(else_body, source_bytes)
-                if call_info is not None:
-                    call_text, call_line, _ = call_info
-                    facts.append(
-                        InlineFact(
-                            relation_kind="implements_behavior",
-                            subject_node_id=parent_node_id,
-                            subject_qualified_name=parent_qualified_name,
-                            subject_file_path=file_path,
-                            object_literal="else",
-                            start_line=child.start_point[0] + 1,
-                            end_line=child.end_point[0] + 1,
-                            evidence_kind="source",
-                            extraction_method="parser",
-                            metadata={
-                                "branch_condition": "else",
-                                "branch_action": call_text,
-                                "branch_type": "else",
-                                "call_line": call_line,
-                            },
+            # else has a body but no condition; only extract in non-guard mode
+            if not guard_only:
+                else_body = child.child_by_field_name("body")
+                if else_body is not None:
+                    call_info = _get_first_call_in_block(else_body, source_bytes)
+                    if call_info is not None:
+                        call_text, call_line, _ = call_info
+                        facts.append(
+                            InlineFact(
+                                relation_kind=relation_kind,
+                                subject_node_id=parent_node_id,
+                                subject_qualified_name=parent_qualified_name,
+                                subject_file_path=file_path,
+                                object_literal="else",
+                                start_line=child.start_point[0] + 1,
+                                end_line=child.end_point[0] + 1,
+                                evidence_kind="source",
+                                extraction_method="parser",
+                                metadata={
+                                    "branch_condition": "else",
+                                    "branch_action": call_text,
+                                    "branch_type": "else",
+                                    "call_line": call_line,
+                                },
+                            )
                         )
-                    )
 
     return facts
 
@@ -332,7 +343,7 @@ def _python_extract_inline_facts(
             )
         )
 
-    # ── 6. Walk function body for if/elif/else branches → IMPLEMENTS_BEHAVIOR ──
+    # ── 6. Walk function body for if/elif/else branches → IMPLEMENTS_BEHAVIOR + GUARDS_EFFECT ──
     body_node = get_child_by_field(node, "body")
     if body_node is not None:
         for i in range(body_node.named_child_count):
@@ -340,6 +351,7 @@ def _python_extract_inline_facts(
             if stmt is None:
                 continue
             if stmt.type == "if_statement":
+                # IMPLEMENTS_BEHAVIOR — non-guard branches
                 branch_facts = _extract_if_branch_facts(
                     stmt,
                     source_bytes,
@@ -347,8 +359,22 @@ def _python_extract_inline_facts(
                     qualified_name,
                     kind,
                     node_id,
+                    guard_only=False,
+                    relation_kind="implements_behavior",
                 )
                 facts.extend(branch_facts)
+                # GUARDS_EFFECT — guard branches (check_mode/failed/changed/…)
+                guard_facts = _extract_if_branch_facts(
+                    stmt,
+                    source_bytes,
+                    file_path,
+                    qualified_name,
+                    kind,
+                    node_id,
+                    guard_only=True,
+                    relation_kind="guards_effect",
+                )
+                facts.extend(guard_facts)
 
     # ── 7. Walk function body for call-site param forwarding → FORWARDS_VALUE ──
     if body_node is not None:

@@ -621,3 +621,131 @@ class TestForwardsValueEndToEnd:
             assert rel.condition_expression is not None
             assert "param_name" in rel.condition_expression
         cg.close()
+
+
+# =============================================================================
+# GUARDS_EFFECT tests (issue #119)
+# =============================================================================
+
+
+class TestPythonGuardsEffect:
+    """Unit tests for GUARDS_EFFECT InlineFact production."""
+
+    def test_check_mode_guard(self):
+        """module.check_mode -> GUARDS_EFFECT"""
+        facts = _extract_facts("def f():\n    if module.check_mode:\n        bail()\n")
+        guards = [f for f in facts if f.relation_kind == "guards_effect"]
+        assert len(guards) == 1, f"expected 1 guard, got {len(guards)}"
+        assert guards[0].object_literal == "module.check_mode"
+
+    def test_failed_guard(self):
+        """module.failed -> GUARDS_EFFECT"""
+        facts = _extract_facts("def f():\n    if module.failed:\n        cleanup()\n")
+        guards = [f for f in facts if f.relation_kind == "guards_effect"]
+        assert len(guards) == 1
+
+    def test_dry_run_guard(self):
+        """dry_run -> GUARDS_EFFECT"""
+        facts = _extract_facts("def f():\n    if dry_run:\n        simulate()\n")
+        guards = [f for f in facts if f.relation_kind == "guards_effect"]
+        assert len(guards) == 1
+
+    def test_non_guard_not_guards_effect(self):
+        """x > 0 -> NOT guards_effect (it is implements_behavior)"""
+        facts = _extract_facts("def f():\n    if x > 0:\n        process()\n")
+        guards = [f for f in facts if f.relation_kind == "guards_effect"]
+        assert len(guards) == 0
+
+    def test_mixed_guard_and_behavior(self):
+        """Both guard and non-guard branches -> both kinds produced"""
+        facts = _extract_facts(
+            "def f():\n"
+            "    if module.check_mode:\n"
+            "        bail()\n"
+            "    if x > 0:\n"
+            "        process()\n"
+        )
+        guards = [f for f in facts if f.relation_kind == "guards_effect"]
+        beh = [f for f in facts if f.relation_kind == "implements_behavior"]
+        assert len(guards) == 1
+        assert len(beh) == 1
+
+    def test_guard_elif(self):
+        """elif with guard condition -> GUARDS_EFFECT"""
+        facts = _extract_facts(
+            "def f():\n"
+            "    if x > 0:\n"
+            "        process()\n"
+            "    elif module.failed:\n"
+            "        cleanup()\n"
+        )
+        guards = [f for f in facts if f.relation_kind == "guards_effect"]
+        assert len(guards) == 1
+        assert guards[0].metadata.get("branch_type") == "elif"
+
+    def test_else_not_guard(self):
+        """else is never a guard"""
+        facts = _extract_facts(
+            "def f():\n"
+            "    if module.check_mode:\n"
+            "        bail()\n"
+            "    else:\n"
+            "        process()\n"
+        )
+        guards = [f for f in facts if f.relation_kind == "guards_effect"]
+        assert len(guards) == 1  # only check_mode, not else
+        assert guards[0].metadata.get("branch_type") == "if"
+
+    def test_no_guard_branch(self):
+        """No guard condition -> 0 GUARDS_EFFECT"""
+        facts = _extract_facts(
+            "def f():\n    if x:\n        run()\n    else:\n        skip()\n"
+        )
+        guards = [f for f in facts if f.relation_kind == "guards_effect"]
+        assert len(guards) == 0
+
+    def test_empty_guard_body_no_call(self):
+        """Guard body without call -> no effect to link -> no fact"""
+        facts = _extract_facts("def f():\n    if module.check_mode:\n        return\n")
+        guards = [f for f in facts if f.relation_kind == "guards_effect"]
+        assert len(guards) == 0
+
+
+class TestGuardsEffectEndToEnd:
+    """Integration: InlineFact -> SemanticRelation pipeline for GUARDS_EFFECT."""
+
+    SRC = (
+        "def run(x):\n"
+        "    if module.check_mode:\n"
+        "        skip()\n"
+        "    if x > 0:\n"
+        "        process()\n"
+        "\n"
+        "def setup():\n"
+        "    if module.failed:\n"
+        "        rollback()\n"
+    )
+
+    def test_flush_and_read_back(self):
+        """index_all + build_semantic_layer -> read_relations(GUARDS_EFFECT)"""
+        import tempfile
+        from pathlib import Path
+
+        td = tempfile.mkdtemp()
+        full = Path(td) / "mod.py"
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(self.SRC)
+        cg = CodeGraph.init(td)
+        cg.index_all()
+        cg.build_semantic_layer(
+            repository_id="test/repo",
+            revision_value="abc123",
+            built_at=1700000000,
+        )
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.GUARDS_EFFECT)
+        # Expected: skip() (check_mode) + rollback() (failed) = 2
+        assert len(rels) >= 2, f"expected >=2 GUARDS_EFFECT relations, got {len(rels)}"
+        for rel in rels:
+            assert len(rel.evidence_refs) >= 1
+        cg.close()

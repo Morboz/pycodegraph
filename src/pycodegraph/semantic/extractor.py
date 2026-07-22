@@ -262,6 +262,18 @@ class SemanticLayerBuilder:
             empty,
         )
         self.register_extractor(
+            RelationKind.GUARDS_EFFECT,
+            CapabilityName.EFFECT_GUARD,
+            AuthorityScope.IMPLEMENTATION_TOPOLOGY,
+            ExtractionMethod.PARSER,
+            "inline-xg-119-1",
+            # GUARDS_EFFECT is produced by the InlineFact pipeline via the
+            # Python extract_inline_facts hook (issue #119). The registered
+            # extractor is a no-op here — the real data arrives via
+            # build_semantic_layer(inline_facts=...).
+            empty,
+        )
+        self.register_extractor(
             RelationKind.TESTS_SCENARIO,
             CapabilityName.TEST_SCENARIO_RELATION,
             AuthorityScope.OBSERVABLE_COMPATIBILITY,
@@ -333,6 +345,7 @@ class SemanticLayerBuilder:
             "stores_default": "inline-xg-114-1",
             "implements_behavior": "inline-xg-117-1",
             "forwards_value": "inline-xg-118-1",
+            "guards_effect": "inline-xg-119-1",
         }
         if inline_facts:
             ds_id = self.dataset_id()
