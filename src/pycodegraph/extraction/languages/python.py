@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from tree_sitter import Node as TSNode
 
 from ...extraction.helpers import generate_node_id, get_child_by_field, get_node_text
@@ -9,7 +11,7 @@ from ...types import InlineFact
 from .base import LanguageExtractor
 
 # =============================================================================
-# Inline fact extraction (issue #115: STORES_DEFAULT)
+# Inline fact extraction (STORES_DEFAULT + IMPLEMENTS_BEHAVIOR)
 # =============================================================================
 
 _PARAMETER_NODE_KINDS = frozenset(
@@ -18,6 +20,230 @@ _PARAMETER_NODE_KINDS = frozenset(
         "typed_default_parameter",
     }
 )
+
+# Guard patterns that belong to GUARDS_EFFECT, not IMPLEMENTS_BEHAVIOR.
+_GUARD_CONDITION_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\bcheck_mode\b"),
+    re.compile(r"\bfailed\b"),
+    re.compile(r"\bchanged\b"),
+    re.compile(r"\bis_changed\b"),
+    re.compile(r"\bwarnings?\b"),
+    re.compile(r"\bdry_run\b"),
+    re.compile(r"\bdryrun\b"),
+]
+
+
+def _is_guard_condition(condition_text: str) -> bool:
+    """Return True if the condition looks like a guard (check_mode / failed / …)
+    rather than a behavior-selector condition.
+
+    Matches are case-insensitive. An empty condition is considered a guard
+    (will be skipped).
+    """
+    if not condition_text:
+        return True
+    lower = condition_text.lower()
+    return any(pat.search(lower) for pat in _GUARD_CONDITION_PATTERNS)
+
+
+def _get_first_call_in_block(
+    block_node: TSNode, source_bytes: bytes
+) -> tuple[str, int, int] | None:
+    """Walk a block body to find the first ``call`` expression.
+
+    Returns ``(call_text, line, column)`` or None when the block is empty
+    or contains no call.
+    """
+    for i in range(block_node.named_child_count):
+        stmt = block_node.named_child(i)
+        if stmt is None:
+            continue
+        # expression_statement → call
+        # (also handles assignment_statement that wraps a call via
+        #  assignment → call)
+        calls = _collect_calls_in_node(stmt, source_bytes)
+        if calls:
+            return calls[0]
+    return None
+
+
+def _collect_calls_in_node(
+    node: TSNode, source_bytes: bytes
+) -> list[tuple[str, int, int]]:
+    """Collect all ``call`` expressions directly inside *node*, returning
+    ``(text, line, column)`` tuples for the call function name.
+
+    This walks one level deep from *node* to find ``call`` nodes, not
+    recursively through if-statements or other compound statements
+    (we only want direct children of the consequence body).
+    """
+    results: list[tuple[str, int, int]] = []
+    for i in range(node.named_child_count):
+        child = node.named_child(i)
+        if child is None:
+            continue
+        if child.type == "call":
+            func = child.child_by_field_name("function")
+            if func is not None:
+                call_text = get_node_text(child, source_bytes)
+                results.append(
+                    (
+                        call_text,
+                        child.start_point[0] + 1,
+                        child.start_point[1] + 1,
+                    )
+                )
+        elif child.type == "assignment":
+            # x = some_func() — the call lives inside the right-hand side
+            rhs = child.child_by_field_name("right")
+            if rhs is not None and rhs.type == "call":
+                call_text = get_node_text(rhs, source_bytes)
+                results.append(
+                    (
+                        call_text,
+                        rhs.start_point[0] + 1,
+                        rhs.start_point[1] + 1,
+                    )
+                )
+    return results
+
+
+def _extract_if_branch_facts(
+    if_node: TSNode,
+    source_bytes: bytes,
+    file_path: str,
+    parent_qualified_name: str,
+    parent_kind: str,
+    parent_node_id: str,
+    indent_level: int = 0,
+) -> list[InlineFact]:
+    """Extract IMPLEMENTS_BEHAVIOR InlineFacts from an if_statement subtree.
+
+    Recurses into elif and else clauses. Guard conditions (check_mode /
+    failed / changed / …) are skipped.
+
+    ``indent_level`` is reserved for future nested-if filtering.
+    """
+    facts: list[InlineFact] = []
+
+    # ── Main condition (if <cond>) ──────────────────────────────────
+    cond = if_node.child_by_field_name("condition")
+    cons = if_node.child_by_field_name("consequence")
+
+    condition_text: str | None = None
+
+    if cond is not None:
+        condition_text = get_node_text(cond, source_bytes)
+    elif if_node.type == "else_clause":
+        condition_text = "else"
+    else:
+        condition_text = None
+
+    if (
+        cond is not None
+        and condition_text
+        and not _is_guard_condition(condition_text)
+        and cons is not None
+    ):
+        call_info = _get_first_call_in_block(cons, source_bytes)
+        if call_info is not None:
+            call_text, call_line, _ = call_info
+            facts.append(
+                InlineFact(
+                    relation_kind="implements_behavior",
+                    subject_node_id=parent_node_id,
+                    subject_qualified_name=parent_qualified_name,
+                    subject_file_path=file_path,
+                    object_literal=condition_text,
+                    start_line=cond.start_point[0] + 1,
+                    end_line=cond.end_point[0] + 1,
+                    evidence_kind="source",
+                    extraction_method="parser",
+                    metadata={
+                        "branch_condition": condition_text,
+                        "branch_action": call_text,
+                        "branch_type": "if",
+                        "call_line": call_line,
+                    },
+                )
+            )
+
+    # ── Recurse into elif / else alternatives ─────────────────────
+    # Walk named children after the consequence block. The children
+    # are ordered: [condition, consequence_block, *elif_clause_or_else_clause...].
+    # We can't use `is` for identity (tree-sitter returns new wrappers),
+    # so we track whether we've passed the consequence block by checking
+    # for the first block node after the condition.
+    passed_consequence = False
+    for i in range(if_node.named_child_count):
+        child = if_node.named_child(i)
+        if child is None:
+            continue
+        if child.type == "block" and not passed_consequence:
+            # First block after condition → consequence body, skip
+            passed_consequence = True
+            continue
+        if not passed_consequence:
+            # Still before consequence (the condition and any unnamed children)
+            continue
+        # After consequence → elif_clause or else_clause
+        if child.type == "elif_clause":
+            # elif has a condition and consequence
+            elif_cond = child.child_by_field_name("condition")
+            elif_cons = child.child_by_field_name("consequence")
+            if elif_cond is not None and elif_cons is not None:
+                elif_cond_text = get_node_text(elif_cond, source_bytes)
+                if not _is_guard_condition(elif_cond_text):
+                    call_info = _get_first_call_in_block(elif_cons, source_bytes)
+                    if call_info is not None:
+                        call_text, call_line, _ = call_info
+                        facts.append(
+                            InlineFact(
+                                relation_kind="implements_behavior",
+                                subject_node_id=parent_node_id,
+                                subject_qualified_name=parent_qualified_name,
+                                subject_file_path=file_path,
+                                object_literal=elif_cond_text,
+                                start_line=elif_cond.start_point[0] + 1,
+                                end_line=elif_cond.end_point[0] + 1,
+                                evidence_kind="source",
+                                extraction_method="parser",
+                                metadata={
+                                    "branch_condition": elif_cond_text,
+                                    "branch_action": call_text,
+                                    "branch_type": "elif",
+                                    "call_line": call_line,
+                                },
+                            )
+                        )
+        elif child.type == "else_clause":
+            # else has a body but no condition
+            else_body = child.child_by_field_name("body")
+            if else_body is not None:
+                call_info = _get_first_call_in_block(else_body, source_bytes)
+                if call_info is not None:
+                    call_text, call_line, _ = call_info
+                    facts.append(
+                        InlineFact(
+                            relation_kind="implements_behavior",
+                            subject_node_id=parent_node_id,
+                            subject_qualified_name=parent_qualified_name,
+                            subject_file_path=file_path,
+                            object_literal="else",
+                            start_line=child.start_point[0] + 1,
+                            end_line=child.end_point[0] + 1,
+                            evidence_kind="source",
+                            extraction_method="parser",
+                            metadata={
+                                "branch_condition": "else",
+                                "branch_action": call_text,
+                                "branch_type": "else",
+                                "call_line": call_line,
+                            },
+                        )
+                    )
+
+    return facts
 
 
 def _python_extract_inline_facts(
@@ -105,6 +331,25 @@ def _python_extract_inline_facts(
                 metadata={"parameter_name": param_name},
             )
         )
+
+    # ── 6. Walk function body for if/elif/else branches → IMPLEMENTS_BEHAVIOR ──
+    body_node = get_child_by_field(node, "body")
+    if body_node is not None:
+        for i in range(body_node.named_child_count):
+            stmt = body_node.named_child(i)
+            if stmt is None:
+                continue
+            if stmt.type == "if_statement":
+                branch_facts = _extract_if_branch_facts(
+                    stmt,
+                    source_bytes,
+                    file_path,
+                    qualified_name,
+                    kind,
+                    node_id,
+                )
+                facts.extend(branch_facts)
+
     return facts
 
 

@@ -190,6 +190,15 @@ wheels = [
 ]
 
 [[package]]
+name = "docutils"
+version = "0.23"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/39/a4/5180d9afc57e8fca05601dd652bdff19604c218814037fe90ffc7625a50a/docutils-0.23.tar.gz", hash = "sha256:746f5060322511280a1e50eb76846ed6bf2342984b2ac04dc42caa1a8d78799e" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/32/91/30151a39f7570f448ed84529390628a651d7f27c87d73c9b887f8189695e/docutils-0.23-py3-none-any.whl", hash = "sha256:25d013af9bf23bc1c7b2b093dff4208166c53a94786c9e447808335ef1185fea" },
+]
+
+[[package]]
 name = "filelock"
 version = "3.29.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -680,6 +689,10 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+docgraph = [
+    { name = "docutils" },
+    { name = "pyyaml" },
+]
 inferdb = [
     { name = "pymysql" },
 ]
@@ -694,12 +707,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "docutils", marker = "extra == 'docgraph'", specifier = ">=0.21" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.15" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.0" },
     { name = "pymysql", marker = "extra == 'inferdb'", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "pyyaml", marker = "extra == 'docgraph'", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "tree-sitter", specifier = ">=0.24.0" },
@@ -712,7 +727,7 @@ requires-dist = [
     { name = "tree-sitter-rust", specifier = ">=0.23.0" },
     { name = "tree-sitter-typescript", specifier = ">=0.23.0" },
 ]
-provides-extras = ["dev", "postgres", "inferdb"]
+provides-extras = ["dev", "postgres", "inferdb", "docgraph"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "import-linter", specifier = ">=2.11" }]

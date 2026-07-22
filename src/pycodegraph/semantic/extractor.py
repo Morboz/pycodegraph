@@ -249,8 +249,12 @@ class SemanticLayerBuilder:
             RelationKind.IMPLEMENTS_BEHAVIOR,
             CapabilityName.CONDITION_BEHAVIOR,
             AuthorityScope.IMPLEMENTATION_TOPOLOGY,
-            ExtractionMethod.STATIC_ANALYSIS,
-            "0.0.1",
+            ExtractionMethod.PARSER,
+            "inline-xg-117-1",
+            # IMPLEMENTS_BEHAVIOR is produced by the InlineFact pipeline
+            # via the Python extract_inline_facts hook (issue #117).
+            # The registered extractor is a no-op here — the real data
+            # arrives via build_semantic_layer(inline_facts=...).
             empty,
         )
         self.register_extractor(
@@ -318,6 +322,13 @@ class SemanticLayerBuilder:
 
         # Issue #114: flush inline_facts before registered extractors, so
         # _measure_capabilities sees all relation kinds (QUERY DESIGN).
+        # Extractor versions are mapped per relation-kind via a lookup since
+        # different InlineFact types (STORES_DEFAULT, IMPLEMENTS_BEHAVIOR, …)
+        # may have distinct version strings.
+        _INLINE_FACT_VERSIONS: dict[str, str] = {
+            "stores_default": "inline-xg-114-1",
+            "implements_behavior": "inline-xg-117-1",
+        }
         if inline_facts:
             ds_id = self.dataset_id()
             repo_id = self._repository_id
@@ -343,7 +354,9 @@ class SemanticLayerBuilder:
                         authority_scope=AuthorityScope.IMPLEMENTATION_TOPOLOGY,
                         modality=Modality.OBSERVED,
                         extraction_method=em,
-                        extractor_version="inline-xg-114-1",
+                        extractor_version=_INLINE_FACT_VERSIONS.get(
+                            fact.relation_kind, "inline-xg-114-1"
+                        ),
                         dataset_id=ds_id,
                         evidence_refs=[
                             EvidenceRef(

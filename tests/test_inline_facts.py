@@ -348,3 +348,151 @@ class TestReadsDefault:
         assert ce is not None, "expected condition_expression"
         assert ce.get("parameter_name") == "x", f"expected parameter_name=x, got {ce}"
         cg.close()
+
+
+# =============================================================================
+# IMPLEMENTS_BEHAVIOR tests (issue #117)
+# =============================================================================
+
+
+class TestPythonImplementsBehavior:
+    """Unit tests for IMPLEMENTS_BEHAVIOR InlineFact production."""
+
+    def test_single_if_branch(self):
+        """if x == 1: create() -> 1 implements_behavior"""
+        facts = _extract_facts("def f():\n    if x == 1:\n        create()\n")
+        impl = [f for f in facts if f.relation_kind == "implements_behavior"]
+        assert len(impl) == 1, f"expected 1, got {len(impl)}"
+        assert impl[0].object_literal == "x == 1"
+        assert impl[0].metadata.get("branch_action") == "create()"
+        assert impl[0].metadata.get("branch_type") == "if"
+
+    def test_if_elif_branches(self):
+        """if/elif -> 2 implements_behavior"""
+        facts = _extract_facts(
+            "def f():\n"
+            "    if x == 1:\n"
+            "        create()\n"
+            "    elif y > 2:\n"
+            "        delete()\n"
+        )
+        impl = [f for f in facts if f.relation_kind == "implements_behavior"]
+        assert len(impl) == 2, f"expected 2, got {len(impl)}"
+        conditions = {f.object_literal for f in impl}
+        assert "x == 1" in conditions
+        assert "y > 2" in conditions
+
+    def test_if_elif_else_branches(self):
+        """if/elif/else -> 3 implements_behavior"""
+        facts = _extract_facts(
+            "def f():\n"
+            "    if x == 1:\n"
+            "        create()\n"
+            "    elif y > 2:\n"
+            "        delete()\n"
+            "    else:\n"
+            "        fallback()\n"
+        )
+        impl = [f for f in facts if f.relation_kind == "implements_behavior"]
+        assert len(impl) == 3, f"expected 3, got {len(impl)}"
+        types = {f.metadata.get("branch_type") for f in impl}
+        assert types == {"if", "elif", "else"}, f"expected if/elif/else, got {types}"
+
+    def test_guard_condition_skipped(self):
+        """check_mode guard -> no implements_behavior for that branch"""
+        facts = _extract_facts(
+            "def f():\n"
+            "    if module.check_mode:\n"
+            "        return\n"
+            "    if x == 1:\n"
+            "        create()\n"
+        )
+        impl = [f for f in facts if f.relation_kind == "implements_behavior"]
+        assert len(impl) == 1, f"expected 1 (skip guard), got {len(impl)}"
+        assert impl[0].object_literal == "x == 1"
+
+    def test_no_if_branches(self):
+        """No if-statement -> no implements_behavior facts"""
+        facts = _extract_facts("def f():\n    pass\n")
+        impl = [f for f in facts if f.relation_kind == "implements_behavior"]
+        assert len(impl) == 0
+
+    def test_empty_branch_no_call(self):
+        """if cond: pass -> no implements_behavior (no call in body)"""
+        facts = _extract_facts("def f():\n    if x:\n        pass\n")
+        impl = [f for f in facts if f.relation_kind == "implements_behavior"]
+        assert len(impl) == 0
+
+    def test_method_with_branch(self):
+        """Class method branch -> correct qualified_name"""
+        facts = _extract_facts(
+            "class Foo:\n    def bar(self):\n        if enabled:\n            run()\n"
+        )
+        impl = [f for f in facts if f.relation_kind == "implements_behavior"]
+        assert len(impl) == 1
+        assert impl[0].subject_qualified_name == "Foo::bar"
+
+    def test_subject_node_id_set(self):
+        """subject_node_id is set from generate_node_id"""
+        facts = _extract_facts("def f():\n    if x:\n        run()\n")
+        impl = [f for f in facts if f.relation_kind == "implements_behavior"]
+        assert len(impl) == 1
+        assert impl[0].subject_node_id is not None
+        from pycodegraph.extraction.helpers import generate_node_id
+
+        expected_id = generate_node_id(impl[0].subject_file_path, "function", "f")
+        assert impl[0].subject_node_id == expected_id, (
+            f"expected {expected_id}, got {impl[0].subject_node_id}"
+        )
+
+
+class TestImplementsBehaviorEndToEnd:
+    """Integration: InlineFact -> SemanticRelation pipeline for
+    IMPLEMENTS_BEHAVIOR."""
+
+    SRC = (
+        "def run(x: int = 5) -> None:\n"
+        "    if x > 0:\n"
+        "        process()\n"
+        "    else:\n"
+        "        skip()\n"
+        "\n"
+        "def configure() -> None:\n"
+        "    if module.check_mode:\n"
+        "        return\n"
+        "    if params['state'] == 'present':\n"
+        "        create()\n"
+    )
+
+    def test_flush_and_read_back(self):
+        """index_all + build_semantic_layer -> read_relations(IMPLEMENTS_BEHAVIOR)"""
+        import tempfile
+        from pathlib import Path
+
+        td = tempfile.mkdtemp()
+        full = Path(td) / "mod.py"
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(self.SRC)
+        cg = CodeGraph.init(td)
+        cg.index_all()
+        cg.build_semantic_layer(
+            repository_id="test/repo",
+            revision_value="abc123",
+            built_at=1700000000,
+        )
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.IMPLEMENTS_BEHAVIOR)
+        # Expected:
+        #   run(): x > 0 -> process(), else -> skip()   = 2
+        #   configure(): params['state'] == 'present' -> create()  = 1
+        #   Total = 3 (check_mode guard skipped)
+        assert len(rels) >= 3, (
+            f"expected >=3 IMPLEMENTS_BEHAVIOR relations, got {len(rels)}"
+        )
+        for rel in rels:
+            assert rel.condition_expression is not None
+            assert "branch_condition" in rel.condition_expression
+            assert "branch_action" in rel.condition_expression
+        for rel in rels:
+            assert len(rel.evidence_refs) >= 1
+        cg.close()
