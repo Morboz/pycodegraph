@@ -241,8 +241,12 @@ class SemanticLayerBuilder:
             RelationKind.FORWARDS_VALUE,
             CapabilityName.VALUE_FORWARDING,
             AuthorityScope.IMPLEMENTATION_TOPOLOGY,
-            ExtractionMethod.STATIC_ANALYSIS,
-            "0.0.1",
+            ExtractionMethod.PARSER,
+            "inline-xg-118-1",
+            # FORWARDS_VALUE (intra-procedural) is produced by the InlineFact
+            # pipeline via the Python extract_inline_facts hook (issue #117).
+            # The registered extractor is a no-op here — the real data
+            # arrives via build_semantic_layer(inline_facts=...).
             empty,
         )
         self.register_extractor(
@@ -328,6 +332,7 @@ class SemanticLayerBuilder:
         _INLINE_FACT_VERSIONS: dict[str, str] = {
             "stores_default": "inline-xg-114-1",
             "implements_behavior": "inline-xg-117-1",
+            "forwards_value": "inline-xg-118-1",
         }
         if inline_facts:
             ds_id = self.dataset_id()

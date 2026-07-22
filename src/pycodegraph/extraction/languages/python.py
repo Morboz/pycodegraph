@@ -350,7 +350,183 @@ def _python_extract_inline_facts(
                 )
                 facts.extend(branch_facts)
 
+    # ── 7. Walk function body for call-site param forwarding → FORWARDS_VALUE ──
+    if body_node is not None:
+        param_names = _get_parameter_names(params_node, source_bytes)
+        forward_facts = _extract_forward_value_facts(
+            body_node,
+            source_bytes,
+            file_path,
+            qualified_name,
+            node_id,
+            param_names,
+        )
+        facts.extend(forward_facts)
+
     return facts
+
+
+def _get_parameter_names(params_node: TSNode, source_bytes: bytes) -> set[str]:
+    """Extract parameter names from a function's parameter AST node.
+
+    Returns a set of parameter names (excluding self/cls).
+    """
+    names: set[str] = set()
+    for i in range(params_node.named_child_count):
+        param = params_node.named_child(i)
+        if param is None:
+            continue
+        # parameter nodes: identifier, default_parameter, typed_default_parameter,
+        # typed_parameter, list_splat_pattern, dictionary_splat_pattern
+        name_node = get_child_by_field(param, "name")
+        if name_node is None and param.type == "identifier":
+            # Simple bare parameter like ``x``
+            pname = get_node_text(param, source_bytes)
+            if pname in ("self", "cls"):
+                continue
+            names.add(pname)
+            continue
+        if name_node is None:
+            continue
+        pname = get_node_text(name_node, source_bytes)
+        if pname in ("self", "cls"):
+            continue
+        names.add(pname)
+    return names
+
+
+def _extract_forward_value_facts(
+    body_node: TSNode,
+    source_bytes: bytes,
+    file_path: str,
+    qualified_name: str,
+    node_id: str,
+    param_names: set[str],
+) -> list[InlineFact]:
+    """Extract FORWARDS_VALUE InlineFacts by walking function body for
+    call sites where a function parameter is forwarded to a callee argument.
+
+    Matches:
+      ``helper(x)`` — positional, ``x`` is a function param
+      ``helper(arg=x)`` — keyword, ``x`` is a function param
+
+    Does NOT match transforms (``helper(x + 1)``), attribute access
+    (``self.x``), or complex expressions.
+    """
+    facts: list[InlineFact] = []
+    for i in range(body_node.named_child_count):
+        stmt = body_node.named_child(i)
+        if stmt is None:
+            continue
+
+        # Find call node(s) in this statement
+        calls_in_stmt = _collect_calls_in_stmt(stmt, source_bytes)
+        for call_node, call_text in calls_in_stmt:
+            arg_list = _get_argument_list(call_node)
+            if arg_list is None:
+                continue
+
+            arg_idx = 0
+            for j in range(arg_list.named_child_count):
+                arg = arg_list.named_child(j)
+                if arg is None:
+                    continue
+
+                pname: str | None = None
+                arg_type: str = "positional"
+                kw_name: str | None = None
+
+                if arg.type == "identifier":
+                    pname = get_node_text(arg, source_bytes)
+                elif arg.type == "keyword_argument":
+                    kw_name_node = arg.child_by_field_name("name")
+                    kw_val = arg.child_by_field_name("value")
+                    if kw_val is not None and kw_val.type == "identifier":
+                        pname = get_node_text(kw_val, source_bytes)
+                        kw_name = (
+                            get_node_text(kw_name_node, source_bytes)
+                            if kw_name_node
+                            else None
+                        )
+                        arg_type = "keyword"
+                else:
+                    arg_idx += 1
+                    continue
+
+                if pname is None or pname not in param_names:
+                    arg_idx += 1
+                    continue
+
+                callee_name = call_text.split("(")[0] if call_text else ""
+                obj_text = f"{callee_name}.{kw_name or arg_idx}"
+
+                metadata: dict = {
+                    "callee": callee_name,
+                    "param_index": arg_idx,
+                    "param_name": pname,
+                    "arg_type": arg_type,
+                    "call_line": call_node.start_point[0] + 1,
+                }
+                if kw_name is not None:
+                    metadata["kw_arg_name"] = kw_name
+
+                facts.append(
+                    InlineFact(
+                        relation_kind="forwards_value",
+                        subject_node_id=node_id,
+                        subject_qualified_name=qualified_name,
+                        subject_file_path=file_path,
+                        object_literal=obj_text,
+                        start_line=arg.start_point[0] + 1,
+                        end_line=arg.end_point[0] + 1,
+                        evidence_kind="source",
+                        extraction_method="parser",
+                        metadata=metadata,
+                    )
+                )
+                arg_idx += 1
+    return facts
+
+
+def _collect_calls_in_stmt(
+    stmt: TSNode, source_bytes: bytes
+) -> list[tuple[TSNode, str]]:
+    """Collect call nodes from a statement, returning (call_node, text) pairs.
+
+    Handles: ``helper(x)``, ``result = helper(x)``, and other patterns
+    where a call is the main action.
+    """
+    results: list[tuple[TSNode, str]] = []
+    if stmt.type == "expression_statement":
+        for i in range(stmt.named_child_count):
+            child = stmt.named_child(i)
+            if child is None:
+                continue
+            if child.type == "call":
+                text = get_node_text(child, source_bytes)
+                results.append((child, text))
+            elif child.type == "assignment":
+                # ``result = helper(x)`` — recurse into assignment
+                results.extend(_collect_calls_in_stmt(child, source_bytes))
+    elif stmt.type == "assignment":
+        # ``result = helper(x)`` — the call is a named child
+        # (first is ``left`` identifier). Python grammar may not name this
+        # field, so we scan named children for a ``call`` node.
+        for i in range(stmt.named_child_count):
+            child = stmt.named_child(i)
+            if child is not None and child.type == "call":
+                text = get_node_text(child, source_bytes)
+                results.append((child, text))
+    return results
+
+
+def _get_argument_list(call_node: TSNode) -> TSNode | None:
+    """Get the argument_list child of a call node."""
+    for i in range(call_node.named_child_count):
+        child = call_node.named_child(i)
+        if child is not None and child.type == "argument_list":
+            return child
+    return None
 
 
 # =============================================================================

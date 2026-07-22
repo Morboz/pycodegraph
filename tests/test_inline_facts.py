@@ -496,3 +496,128 @@ class TestImplementsBehaviorEndToEnd:
         for rel in rels:
             assert len(rel.evidence_refs) >= 1
         cg.close()
+
+
+# =============================================================================
+# FORWARDS_VALUE (intra-procedural) tests (issue #118)
+# =============================================================================
+
+
+class TestPythonForwardsValue:
+    """Unit tests for intra-procedural FORWARDS_VALUE InlineFact production."""
+
+    def test_positional_forward(self):
+        """def f(x): helper(x) -> 1 forwards_value (x -> helper.0)"""
+        facts = _extract_facts("def f(x):\n    helper(x)\n")
+        fv = [f for f in facts if f.relation_kind == "forwards_value"]
+        assert len(fv) == 1, f"expected 1, got {len(fv)}"
+        assert fv[0].object_literal == "helper.0"
+        assert fv[0].metadata.get("param_name") == "x"
+        assert fv[0].metadata.get("arg_type") == "positional"
+
+    def test_keyword_forward(self):
+        """def f(y): helper(arg=y) -> 1 forwards_value (y -> helper.arg)"""
+        facts = _extract_facts("def f(y):\n    helper(arg=y)\n")
+        fv = [f for f in facts if f.relation_kind == "forwards_value"]
+        assert len(fv) == 1, f"expected 1, got {len(fv)}"
+        assert fv[0].object_literal == "helper.arg"
+        assert fv[0].metadata.get("param_name") == "y"
+        assert fv[0].metadata.get("arg_type") == "keyword"
+        assert fv[0].metadata.get("kw_arg_name") == "arg"
+
+    def test_multiple_forwards(self):
+        """def f(x, y): helper(x, other=y) -> 2 forwards_value"""
+        facts = _extract_facts("def f(x, y):\n    helper(x, other=y)\n")
+        fv = [f for f in facts if f.relation_kind == "forwards_value"]
+        assert len(fv) == 2, f"expected 2, got {len(fv)}"
+        params = {f.metadata["param_name"] for f in fv}
+        assert params == {"x", "y"}
+
+    def test_non_param_identifier(self):
+        """local_var not in param_names -> no forwards_value"""
+        facts = _extract_facts("def f():\n    x = 1\n    helper(x)\n")
+        fv = [f for f in facts if f.relation_kind == "forwards_value"]
+        assert len(fv) == 0
+
+    def test_complex_expr_not_forwarded(self):
+        """helper(x + 1) -> not forwarded (complex expr, not identifier)"""
+        facts = _extract_facts("def f(x):\n    helper(x + 1)\n")
+        fv = [f for f in facts if f.relation_kind == "forwards_value"]
+        assert len(fv) == 0
+
+    def test_self_not_forwarded(self):
+        """self.attr is not a parameter forwarding"""
+        facts = _extract_facts(
+            "class Foo:\n    def bar(self):\n        helper(self.x)\n"
+        )
+        fv = [f for f in facts if f.relation_kind == "forwards_value"]
+        assert len(fv) == 0
+
+    def test_assignment_call_forward(self):
+        """result = helper(x) -> forwards_value (call in RHS)"""
+        facts = _extract_facts("def f(x):\n    result = helper(x)\n")
+        fv = [f for f in facts if f.relation_kind == "forwards_value"]
+        assert len(fv) == 1
+        assert fv[0].metadata.get("param_name") == "x"
+        assert fv[0].object_literal == "helper.0"
+
+    def test_subject_node_id_set(self):
+        """forwards_value subject is the function, with correct node_id"""
+        facts = _extract_facts("def f(x):\n    helper(x)\n")
+        fv = [f for f in facts if f.relation_kind == "forwards_value"]
+        assert len(fv) == 1
+        assert fv[0].subject_node_id is not None
+        from pycodegraph.extraction.helpers import generate_node_id
+
+        expected_id = generate_node_id(fv[0].subject_file_path, "function", "f")
+        assert fv[0].subject_node_id == expected_id
+
+    def test_method_forward(self):
+        """Class method forwards param -> correct qualified_name"""
+        facts = _extract_facts("class Foo:\n    def bar(self, x):\n        helper(x)\n")
+        fv = [f for f in facts if f.relation_kind == "forwards_value"]
+        assert len(fv) == 1
+        assert fv[0].subject_qualified_name == "Foo::bar"
+        assert fv[0].metadata.get("param_name") == "x"
+
+
+class TestForwardsValueEndToEnd:
+    """Integration: InlineFact -> SemanticRelation pipeline for
+    FORWARDS_VALUE."""
+
+    SRC = (
+        "def process(x, y):\n"
+        "    helper(x, other=y)\n"
+        "\n"
+        "def simple(a):\n"
+        "    transform(a + 1)\n"
+    )
+
+    def test_flush_and_read_back(self):
+        """index_all + build_semantic_layer -> read_relations(FORWARDS_VALUE)"""
+        import tempfile
+        from pathlib import Path
+
+        td = tempfile.mkdtemp()
+        full = Path(td) / "mod.py"
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(self.SRC)
+        cg = CodeGraph.init(td)
+        cg.index_all()
+        cg.build_semantic_layer(
+            repository_id="test/repo",
+            revision_value="abc123",
+            built_at=1700000000,
+        )
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        # Expected:
+        #   process(): x -> helper.0, y -> helper.other  = 2
+        #   simple(): a + 1 is NOT forwarded (complex expr) = 0
+        #   Total = 2
+        assert len(rels) >= 2, f"expected >=2 FORWARDS_VALUE relations, got {len(rels)}"
+        for rel in rels:
+            assert len(rel.evidence_refs) >= 1
+            assert rel.condition_expression is not None
+            assert "param_name" in rel.condition_expression
+        cg.close()
