@@ -461,6 +461,11 @@ class SemanticLayerBuilder:
 
         _write_entities(conn, entities)
 
+        # PostgreSQL connection (from engine.connect()) is auto-in-transaction
+        # but not auto-commit. Commit once after all writes so the semantic
+        # layer is visible to subsequent queries (issue #121 debugging).
+        conn.commit()
+
         duration_ms = _monotonic_ms() - start
         return SemanticBuildResult(
             success=not errors,

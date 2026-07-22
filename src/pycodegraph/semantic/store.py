@@ -110,10 +110,26 @@ def write_relations(conn: Connection, relations: list[SemanticRelation]) -> None
 
     Idempotent on ``relation_id``: existing rows are deleted first so
     re-running a build with the same IDs (deterministic) doesn't duplicate.
+
+    Also de-duplicates within the batch itself: extractors may emit two
+    distinct :class:`SemanticRelation` objects that hash to the same
+    ``relation_id`` (e.g. two identical ``if`` branches in one function, or
+    identical call-site forwarding). The first occurrence wins — they are
+    semantically equivalent relations backed by different source spans, and
+    the DB primary key is the relation_id, not the span.
     """
     if not relations:
         return
-    relation_ids = [r.relation_id for r in relations]
+    # De-duplicate within the batch by relation_id, preserving first occurrence
+    seen_ids: set[str] = set()
+    unique_relations: list[SemanticRelation] = []
+    for r in relations:
+        if r.relation_id in seen_ids:
+            continue
+        seen_ids.add(r.relation_id)
+        unique_relations.append(r)
+
+    relation_ids = [r.relation_id for r in unique_relations]
     conn.execute(
         delete(semantic_relations).where(
             semantic_relations.c.relation_id.in_(relation_ids)
@@ -126,7 +142,7 @@ def write_relations(conn: Connection, relations: list[SemanticRelation]) -> None
     )
     rel_rows: list[dict[str, Any]] = []
     ev_rows: list[dict[str, Any]] = []
-    for r in relations:
+    for r in unique_relations:
         rel_rows.append(_relation_row(r))
         for er in r.evidence_refs:
             ev_rows.append(_evidence_row(r.relation_id, er))

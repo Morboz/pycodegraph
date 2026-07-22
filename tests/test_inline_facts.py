@@ -899,3 +899,108 @@ class TestForwardsValueInter:
         # Just verify it ran without error and produced something
         assert isinstance(rels, list)
         cg.close()
+
+    # ── keyword argument support (issue #121) ──────────────────────────
+
+    def test_keyword_forward(self):
+        """main(config); load(unredirected_headers=config) -> 1 inter
+        FORWARDS_VALUE via keyword arg.
+
+        This is the real-world ansible pattern: `fetch_url(unredirected_headers=unredirected_headers)`.
+        """
+        callee = "def load(unredirected_headers):\n    pass\n"
+        caller = (
+            "import helpers\n\n\n"
+            "def main(config):\n"
+            "    helpers.load(unredirected_headers=config)\n"
+        )
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        inter = _inter_forwards(rels)
+        assert len(inter) == 1, f"expected 1, got {len(inter)}"
+        r = inter[0]
+        assert r.condition_expression.get("arg_type") == "keyword"
+        assert r.condition_expression.get("caller_param") == "config"
+        assert r.condition_expression.get("callee_param") == "unredirected_headers"
+        assert r.condition_expression.get("kw_arg_name") == "unredirected_headers"
+        cg.close()
+
+    def test_keyword_same_name_forward(self):
+        """main(unredirected_headers); load(unredirected_headers=unredirected_headers)
+        -> 1 inter FORWARDS_VALUE, the canonical ansible pattern."""
+        callee = "def load(unredirected_headers):\n    pass\n"
+        caller = (
+            "import helpers\n\n\n"
+            "def main(unredirected_headers):\n"
+            "    helpers.load(unredirected_headers=unredirected_headers)\n"
+        )
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        inter = _inter_forwards(rels)
+        assert len(inter) == 1
+        r = inter[0]
+        assert r.condition_expression.get("caller_param") == "unredirected_headers"
+        assert r.condition_expression.get("callee_param") == "unredirected_headers"
+        assert "load.unredirected_headers" in str(r.literal_object)
+        cg.close()
+
+    def test_mixed_positional_and_keyword(self):
+        """main(a, b); load(a, other=b) -> 2 inter FORWARDS_VALUE
+        (one positional, one keyword)."""
+        callee = "def load(a, other):\n    pass\n"
+        caller = "import helpers\n\n\ndef main(a, b):\n    helpers.load(a, other=b)\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        inter = _inter_forwards(rels)
+        assert len(inter) == 2, f"expected 2, got {len(inter)}"
+        by_type = {r.condition_expression.get("arg_type") for r in inter}
+        assert by_type == {"positional", "keyword"}
+        # positional: a -> callee param 0 (a)
+        pos = next(
+            r for r in inter if r.condition_expression.get("arg_type") == "positional"
+        )
+        assert pos.condition_expression.get("callee_param") == "a"
+        # keyword: other=b -> callee param named "other"
+        kw = next(
+            r for r in inter if r.condition_expression.get("arg_type") == "keyword"
+        )
+        assert kw.condition_expression.get("callee_param") == "other"
+        assert kw.condition_expression.get("caller_param") == "b"
+        cg.close()
+
+    def test_keyword_complex_value_not_forwarded(self):
+        """load(unredirected_headers=config + extra) -> 0 (complex value)."""
+        callee = "def load(unredirected_headers):\n    pass\n"
+        caller = (
+            "import helpers\n\n\n"
+            "def main(config, extra):\n"
+            "    helpers.load(unredirected_headers=config + extra)\n"
+        )
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        inter = _inter_forwards(rels)
+        assert len(inter) == 0
+        cg.close()
+
+    def test_keyword_to_kwargs_callee(self):
+        """callee with **kwargs: load(unredirected_headers=config) ->
+        callee_param labeled 'unredirected_headers' (best-effort, no matching
+        named param). Still emits the relation."""
+        callee = "def load(**kwargs):\n    pass\n"
+        caller = (
+            "import helpers\n\n\n"
+            "def main(config):\n"
+            "    helpers.load(unredirected_headers=config)\n"
+        )
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        inter = _inter_forwards(rels)
+        assert len(inter) == 1
+        r = inter[0]
+        assert r.condition_expression.get("callee_param") == "unredirected_headers"
+        cg.close()
