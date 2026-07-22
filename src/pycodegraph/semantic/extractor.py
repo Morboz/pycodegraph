@@ -180,6 +180,7 @@ class SemanticLayerBuilder:
         from .extractors import (
             extract_calls,
             extract_exposes_public_surface,
+            extract_forwards_value,
             extract_owns_control,
             extract_reads_default,
         )
@@ -244,10 +245,21 @@ class SemanticLayerBuilder:
             ExtractionMethod.PARSER,
             "inline-xg-118-1",
             # FORWARDS_VALUE (intra-procedural) is produced by the InlineFact
-            # pipeline via the Python extract_inline_facts hook (issue #117).
-            # The registered extractor is a no-op here — the real data
-            # arrives via build_semantic_layer(inline_facts=...).
+            # pipeline via the Python extract_inline_facts hook (issue #118).
+            # The registered extractor is a no-op here — the real data for
+            # intra-proc arrives via build_semantic_layer(inline_facts=...).
             empty,
+        )
+        self.register_extractor(
+            RelationKind.FORWARDS_VALUE,
+            CapabilityName.VALUE_FORWARDING,
+            AuthorityScope.IMPLEMENTATION_TOPOLOGY,
+            ExtractionMethod.STATIC_ANALYSIS,
+            "xg-120-1",
+            # FORWARDS_VALUE (inter-procedural) is produced by a registered
+            # extractor that walks CALLS edges + caller source to find
+            # cross-function parameter forwarding (issue #120).
+            extract_forwards_value,
         )
         self.register_extractor(
             RelationKind.IMPLEMENTS_BEHAVIOR,

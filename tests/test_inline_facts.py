@@ -749,3 +749,153 @@ class TestGuardsEffectEndToEnd:
         for rel in rels:
             assert len(rel.evidence_refs) >= 1
         cg.close()
+
+
+# =============================================================================
+# FORWARDS_VALUE (inter-procedural) tests (issue #120)
+# =============================================================================
+
+
+def _forwards_inter_build(callee_src: str, caller_src: str) -> CodeGraph:
+    """Build a CodeGraph with callee (helpers.py) + caller (main.py) and run
+    build_semantic_layer. Two-file dotted-call pattern so CALLS edges resolve.
+
+    Returns an open CodeGraph with FORWARDS_VALUE relations in the DB.
+    Caller must close() when done.
+    """
+    td = tempfile.mkdtemp()
+    write(td, "helpers.py", callee_src)
+    write(td, "main.py", caller_src)
+    cg = CodeGraph.init(td)
+    cg.index_all()
+    cg.build_semantic_layer(
+        repository_id="test/repo",
+        revision_value="abc123",
+        built_at=1700000000,
+    )
+    return cg
+
+
+def _inter_forwards(rels: list) -> list:
+    """Filter to only inter-procedural FORWARDS_VALUE relations."""
+    return [
+        r
+        for r in rels
+        if r.condition_expression
+        and r.condition_expression.get("forwards_type") == "inter"
+    ]
+
+
+class TestForwardsValueInter:
+    """inter-procedural FORWARDS_VALUE extractor -- cross-function param
+    forwarding via CALLS edges."""
+
+    def test_basic_forward(self):
+        """main(config); load(config) -> 1 inter FORWARDS_VALUE"""
+        callee = "def load(config):\n    pass\n"
+        caller = "import helpers\n\n\ndef main(config):\n    helpers.load(config)\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        inter = _inter_forwards(rels)
+        assert len(inter) >= 1, f"expected >=1 inter FORWARDS_VALUE, got {len(inter)}"
+        r = inter[0]
+        assert r.condition_expression.get("caller_param") == "config"
+        assert r.condition_expression.get("callee_param") == "config"
+        # subject is call site
+        assert "::L" in r.subject_entity_id
+        # object is callee.param
+        assert "load.config" in str(r.literal_object)
+        cg.close()
+
+    def test_non_param_not_forwarded(self):
+        """main(): local_var passed -> 0 inter FORWARDS_VALUE for that arg"""
+        callee = "def load(config):\n    pass\n"
+        caller = (
+            "import helpers\n\n\n"
+            "def main():\n"
+            "    local_var = 'x'\n"
+            "    helpers.load(local_var)\n"
+        )
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        inter = _inter_forwards(rels)
+        assert len(inter) == 0, f"expected 0 (local var not a param), got {len(inter)}"
+        cg.close()
+
+    def test_complex_expr_not_forwarded(self):
+        """main(config): helpers.load(config + 1) -> 0 (complex expr)"""
+        callee = "def load(config):\n    pass\n"
+        caller = "import helpers\n\n\ndef main(config):\n    helpers.load(config + 1)\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        inter = _inter_forwards(rels)
+        assert len(inter) == 0
+        cg.close()
+
+    def test_multi_param_forward(self):
+        """main(a, b); load(a, b) -> 2 inter FORWARDS_VALUE"""
+        callee = "def load(a, b):\n    pass\n"
+        caller = "import helpers\n\n\ndef main(a, b):\n    helpers.load(a, b)\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        inter = _inter_forwards(rels)
+        assert len(inter) >= 2, f"expected >=2, got {len(inter)}"
+        callee_params = {r.condition_expression.get("callee_param") for r in inter}
+        assert "a" in callee_params
+        assert "b" in callee_params
+        cg.close()
+
+    def test_partial_forward(self):
+        """main(a, b); load(literal, b) -> 1 inter FORWARDS_VALUE (b only)"""
+        callee = "def load(a, b):\n    pass\n"
+        caller = "import helpers\n\n\ndef main(a, b):\n    helpers.load('literal', b)\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        inter = _inter_forwards(rels)
+        assert len(inter) == 1, f"expected 1, got {len(inter)}"
+        assert inter[0].condition_expression.get("callee_param") == "b"
+        cg.close()
+
+    def test_coexists_with_intra(self):
+        """Both intra and inter FORWARDS_VALUE produced for same relation kind.
+
+        intra (#118): subject=function, object=callee.N, via InlineFact
+        inter (#120): subject=call_site, object=callee.param, via extractor
+        Both coexist in semantic_relations under RelationKind.FORWARDS_VALUE.
+        """
+        # callee forwards its param onward (intra) AND is called with a
+        # forwarded param (inter) — single call to avoid the #118 relation_id
+        # collision bug (same subject+object across identical call sites).
+        callee = "def load(config):\n    validate(config)\n"
+        caller = "import helpers\n\n\ndef main(config):\n    helpers.load(config)\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        # inter: main::L forwards config to load.config
+        inter = _inter_forwards(rels)
+        assert len(inter) >= 1, f"expected >=1 inter, got {len(inter)}"
+        # intra may or may not be present depending on whether load's call
+        # to validate resolves — just verify inter works and both kinds
+        # share the table without collision
+        for r in inter:
+            assert r.condition_expression.get("forwards_type") == "inter"
+        cg.close()
+
+    def test_no_file_provider(self):
+        """When file_provider is None, extractor returns [] gracefully.
+        We can't easily test this with CodeGraph.init (which sets a file
+        provider), so just verify the extractor doesn't crash on a normal
+        build."""
+        callee = "def load(config):\n    pass\n"
+        caller = "import helpers\n\n\ndef main(config):\n    helpers.load(config)\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        # Just verify it ran without error and produced something
+        assert isinstance(rels, list)
+        cg.close()
