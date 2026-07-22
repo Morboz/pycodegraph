@@ -219,6 +219,13 @@ def main() -> int:
         help="不查链,只打印 relation 报告",
     )
     parser.add_argument(
+        "--semantic",
+        nargs="?",
+        const="uri",
+        metavar="QUERY",
+        help="semantic_explore 自然语义查询(默认 'uri')",
+    )
+    parser.add_argument(
         "--max-hops",
         type=int,
         default=8,
@@ -253,8 +260,14 @@ def main() -> int:
     print("\n[3] Relation 报告")
     relation_report(conn)
 
-    # ── 4. 参数透传链查询 ──────────────────────────────────────────────
-    if not args.no_chain:
+    # ── 4. semantic_explore 自然语义查询 ─────────────────────────────────
+    if args.semantic is not None:
+        query_str = args.semantic if args.semantic else "uri"
+        print(f"\n[4] semantic_explore: {query_str}")
+        print(cg.semantic_explore(query_str))
+
+    # ── 5. 参数透传链查询 ──────────────────────────────────────────────
+    elif not args.no_chain:
         func, param = args.chain
         print(f"\n[4] 参数透传链查询: {func}({param})")
         chain = query_forwards_chain(conn, func, param, max_hops=args.max_hops)

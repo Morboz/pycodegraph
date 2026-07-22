@@ -573,9 +573,157 @@ class CodeGraph:
         """
         return self._explore_engine.explore(query, options)
 
-    # =========================================================================
+    # ------------------------------------------------------------------
+    # Semantic explore (issue #123) — natural-language query that
+    # returns function signature + parametr forwarding chains + relation
+    # statistics as formatted text, without full source exploration.
+    # ------------------------------------------------------------------
+
+    def semantic_explore(
+        self,
+        query: str,
+        *,
+        max_chain_hops: int = 8,
+    ) -> str:
+        """Explore a function's semantic properties by natural-language query.
+
+        Given a query like ``"uri 这个函数"``, this method:
+        1. Searches the graph for the best matching function/class node
+        2. Returns the function signature and parameter list
+        3. For each parameter that has a FORWARDS_VALUE forwarding chain,
+           prints the complete propagation path
+        4. Shows relation statistics for the matched node
+
+        Args:
+            query: Natural-language query to identify the function/class.
+            max_chain_hops: Maximum BFS depth for forwarding-chain queries.
+
+        Returns:
+            Formatted text (similar to ``explore()`` style).
+        """
+        from .semantic.store import read_relations
+        from .semantic.types import RelationKind
+
+        # ── 1. Semantic locate: find the best matching function/class ──
+        nodes: list[Node] = self.search(query, limit=20)
+        # Prefer function/method nodes; fall back to any named node
+        target: Node | None = None
+        target_nodes: list[Node] = []
+        for n in nodes:
+            if n.kind.value in ("function", "method", "class"):
+                if target is None:
+                    target = n
+                target_nodes.append(n)
+
+        if target is None:
+            return f"[semantic_explore] No function/class found for query: {query}"
+
+        # Build a list of all matched function/method/class names
+        matched_names = [n.qualified_name for n in target_nodes if n.qualified_name]
+
+        # ── 2. Build output sections ──
+        lines: list[str] = []
+        sep = "=" * 60
+        lines.append(sep)
+        lines.append(f"semantic_explore query: {query}")
+        lines.append(sep)
+        lines.append("")
+
+        # ── 2a. Matched nodes (show top 2, rest by name) ──
+        for idx, n in enumerate(target_nodes):
+            if idx == 0 or idx == 1:
+                qn = n.qualified_name or n.name
+                fp = n.file_path or n.file_path
+                fl = n.start_line or n.start_line
+                sig = (n.signature or "")[:100]
+                lines.append(f"  {n.kind.value}: {qn}")
+                lines.append(f"    file: {fp}:{fl}")
+                if sig:
+                    lines.append(f"    signature: {sig}")
+            elif idx == len(target_nodes) - 1:
+                lines.append(f"  ... ({len(target_nodes)} matches total)")
+
+        # ── 2b. Parameter forwarding chains ──
+        conn = self._queries.connection
+        all_fv = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+        # Index inter FORWARDS_VALUE by caller_func
+        inter_by_caller: dict[str, list] = {}
+        for r in all_fv:
+            ce = r.condition_expression
+            if not ce or ce.get("forwards_type") != "inter":
+                continue
+            caller_func = (
+                r.subject_entity_id.split("::")[0]
+                if "::" in r.subject_entity_id
+                else r.subject_entity_id
+            )
+            inter_by_caller.setdefault(caller_func, []).append(r)
+
+        # Check each matched function for forwarding chains.
+        # Only the FIRST (best) match gets full chain expansion; the rest
+        # are listed by name only to keep output focused.
+        shown_chain_header = False
+        for match_idx, matched_name in enumerate(matched_names):
+            if matched_name not in inter_by_caller:
+                continue
+            edges = inter_by_caller[matched_name]
+            # Group by caller_param
+            by_param: dict[str, list] = {}
+            for e in edges:
+                cp = (e.condition_expression or {}).get("caller_param", "")
+                if cp:
+                    by_param.setdefault(cp, []).append(e)
+
+            if not by_param:
+                continue
+            if match_idx > 0:
+                # Secondary matches: list name + param count only
+                lines.append(
+                    f"  (also matched: {matched_name} — {len(by_param)} params forwarded)"
+                )
+                continue
+            if not shown_chain_header:
+                lines.append("")
+                lines.append("── 参数透传链 ──")
+                shown_chain_header = True
+
+            for param in sorted(by_param):
+                param_edges = by_param[param]
+                # Inline BFS for this param's chain
+                chain = _bfs_forwards_chain(
+                    conn, matched_name, param, max_hops=max_chain_hops
+                )
+                if not chain:
+                    continue
+                lines.append(f"  {param}:")
+                for h in chain:
+                    site = (
+                        h["call_site"].split("::L")[1]
+                        if "::L" in h["call_site"]
+                        else "?"
+                    )
+                    arrow = f"──[{h['arg_type']}, L{site}]──>"
+                    lines.append(
+                        f"    → {h['callee_func']}.{h['callee_param']}  ({arrow})"
+                    )
+                total_hops = max(h["hop"] for h in chain)
+                lines.append(f"    ({total_hops} 跳, {len(param_edges)} 转发边)")
+
+        # ── 2c. Relation statistics ──
+        lines.append("")
+        lines.append("── 语义层统计 ──")
+        for rk in RelationKind:
+            count = len(read_relations(conn, relation_kind=rk))
+            if count > 0:
+                lines.append(f"    {rk.value:35s} {count:>6,}")
+
+        lines.append("")
+        lines.append(sep)
+        return "\n".join(lines)
+
+    # =============================================================================
     # Properties
-    # =========================================================================
+    # =============================================================================
 
     @property
     def project_root(self) -> str:
@@ -600,3 +748,70 @@ class CodeGraph:
 
     def __exit__(self, *args):
         self.close()
+
+
+def _bfs_forwards_chain(
+    conn, start_func: str, start_param: str, *, max_hops: int = 8
+) -> list[dict]:
+    """BFS over inter-procedural FORWARDS_VALUE relations.
+
+    Returns list of hops, each a dict with hop/caller_func/caller_param/
+    callee_func/callee_param/call_site/arg_type.
+    """
+    from collections import deque
+
+    from .semantic.store import read_relations
+    from .semantic.types import RelationKind
+
+    all_fv = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+    out_edges: dict[tuple[str, str], list] = {}
+    for r in all_fv:
+        ce = r.condition_expression
+        if not ce or ce.get("forwards_type") != "inter":
+            continue
+        caller_func = (
+            r.subject_entity_id.split("::")[0]
+            if "::" in r.subject_entity_id
+            else r.subject_entity_id
+        )
+        caller_param = ce.get("caller_param")
+        if not caller_param:
+            continue
+        out_edges.setdefault((caller_func, caller_param), []).append(r)
+
+    chain: list[dict] = []
+    visited: set[tuple[str, str]] = set()
+    queue: deque = deque([(start_func, start_param, 0)])
+
+    while queue:
+        func, param, hop = queue.popleft()
+        if hop >= max_hops:
+            continue
+        key = (func, param)
+        if key in visited:
+            continue
+        visited.add(key)
+
+        for edge in out_edges.get(key, []):
+            ce = edge.condition_expression
+            obj = str(edge.literal_object or "")
+            if "." in obj:
+                callee_func, callee_param = obj.rsplit(".", 1)
+            else:
+                callee_func, callee_param = obj, ce.get("callee_param", "")
+            chain.append(
+                {
+                    "hop": hop + 1,
+                    "caller_func": func,
+                    "caller_param": param,
+                    "callee_func": callee_func,
+                    "callee_param": callee_param,
+                    "call_site": edge.subject_entity_id,
+                    "arg_type": ce.get("arg_type", "?"),
+                }
+            )
+            next_key = (callee_func, callee_param)
+            if next_key not in visited:
+                queue.append((callee_func, callee_param, hop + 1))
+
+    return chain
