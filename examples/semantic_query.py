@@ -4,7 +4,7 @@
 不索引、不构建，假设 PG 上已有数据（已通过 build_semantic_layer 构建过）。
 
 Usage:
-  # 默认查询 uri 的参数透传链
+  # 默认查询 uri 的参数透传链(不输出统计)
   uv run python examples/semantic_query.py
 
   # 查询其他函数
@@ -12,10 +12,9 @@ Usage:
 
   # 多个单词或短语查询
   uv run python examples/semantic_query.py ansible uri module
-  uv run python examples/semantic_query.py fetch_url unredirected_headers
 
-  # 跳过 relation 统计，只查语义链
-  uv run python examples/semantic_query.py "uri" --disable-stats
+  # 输出全量 Relation 统计
+  uv run python examples/semantic_query.py "uri" --stats
 
   # 指定其他 PG 地址
   PG_URL="postgresql+psycopg://user:pass@host:5432/db" uv run python examples/semantic_query.py
@@ -46,9 +45,9 @@ def main() -> int:
         help="自然语义查询，例如 'uri' / 'fetch_url' / 'open_url'（默认 'uri'）支持多个单词或短语",
     )
     parser.add_argument(
-        "--disable-stats",
+        "--stats",
         action="store_true",
-        help="跳过 relation 统计输出，只显示语义链",
+        help="输出全量 Relation 统计(默认不输出,只显示语义链)",
     )
     args = parser.parse_args()
     query = " ".join(args.query) if args.query else "uri"
@@ -63,7 +62,7 @@ def main() -> int:
 
     cg = CodeGraph.open_from_url(DB_URL, ANSIBLE_SRC)
 
-    print(cg.semantic_explore(query, disable_stats=args.disable_stats))
+    print(cg.semantic_explore(query, disable_stats=not args.stats))
 
     cg.close()
     return 0
