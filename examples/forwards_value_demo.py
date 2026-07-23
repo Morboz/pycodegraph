@@ -219,6 +219,11 @@ def main() -> int:
         help="不查链,只打印 relation 报告",
     )
     parser.add_argument(
+        "--disable-stats",
+        action="store_true",
+        help="semantic_explore 时跳过 relation 统计,只查语义链",
+    )
+    parser.add_argument(
         "--semantic",
         nargs="?",
         const="uri",
@@ -264,7 +269,7 @@ def main() -> int:
     if args.semantic is not None:
         query_str = args.semantic if args.semantic else "uri"
         print(f"\n[4] semantic_explore: {query_str}")
-        print(cg.semantic_explore(query_str))
+        print(cg.semantic_explore(query_str, disable_stats=args.disable_stats))
 
     # ── 5. 参数透传链查询 ──────────────────────────────────────────────
     elif not args.no_chain:

@@ -584,6 +584,7 @@ class CodeGraph:
         query: str,
         *,
         max_chain_hops: int = 8,
+        disable_stats: bool = False,
     ) -> str:
         """Explore a function's semantic properties by natural-language query.
 
