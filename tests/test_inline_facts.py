@@ -1004,3 +1004,82 @@ class TestForwardsValueInter:
         r = inter[0]
         assert r.condition_expression.get("callee_param") == "unredirected_headers"
         cg.close()
+
+
+# =============================================================================
+# CONSUMES_RETURN tests (issue #125)
+# =============================================================================
+
+
+class TestConsumesReturn:
+    """CONSUMES_RETURN extractor — caller uses callee's return value."""
+
+    def test_assigned_return(self):
+        """resp = fetch_url(...) -> 1 CONSUMES_RETURN"""
+        callee = "def get_data():\n    return 'data'\n"
+        caller = "import helpers\n\n\ndef main():\n    resp = helpers.get_data()\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.CONSUMES_RETURN)
+        assert len(rels) == 1, f"expected 1, got {len(rels)}"
+        r = rels[0]
+        assert r.subject_entity_id.startswith("main::L")
+        assert r.literal_object == "get_data"
+        assert r.condition_expression.get("variable_name") == "resp"
+        cg.close()
+
+    def test_bare_call_no_return(self):
+        """fetch_url(...) without assign -> 0 CONSUMES_RETURN"""
+        callee = "def get_data():\n    return 'data'\n"
+        caller = "import helpers\n\n\ndef main():\n    helpers.get_data()\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.CONSUMES_RETURN)
+        assert len(rels) == 0
+        cg.close()
+
+    def test_attribute_assigned(self):
+        """self.result = get_data() -> 1 CONSUMES_RETURN (attr target)"""
+        callee = "def get_data():\n    return 'data'\n"
+        caller = "import helpers\n\n\nclass Foo:\n    def run(self):\n        self.result = helpers.get_data()\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.CONSUMES_RETURN)
+        assert len(rels) == 1
+        assert rels[0].condition_expression.get("variable_name") == "result"
+        cg.close()
+
+    def test_multi_target_tuple(self):
+        """a, b = func() -> skip (not a single Name target)"""
+        callee = "def get_data():\n    return 1, 2\n"
+        caller = "import helpers\n\n\ndef main():\n    a, b = helpers.get_data()\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.CONSUMES_RETURN)
+        assert len(rels) == 0
+        cg.close()
+
+    def test_chained_call(self):
+        """get_data().process() -> 1 CONSUMES_RETURN (return value IS consumed,
+        even though via chained call)"""
+        callee = "def get_data():\n    return 'data'\n"
+        caller = (
+            "import helpers\n\n\ndef main():\n    result = helpers.get_data().upper()\n"
+        )
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.CONSUMES_RETURN)
+        assert len(rels) == 1
+        cg.close()
+
+    def test_e2e_build_and_query(self):
+        """index_all + build_semantic_layer -> read_relations(CONSUMES_RETURN)"""
+        callee = "def load():\n    return 'ok'\n"
+        caller = "import helpers\n\n\ndef main():\n    resp = helpers.load()\n"
+        cg = _forwards_inter_build(callee, caller)
+        conn = cg._queries.connection
+        rels = read_relations(conn, relation_kind=RelationKind.CONSUMES_RETURN)
+        assert len(rels) >= 1
+        for rel in rels:
+            assert len(rel.evidence_refs) >= 1
+        cg.close()

@@ -179,6 +179,7 @@ class SemanticLayerBuilder:
         # --- Real extractors (raw-graph-backed) ---
         from .extractors import (
             extract_calls,
+            extract_consumes_return,
             extract_exposes_public_surface,
             extract_forwards_value,
             extract_owns_control,
@@ -284,6 +285,14 @@ class SemanticLayerBuilder:
             # extractor is a no-op here — the real data arrives via
             # build_semantic_layer(inline_facts=...).
             empty,
+        )
+        self.register_extractor(
+            RelationKind.CONSUMES_RETURN,
+            CapabilityName.RETURN_CONSUMERS,
+            AuthorityScope.IMPLEMENTATION_TOPOLOGY,
+            ExtractionMethod.STATIC_ANALYSIS,
+            "xg-125-1",
+            extract_consumes_return,
         )
         self.register_extractor(
             RelationKind.TESTS_SCENARIO,
