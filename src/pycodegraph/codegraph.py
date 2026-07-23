@@ -690,14 +690,36 @@ class CodeGraph:
 
             for param in sorted(by_param):
                 param_edges = by_param[param]
-                # Inline BFS for this param's chain
-                chain = _bfs_forwards_chain(
+
+                # Backward chain: who forwarded TO this function?
+                back_chain = _bfs_backwards_chain(
                     conn, matched_name, param, max_hops=max_chain_hops
                 )
-                if not chain:
+
+                # Forward chain: where does this function forward TO?
+                for_chain = _bfs_forwards_chain(
+                    conn, matched_name, param, max_hops=max_chain_hops
+                )
+
+                if not back_chain and not for_chain:
                     continue
+
                 lines.append(f"  {param}:")
-                for h in chain:
+
+                # Backward hops (negative hop numbers)
+                for h in reversed(back_chain):
+                    site = (
+                        h["call_site"].split("::L")[1]
+                        if "::L" in h["call_site"]
+                        else "?"
+                    )
+                    lines.append(
+                        f"    ← {h['caller_func']}.{h['caller_param']}  "
+                        f"(──[{h['arg_type']}, L{site}]──)"
+                    )
+
+                # Forward hops (positive hop numbers)
+                for h in for_chain:
                     site = (
                         h["call_site"].split("::L")[1]
                         if "::L" in h["call_site"]
@@ -707,7 +729,8 @@ class CodeGraph:
                     lines.append(
                         f"    → {h['callee_func']}.{h['callee_param']}  ({arrow})"
                     )
-                total_hops = max(h["hop"] for h in chain)
+
+                total_hops = len(back_chain) + len(for_chain)
                 lines.append(f"    ({total_hops} 跳, {len(param_edges)} 转发边)")
 
         # ── 2c. Relation statistics ──
@@ -814,5 +837,77 @@ def _bfs_forwards_chain(
             next_key = (callee_func, callee_param)
             if next_key not in visited:
                 queue.append((callee_func, callee_param, hop + 1))
+
+    return chain
+
+
+def _bfs_backwards_chain(
+    conn, start_func: str, start_param: str, *, max_hops: int = 8
+) -> list[dict]:
+    """BFS backward over inter-procedural FORWARDS_VALUE relations.
+
+    Given a start (func, param), traces upward: who forwarded this param
+    TO this function?
+
+    Returns list of hops, each a dict with hop/caller_func/caller_param/
+    callee_func/callee_param/call_site/arg_type. Hops are negative
+    (hop=-1 means "one level up").
+    """
+    from collections import deque
+
+    from .semantic.store import read_relations
+    from .semantic.types import RelationKind
+
+    all_fv = read_relations(conn, relation_kind=RelationKind.FORWARDS_VALUE)
+    # Reverse index: (callee_func, callee_param) -> [edges that target this]
+    in_edges: dict[tuple[str, str], list] = {}
+    for r in all_fv:
+        ce = r.condition_expression
+        if not ce or ce.get("forwards_type") != "inter":
+            continue
+        obj = str(r.literal_object or "")
+        if "." in obj:
+            callee_func, callee_param = obj.rsplit(".", 1)
+        else:
+            continue
+        in_edges.setdefault((callee_func, callee_param), []).append(r)
+
+    chain: list[dict] = []
+    visited: set[tuple[str, str]] = set()
+    queue: deque = deque([(start_func, start_param, 0)])
+
+    while queue:
+        func, param, hop = queue.popleft()
+        if hop >= max_hops:
+            continue
+        key = (func, param)
+        if key in visited:
+            continue
+        visited.add(key)
+
+        for edge in in_edges.get(key, []):
+            ce = edge.condition_expression
+            caller_func = (
+                edge.subject_entity_id.split("::")[0]
+                if "::" in edge.subject_entity_id
+                else edge.subject_entity_id
+            )
+            caller_param = ce.get("caller_param", "")
+            if not caller_param:
+                continue
+            chain.append(
+                {
+                    "hop": -(hop + 1),
+                    "caller_func": caller_func,
+                    "caller_param": caller_param,
+                    "callee_func": func,
+                    "callee_param": param,
+                    "call_site": edge.subject_entity_id,
+                    "arg_type": ce.get("arg_type", "?"),
+                }
+            )
+            next_key = (caller_func, caller_param)
+            if next_key not in visited:
+                queue.append((caller_func, caller_param, hop + 1))
 
     return chain
