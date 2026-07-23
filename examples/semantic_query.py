@@ -10,6 +10,10 @@ Usage:
   # 查询其他函数
   uv run python examples/semantic_query.py "fetch_url"
 
+  # 多个单词或短语查询
+  uv run python examples/semantic_query.py ansible uri module
+  uv run python examples/semantic_query.py fetch_url unredirected_headers
+
   # 跳过 relation 统计，只查语义链
   uv run python examples/semantic_query.py "uri" --disable-stats
 
@@ -37,9 +41,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "query",
-        nargs="?",
-        default="uri",
-        help="自然语义查询，例如 'uri' / 'fetch_url' / 'open_url'（默认 'uri'）",
+        nargs="*",
+        default=["uri"],
+        help="自然语义查询，例如 'uri' / 'fetch_url' / 'open_url'（默认 'uri'）支持多个单词或短语",
     )
     parser.add_argument(
         "--disable-stats",
@@ -47,18 +51,19 @@ def main() -> int:
         help="跳过 relation 统计输出，只显示语义链",
     )
     args = parser.parse_args()
+    query = " ".join(args.query) if args.query else "uri"
 
     from pycodegraph import CodeGraph
 
     print("=" * 60)
     print("pycodegraph 语义查询")
     print("=" * 60)
-    print(f"    查询: {args.query}")
+    print(f"    查询: {query}")
     print(f"    PG:   {DB_URL}")
 
     cg = CodeGraph.open_from_url(DB_URL, ANSIBLE_SRC)
 
-    print(cg.semantic_explore(args.query, disable_stats=args.disable_stats))
+    print(cg.semantic_explore(query, disable_stats=args.disable_stats))
 
     cg.close()
     return 0
