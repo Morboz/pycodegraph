@@ -74,6 +74,9 @@ _REF_COLUMNS = (
     unresolved_refs.c.language,
 )
 
+# SQLite default bind limit is 999; stay well under it when expanding IN lists.
+_IN_CHUNK_SIZE = 500
+
 _DATAFLOW_COLUMNS = (
     dataflow_edges.c.file_path,
     dataflow_edges.c.source_start_line,
@@ -558,6 +561,34 @@ class QueryBuilder:
         if kinds:
             stmt = stmt.where(edges.c.kind.in_(kinds))
         return [self._row_to_edge(r) for r in self._conn.execute(stmt).fetchall()]
+
+    def get_outgoing_edges_for_sources(
+        self,
+        source_ids: list[str],
+        kinds: list[str] | None = None,
+        *,
+        chunk_size: int = _IN_CHUNK_SIZE,
+    ) -> list[Edge]:
+        """Return outgoing Edges from any of *source_ids*, optionally filtered by *kinds*.
+
+        Issues one ``IN`` query per chunk so SQLite stays under its bind-parameter
+        limit.  Empty *source_ids* is a no-op (no Database roundtrip).
+        """
+        if not source_ids:
+            return []
+
+        unique_ids = list(dict.fromkeys(source_ids))
+        size = chunk_size if chunk_size > 0 else _IN_CHUNK_SIZE
+        result: list[Edge] = []
+        for i in range(0, len(unique_ids), size):
+            chunk = unique_ids[i : i + size]
+            stmt = select(*_EDGE_COLUMNS).where(edges.c.source.in_(chunk))
+            if kinds:
+                stmt = stmt.where(edges.c.kind.in_(kinds))
+            result.extend(
+                self._row_to_edge(r) for r in self._conn.execute(stmt).fetchall()
+            )
+        return result
 
     def get_incoming_edges(
         self, target_id: str, kinds: list[str] | None = None

@@ -67,6 +67,10 @@ class TestAnalyzer:
         if not test_node_ids:
             return TestAnalysisResult(edges_created=0)
 
+        total = len(test_node_ids)
+        if on_progress:
+            on_progress("test-analysis", 0, total, "import-index")
+
         # 3. Build file-level import index: test_file -> set of imported file paths
         test_file_imports: dict[str, set[str]] = {}
         _build_import_index(self._queries, test_node_ids, all_nodes, test_file_imports)
@@ -74,11 +78,19 @@ class TestAnalyzer:
         # 4. Delete old TEST edges first (idempotent re-run)
         self._queries.delete_edges_by_provenance_prefix("test-analysis")
 
-        # 5. For each test node, find outgoing edges and create TESTS edges
+        # 5. Batch-load relevant outgoing Edges for every test Node, then
+        #    walk them in memory.  One IN query per 500 ids instead of one
+        #    roundtrip per test Node.
+        outgoing_by_source: dict[str, list[Edge]] = {}
+        for edge in self._queries.get_outgoing_edges_for_sources(
+            list(test_node_ids),
+            kinds=[k.value for k in _RELEVANT_EDGE_KINDS],
+        ):
+            outgoing_by_source.setdefault(edge.source, []).append(edge)
+
         tests_edges: list[Edge] = []
         seen_pairs: set[tuple[str, str]] = set()
 
-        total = len(test_node_ids)
         progress_step = max(1, total // 20) if total > 20 else 1
         for i, test_id in enumerate(sorted(test_node_ids)):
             if on_progress and i % progress_step == 0:
@@ -89,12 +101,7 @@ class TestAnalyzer:
             if not imported_files:
                 continue
 
-            outgoing = self._queries.get_outgoing_edges(
-                test_id,
-                kinds=[k.value for k in _RELEVANT_EDGE_KINDS],
-            )
-
-            for edge in outgoing:
+            for edge in outgoing_by_source.get(test_id, []):
                 target_node = all_nodes.get(edge.target)
                 if target_node is None:
                     continue
@@ -137,38 +144,41 @@ def _build_import_index(
 ) -> None:
     """Populate *out* with ``{test_file_path: {imported_file_path}}``.
 
-    For each test file, collects all IMPORTS edges originating from any
-    node in that file, then maps them to the file paths of the imported
-    targets.  Files that are themselves test files are excluded (test
-    helpers / fixtures don't count as production targets).
+    For each test file, collects all IMPORTS Edges originating from any
+    Node in that file (already loaded in *all_nodes*), then maps them to
+    the file paths of the imported targets.  Files that are themselves
+    test files are excluded (test helpers / fixtures don't count as
+    production targets).
     """
     # Local import to avoid circular dependency: is_test_file lives in
     # search.query_utils which Sphinx/type-checkers may load before
     # test_analysis is fully initialized.
     from ..search.query_utils import is_test_file as _is_test_file
 
-    # Group test node IDs by their file_path
-    test_files: dict[str, set[str]] = {}
+    test_files: set[str] = set()
     for nid in test_node_ids:
         node = all_nodes.get(nid)
         if node:
-            test_files.setdefault(node.file_path, set()).add(nid)
+            test_files.add(node.file_path)
 
-    for test_file, _test_ids in test_files.items():
-        # Get all nodes in this test file
-        file_nodes = queries.get_nodes_by_file(test_file)
-        file_node_ids = {n.id for n in file_nodes}
+    if not test_files:
+        return
 
-        imported_files: set[str] = set()
-        for fnid in file_node_ids:
-            imports = queries.get_outgoing_edges(fnid, kinds=[EdgeKind.IMPORTS.value])
-            for imp_edge in imports:
-                target = all_nodes.get(imp_edge.target)
-                if target is None:
-                    continue
-                # Exclude test files as targets
-                if _is_test_file(target.file_path):
-                    continue
-                imported_files.add(target.file_path)
+    file_node_ids = [n.id for n in all_nodes.values() if n.file_path in test_files]
+    imported_by_file: dict[str, set[str]] = {path: set() for path in test_files}
 
-        out[test_file] = imported_files
+    for imp_edge in queries.get_outgoing_edges_for_sources(
+        file_node_ids,
+        kinds=[EdgeKind.IMPORTS.value],
+    ):
+        source = all_nodes.get(imp_edge.source)
+        if source is None or source.file_path not in test_files:
+            continue
+        target = all_nodes.get(imp_edge.target)
+        if target is None:
+            continue
+        if _is_test_file(target.file_path):
+            continue
+        imported_by_file[source.file_path].add(target.file_path)
+
+    out.update(imported_by_file)

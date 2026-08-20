@@ -658,3 +658,120 @@ class TestExtendedDetectionIntegration:
             )
 
         cg.close()
+
+
+class TestTestAnalysisQueryBudget:
+    """Test Analysis must not issue one Database roundtrip per Node."""
+
+    def test_bounded_edge_lookups_on_many_test_files(self, empty_codegraph):
+        """A graph with many test files still creates the right TESTS Edges
+        using a handful of batched edge queries, not one per Node."""
+        from sqlalchemy import event
+
+        from pycodegraph.test_analysis import TestAnalyzer
+        from pycodegraph.types import Edge, EdgeKind, NodeKind
+
+        n_files = 30
+        prod = _make_node("create_user", "src/app.py")
+        prod.id = "prod:fn"
+        nodes = [prod]
+        edges = []
+        for i in range(n_files):
+            path = f"tests/test_{i}.py"
+            file_id = f"file:{i}"
+            test_id = f"test:{i}"
+            helper_id = f"helper:{i}"
+            file_node = _make_node(path, path, kind=NodeKind.FILE)
+            file_node.id = file_id
+            helper = _make_node(f"helper_{i}", path)
+            helper.id = helper_id
+            test_fn = _make_node(f"test_case_{i}", path)
+            test_fn.id = test_id
+            nodes.extend([file_node, helper, test_fn])
+            edges.extend(
+                [
+                    Edge(
+                        source=file_id,
+                        target=prod.id,
+                        kind=EdgeKind.IMPORTS,
+                        provenance="extract",
+                    ),
+                    Edge(
+                        source=test_id,
+                        target=prod.id,
+                        kind=EdgeKind.CALLS,
+                        provenance="resolve",
+                    ),
+                ]
+            )
+
+        q = empty_codegraph._queries
+        q.insert_nodes(nodes)
+        q.insert_edges(edges)
+
+        sql: list[str] = []
+
+        @event.listens_for(q._conn, "before_cursor_execute")
+        def _count(conn, cursor, statement, parameters, context, executemany):
+            sql.append(" ".join(statement.split()))
+
+        result = TestAnalyzer(q).analyze_and_persist()
+
+        assert result.edges_created == n_files
+        tests_edges = [e for e in q.get_all_edges() if e.kind == EdgeKind.TESTS]
+        assert len(tests_edges) == n_files
+        assert {e.target for e in tests_edges} == {prod.id}
+
+        edge_selects = [
+            s
+            for s in sql
+            if "FROM edges" in s and s.lstrip().upper().startswith("SELECT")
+        ]
+        # Per-Node N+1 would be ~120 SELECTs (30 files x 3 nodes + 30 tests).
+        # Batched IN lookups are a handful of chunks plus get_all_edges at the end.
+        assert len(edge_selects) <= 8, (
+            f"expected batched edge lookups, got {len(edge_selects)} SELECTs: "
+            f"{edge_selects}"
+        )
+
+    def test_progress_reports_import_index_before_main_loop(self, empty_codegraph):
+        from pycodegraph.test_analysis import TestAnalyzer
+        from pycodegraph.types import Edge, EdgeKind, NodeKind
+
+        prod = _make_node("create_user", "src/app.py")
+        prod.id = "prod:fn"
+        file_node = _make_node("tests/test_0.py", "tests/test_0.py", kind=NodeKind.FILE)
+        file_node.id = "file:0"
+        test_node = _make_node("test_case_0", "tests/test_0.py")
+        test_node.id = "test:0"
+
+        q = empty_codegraph._queries
+        q.insert_nodes([prod, file_node, test_node])
+        q.insert_edges(
+            [
+                Edge(
+                    source=file_node.id,
+                    target=prod.id,
+                    kind=EdgeKind.IMPORTS,
+                    provenance="extract",
+                ),
+                Edge(
+                    source=test_node.id,
+                    target=prod.id,
+                    kind=EdgeKind.CALLS,
+                    provenance="resolve",
+                ),
+            ]
+        )
+
+        events: list[tuple] = []
+
+        def on_progress(phase, current, total, current_file="", **kw):
+            events.append((phase, current, total, current_file))
+
+        TestAnalyzer(q).analyze_and_persist(on_progress)
+
+        test_events = [e for e in events if e[0] == "test-analysis"]
+        assert test_events, "expected test-analysis progress events"
+        assert test_events[0][1] == 0
+        assert test_events[0][3] == "import-index"
